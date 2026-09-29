@@ -1,0 +1,393 @@
+import { normalizeRecording, type Recording } from "./recording";
+
+export type PlayMode = "once" | "repeat" | "whileHeld" | "toggle" | "onRelease";
+export type TriggerKind = "key" | "mouse" | "side";
+export type KeyAction = "down" | "up" | "tap";
+
+export type Step =
+  | { type: "key"; action: KeyAction; key: string; holdMs?: number }
+  | { type: "mouse"; action: KeyAction; button: string; holdMs?: number }
+  | { type: "move"; x: number; y: number }
+  | { type: "wait"; ms: number }
+  | { type: "repeat"; count: number; steps: Step[] }
+  | { type: "run"; macroId: string };
+
+export type Trigger = { kind: TriggerKind; button: string };
+
+export type Block =
+  | { id: string; type: "whileHeld"; steps: Step[]; mute: string[] }
+  | { id: string; type: "ifShort"; underMs: number; minCycles: number; steps: Step[] }
+  | { id: string; type: "then"; forMs: number; steps: Step[] }
+  | { id: string; type: "repeat"; count: number; steps: Step[] }
+  | { id: string; type: "wait"; ms: number }
+  | { id: string; type: "steps"; steps: Step[] }
+  | { id: string; type: "tapHold"; key: string; watch: string[]; armMs: number; gapMs: number };
+
+export type Macro = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  priority: number;
+  speed: number;
+  playMode: PlayMode;
+  repeatCount: number;
+  exclusive: boolean;
+  focusExe: string;
+  trigger: Trigger;
+  steps: Step[];
+  recording: Recording | null;
+  /** Playback-menu binding. The key is held for 18 ms, then gapMs is the pause before the next press. */
+  basic?: boolean;
+  /** Pause after the 18 ms hold, before the next press. */
+  gapMs?: number;
+  advanced?: boolean;
+  busy?: boolean;
+  blocks?: Block[];
+};
+
+export type Config = {
+  id: string;
+  name: string;
+  macros: Macro[];
+};
+
+export type Profile = {
+  version: 1;
+  name: string;
+  variables: Record<string, string | number>;
+  activeId: string;
+  configs: Config[];
+  /** Bindings for the active profile. This is what the engine runs. */
+  macros: Macro[];
+  /** Recorded left and right clicks trade places. Those buttons are never triggers. */
+  swapClicks?: boolean;
+};
+
+export const MIN_REPEAT_MS = 18;
+
+export type EngineState = {
+  armed: boolean;
+  running: { id: string; name: string }[];
+  held: string[];
+};
+
+export const KEY_OPTIONS = [
+  "w", "a", "s", "d", "q", "e", "r", "f", "c", "v", "x", "z",
+  "space", "shift", "ctrl", "alt", "tab", "enter", "escape", "backspace",
+  "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
+  "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+  "up", "down", "left", "right",
+];
+
+export const MOUSE_OPTIONS = [
+  { value: "LButton", label: "Left click" },
+  { value: "RButton", label: "Right click" },
+  { value: "MButton", label: "Middle click" },
+];
+
+export const SIDE_OPTIONS = [
+  { value: "XButton1", label: "Mouse 4" },
+  { value: "XButton2", label: "Mouse 5" },
+];
+
+export const PLAY_MODES: { value: PlayMode; label: string }[] = [
+  { value: "once", label: "Once" },
+  { value: "repeat", label: "Repeat" },
+  { value: "whileHeld", label: "While held" },
+  { value: "toggle", label: "Toggle" },
+  { value: "onRelease", label: "On release" },
+];
+
+const starter: Macro[] = [
+    {
+      id: "sprint-jump",
+      name: "Sprint jump",
+      enabled: true,
+      priority: 0,
+      speed: 1,
+      playMode: "whileHeld",
+      repeatCount: 1,
+      exclusive: false,
+      focusExe: "",
+      trigger: { kind: "side", button: "XButton1" },
+      recording: null,
+      steps: [
+        { type: "key", action: "down", key: "w" },
+        {
+          type: "repeat",
+          count: 0,
+          steps: [
+            { type: "key", action: "tap", key: "space", holdMs: 20 },
+            { type: "wait", ms: 50 },
+          ],
+        },
+      ],
+    },
+    {
+      id: "click-burst",
+      name: "Click burst",
+      enabled: true,
+      priority: 0,
+      speed: 1,
+      playMode: "once",
+      repeatCount: 1,
+      exclusive: false,
+      focusExe: "",
+      trigger: { kind: "key", button: "f" },
+      recording: null,
+      steps: [
+        { type: "mouse", action: "tap", button: "LButton", holdMs: 15 },
+        { type: "wait", ms: 40 },
+        { type: "mouse", action: "tap", button: "LButton", holdMs: 15 },
+        { type: "wait", ms: 40 },
+        { type: "mouse", action: "tap", button: "LButton", holdMs: 15 },
+      ],
+    },
+];
+
+export const defaultProfile: Profile = {
+  version: 1,
+  name: "Default",
+  variables: {},
+  activeId: "default",
+  configs: [{ id: "default", name: "Default", macros: starter }],
+  macros: starter,
+  swapClicks: false,
+};
+
+export function newId(): string {
+  return crypto.randomUUID();
+}
+
+export function blankMacro(): Macro {
+  return {
+    id: newId(),
+    name: "New macro",
+    enabled: true,
+    priority: 0,
+    speed: 1,
+    playMode: "whileHeld",
+    repeatCount: 1,
+    exclusive: false,
+    focusExe: "",
+    trigger: { kind: "key", button: "" },
+    steps: [],
+    recording: null,
+    basic: false,
+    gapMs: MIN_REPEAT_MS,
+  };
+}
+
+export function basicTiming(repeatMs: number): { hold: number; gap: number } {
+  return { hold: MIN_REPEAT_MS, gap: Math.max(0, Math.round(repeatMs) || 0) };
+}
+
+export function basicSteps(key: string, everyMs: number): Step[] {
+  const { hold, gap } = basicTiming(everyMs);
+  return [
+    { type: "key", action: "down", key },
+    { type: "wait", ms: hold },
+    { type: "key", action: "up", key },
+    { type: "wait", ms: gap },
+  ];
+}
+
+export function mouseSteps(button: string, everyMs: number): Step[] {
+  const { hold, gap } = basicTiming(everyMs);
+  return [
+    { type: "mouse", action: "down", button },
+    { type: "wait", ms: hold },
+    { type: "mouse", action: "up", button },
+    { type: "wait", ms: gap },
+  ];
+}
+
+export function applyGap(macro: Macro, gapMs: number): Macro {
+  const ms = Math.max(0, Math.round(gapMs) || 0);
+  const button = macro.trigger.button;
+  if (!macro.basic) return { ...macro, gapMs: ms };
+  if (macro.trigger.kind !== "key" && button) return { ...macro, gapMs: ms, steps: mouseSteps(button, ms) };
+  return { ...macro, gapMs: ms, steps: basicSteps(button || "space", ms) };
+}
+
+export function writeActive(profile: Profile, macros: Macro[]): Profile {
+  const configs = profile.configs.map((config) =>
+    config.id === profile.activeId ? { ...config, macros } : config,
+  );
+  return { ...profile, configs, macros };
+}
+
+export function switchConfig(profile: Profile, id: string): Profile {
+  const config = profile.configs.find((item) => item.id === id);
+  if (!config) return profile;
+  return { ...profile, activeId: id, name: config.name, macros: config.macros };
+}
+
+export function renameActive(profile: Profile, name: string): Profile {
+  const configs = profile.configs.map((config) =>
+    config.id === profile.activeId ? { ...config, name } : config,
+  );
+  return { ...profile, name, configs };
+}
+
+export function blankStep(type: Step["type"]): Step {
+  switch (type) {
+    case "key":
+      return { type: "key", action: "tap", key: "space", holdMs: 20 };
+    case "mouse":
+      return { type: "mouse", action: "tap", button: "LButton", holdMs: 15 };
+    case "move":
+      return { type: "move", x: 0, y: 0 };
+    case "wait":
+      return { type: "wait", ms: 50 };
+    case "repeat":
+      return { type: "repeat", count: 2, steps: [] };
+    case "run":
+      return { type: "run", macroId: "" };
+  }
+}
+
+export function defaultButton(kind: TriggerKind): string {
+  if (kind === "mouse") return "LButton";
+  if (kind === "side") return "XButton1";
+  return "f";
+}
+
+export function isProfile(value: unknown): value is Profile {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Profile;
+  return v.version === 1 && typeof v.name === "string" && Array.isArray(v.macros);
+}
+
+export function normalizeProfile(value: unknown): Profile {
+  if (!isProfile(value)) return structuredClone(defaultProfile);
+  const macros = onePerTrigger(value.macros.map(normalizeMacro));
+  const saved = Array.isArray(value.configs) ? value.configs : [];
+  const configs = saved.length
+    ? saved.map((item, index) => ({
+        id: item?.id || newId(),
+        name: item?.name || `Profile ${index + 1}`,
+        macros: Array.isArray(item?.macros) ? onePerTrigger(item.macros.map(normalizeMacro)) : [],
+      }))
+    : [{ id: "default", name: value.name || "Default", macros }];
+  const activeId = configs.some((config) => config.id === value.activeId) ? value.activeId : configs[0].id;
+  const active = configs.find((config) => config.id === activeId) ?? configs[0];
+  const live = saved.length ? active.macros : macros;
+  return {
+    version: 1,
+    name: active.name || value.name || "Default",
+    variables: value.variables && typeof value.variables === "object" ? value.variables : {},
+    activeId,
+    configs: configs.map((config) => (config.id === activeId ? { ...config, macros: live } : config)),
+    macros: live,
+    swapClicks: Boolean((value as Profile).swapClicks),
+  };
+}
+
+function onePerTrigger(macros: Macro[]): Macro[] {
+  const seen = new Set<string>();
+  return macros.map((macro) => {
+    const button = macro.trigger.button;
+    if (!button) return macro;
+    const token = `${macro.trigger.kind}:${button}`;
+    if (seen.has(token)) return { ...macro, trigger: { ...macro.trigger, button: "" } };
+    seen.add(token);
+    return macro;
+  });
+}
+
+function normalizeMacro(value: Macro): Macro {
+  const trigger = value.trigger ?? { kind: "key" as const, button: "f" };
+  const kind = trigger.kind ?? "key";
+  const rawButton = typeof trigger.button === "string" ? trigger.button : defaultButton(kind);
+  const button = rawButton === "LButton" || rawButton === "RButton" ? "" : rawButton;
+  const gap = Number(value.gapMs);
+  const gapMs = Number.isFinite(gap) && gap >= 0 ? Math.round(gap) : MIN_REPEAT_MS;
+  const basic = Boolean(value.basic);
+  const steps = basic && button
+    ? kind === "key"
+      ? basicSteps(button, gapMs)
+      : mouseSteps(button, gapMs)
+    : Array.isArray(value.steps) ? value.steps : [];
+  return {
+    id: value.id || newId(),
+    name: value.name || "Macro",
+    enabled: value.enabled !== false,
+    priority: Number(value.priority) || 0,
+    speed: Number(value.speed) > 0 ? Number(value.speed) : 1,
+    playMode: value.playMode || "once",
+    repeatCount: Math.max(1, Number(value.repeatCount) || 1),
+    exclusive: Boolean(value.exclusive),
+    focusExe: value.focusExe ?? "",
+    trigger: { kind, button },
+    steps,
+    recording: normalizeRecording(value.recording),
+    basic,
+    gapMs,
+    advanced: Boolean(value.advanced),
+    busy: Boolean(value.busy),
+    blocks: normalizeBlocks(value.blocks),
+  };
+}
+
+function muteIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
+function normalizeBlocks(value: unknown): Block[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item): Block[] => {
+    if (!item || typeof item !== "object") return [];
+    const raw = item as {
+      id?: string;
+      type?: string;
+      steps?: Step[];
+      underMs?: number;
+      minCycles?: number;
+      forMs?: number;
+      count?: number;
+      ms?: number;
+      key?: string;
+      watch?: string[];
+      armMs?: number;
+      gapMs?: number;
+      mute?: unknown;
+    };
+    const id = raw.id || newId();
+    const steps = Array.isArray(raw.steps) ? raw.steps : [];
+    if (raw.type === "steps") return [{ id, type: "steps", steps }];
+    if (raw.type === "whileHeld") return [{ id, type: "whileHeld", steps, mute: muteIds(raw.mute) }];
+    if (raw.type === "ifShort") {
+      const under = Number(raw.underMs);
+      const cycles = Number(raw.minCycles);
+      return [{ id, type: "ifShort", underMs: Number.isFinite(under) && under >= 0 ? Math.round(under) : 150, minCycles: Number.isFinite(cycles) && cycles >= 0 ? Math.round(cycles) : 3, steps }];
+    }
+    if (raw.type === "then") {
+      const forMs = Number(raw.forMs);
+      return [{ id, type: "then", forMs: Number.isFinite(forMs) && forMs >= 0 ? Math.round(forMs) : 0, steps }];
+    }
+    if (raw.type === "repeat") {
+      const count = Number(raw.count);
+      return [{ id, type: "repeat", count: Number.isFinite(count) && count >= 0 ? Math.round(count) : 1, steps }];
+    }
+    if (raw.type === "wait") {
+      const ms = Number(raw.ms);
+      return [{ id, type: "wait", ms: Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : 0 }];
+    }
+    if (raw.type === "tapHold") {
+      const arm = Number(raw.armMs);
+      const gap = Number(raw.gapMs);
+      const watch = Array.isArray(raw.watch) ? raw.watch.filter((item) => typeof item === "string" && item) : [];
+      return [{
+        id,
+        type: "tapHold",
+        key: raw.key || "z",
+        watch,
+        armMs: Number.isFinite(arm) && arm >= 0 ? Math.round(arm) : 5,
+        gapMs: Number.isFinite(gap) && gap >= 0 ? Math.round(gap) : 80,
+      }];
+    }
+    return [];
+  });
+}

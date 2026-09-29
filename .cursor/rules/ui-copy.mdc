@@ -1,0 +1,22 @@
+---
+description: UI copy never uses em dashes
+alwaysApply: true
+---
+
+# UI copy dashes
+
+All user-visible text in the UI (labels, descriptions, preview copy, notes, tooltips, empty states) must use `-` only.
+
+Never use `—` or `–` in UI strings.
+
+```ts
+// BAD
+"HELD — this loop is on"
+"It does not care how long you held — only that N is up."
+
+// GOOD
+"HELD - this loop is on"
+"It does not care how long you held - only that N is up."
+```
+
+This applies to React copy, helper strings, and any new UI text. It does not apply to chrome icons (for example the minimize mark) or third-party files.
