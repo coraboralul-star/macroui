@@ -230,6 +230,7 @@ export function glance(steps: Step[], limit = 16): string[] {
         out.push(step.action === "down" ? `hold ${name}` : step.action === "up" ? `up ${name}` : name);
       } else if (step.type === "wait") out.push(`${step.ms}ms`);
       else if (step.type === "move") out.push("move");
+      else if (step.type === "goto") out.push("go to");
       else if (step.type === "run") out.push("run");
       else if (step.type === "repeat") {
         out.push(step.count === 0 ? "loop" : `×${step.count}`);

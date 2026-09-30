@@ -1,6 +1,8 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 SendMode("Input")
+CoordMode("Mouse", "Screen")
+CoordMode("Pixel", "Screen")
 SendLevel(1)
 SetKeyDelay(-1, -1)
 SetMouseDelay(-1)
@@ -66,6 +68,8 @@ AsNum(v, def) {
 
 SafeKey(name) {
     name := String(name)
+    if (name = "|")
+        name := "\"
     if RegExMatch(name, "^[A-Za-z0-9]+$")
         return name
     if (name = "-" || name = "=" || name = "[" || name = "]" || name = "\" || name = ";" || name = "'" || name = "," || name = "." || name = "/" || name = "``")
@@ -116,16 +120,24 @@ SendMouseButton(key, dir) {
     DllCall("SendInput", "UInt", 1, "Ptr", inp, "Int", size)
 }
 
-; $* swallows the physical key with any modifier held, and Send will not re-trigger it.
+; Software: $* swallows the trigger so the game only sees SendInput.
+; Board: ~$* lets the Pico's keys through. The low-level hook still eats the
+; real keyboard trigger, otherwise a Pico "b" is swallowed by the B macro.
+; When a focus window is set and that window is not active, ~$* so typing works.
 HookSpec(key) {
+    prefix := (Engine.PassBoard() || !Engine.SwallowTriggers()) ? "~$*" : "$*"
     if (key = "``")
-        return "$*``"
-    return "$*" key
+        return prefix "``"
+    return prefix key
 }
 
 ; Swallows the trigger key. The low-level hook records the real finger.
 ; This still records it too, so a release is seen even if that hook is behind.
 TriggerHook(name) {
+    ; Board keys look like a second keyboard. The LL hook owns them so a Pico
+    ; tap of a trigger key is not counted as the finger going down again.
+    if Engine.PassBoard()
+        return
     raw := String(name)
     up := false
     if (StrLen(raw) >= 3 && SubStr(raw, -2) = "up") {
@@ -157,8 +169,11 @@ InstallPhysical() {
 }
 
 PhysKeyProc(nCode, wParam, lParam) {
+    block := false
     if (nCode >= 0 && Engine.rawOk)
-        try Engine.ReadKey(wParam, lParam)
+        try block := Engine.ReadKey(wParam, lParam)
+    if block
+        return 1
     return DllCall("CallNextHookEx", "Ptr", 0, "Int", nCode, "Ptr", wParam, "Ptr", lParam, "Ptr")
 }
 
@@ -180,7 +195,8 @@ Alias(name) {
         "Ins", "Insert", "Del", "Delete",
         "LShift", "shift", "RShift", "shift", "Shift", "shift",
         "LControl", "ctrl", "RControl", "ctrl", "Control", "ctrl",
-        "LAlt", "alt", "RAlt", "alt", "Alt", "alt"
+        "LAlt", "alt", "RAlt", "alt", "Alt", "alt",
+        "|", "\"
     )
     name := String(name)
     if (name = "")
@@ -245,6 +261,10 @@ class Runner {
         this.done := false
         this.moveX := 0
         this.moveY := 0
+        this.hasGoto := false
+        this.gotoX := 0
+        this.gotoY := 0
+        this.didGoto := false
         mode := modeOverride != "" ? String(modeOverride) : String(Field(macro, "playMode", "once"))
         this.mode := mode
         this.trigger := ""
@@ -307,6 +327,7 @@ class Runner {
     Advance(now) {
         this.moveX := 0
         this.moveY := 0
+        this.hasGoto := false
         this.pressedNow := Map()
         if this.done
             return
@@ -422,6 +443,33 @@ class Runner {
             y := this.Clamp(Round(AsNum(Field(step, "y", 0), 0)))
             this.moveX += x
             this.moveY += y
+            return ""
+        }
+        if (kind = "goto") {
+            tx := Round(AsNum(Field(step, "x", 0), 0))
+            ty := Round(AsNum(Field(step, "y", 0), 0))
+            ms := AsNum(Field(step, "ms", 15), 15) / this.speed
+            if !this.didGoto {
+                Engine.mouseAtOk := false
+                this.didGoto := true
+            }
+            sx := 0
+            sy := 0
+            if !Engine.LocalToScreen(Engine.GotoWhere(Field(step, "where", "screen")), tx, ty, &sx, &sy)
+                return ""
+            dx := 0
+            dy := 0
+            Engine.CursorDelta(sx, sy, &dx, &dy)
+            this.moveX += dx
+            this.moveY += dy
+            this.hasGoto := true
+            this.gotoX := sx
+            this.gotoY := sy
+            Engine.RememberMouse(sx, sy)
+            if (ms > 0) {
+                this.waitUntil := now + Max(1, Round(ms))
+                return "wait"
+            }
             return ""
         }
         if (kind = "repeat") {
@@ -565,10 +613,10 @@ class Runner {
     }
 
     Clamp(n) {
-        if (n > 2000)
-            return 2000
-        if (n < -2000)
-            return -2000
+        if (n > 16000)
+            return 16000
+        if (n < -16000)
+            return -16000
         return n
     }
 }
@@ -580,6 +628,13 @@ class Engine {
     static applied := Map()
     static prevDown := Map()
     static profile := Map()
+    static outputMode := "software"
+    static hidEcho := []
+    static mouseAtOk := false
+    static mouseAtX := 0
+    static mouseAtY := 0
+    static winJson := "[]"
+    static winAt := -100000
     static armed := false
     static dry := false
     static finger := Map()
@@ -604,6 +659,8 @@ class Engine {
     static qpcFreq := 0
     static qpcOrigin := 0
     static hTimer := 0
+    static swallowKnown := false
+    static swallowOn := true
 
     static Loop() {
         while true {
@@ -671,18 +728,35 @@ class Engine {
         }
     }
 
-    ; Only the real release is taken from here. Presses still come from the hotkey.
-    ; A sent key must not be able to set the finger back down after a tap.
+    ; Injected SendInput is ignored. Pico HID is a real device, so those reports
+    ; are matched as hidEcho instead of counting as the finger.
     static ReadKey(msg, info) {
         flags := NumGet(info, 8, "UInt")
         if (flags & 0x12)
-            return
+            return false
         up := (msg = 0x101 || msg = 0x105 || (flags & 0x80))
         vk := NumGet(info, 0, "UInt")
+        name := ""
         if (vk = 0x0D && (flags & 0x01))
-            this.NotePhysical("NumpadEnter", !up)
+            name := "NumpadEnter"
         else if this.vkName.Has(vk)
-            this.NotePhysical(this.vkName[vk], !up)
+            name := this.vkName[vk]
+        if (name = "")
+            return false
+        if this.MatchHidEcho(name, !up)
+            return false
+        this.NotePhysical(name, !up)
+        return this.PassBoard() && this.Hooked(name) && this.SwallowTriggers()
+    }
+
+    static Hooked(name) {
+        if this.hooks.Has(name)
+            return true
+        folded := StrLower(String(name))
+        for key, _ in this.hooks
+            if (StrLower(key) = folded)
+                return true
+        return false
     }
 
     static ReadMouse(which, info) {
@@ -708,8 +782,11 @@ class Engine {
             name := button = 1 ? "XButton1" : button = 2 ? "XButton2" : ""
             down := which = 0x20B
         }
-        if (name != "")
-            this.NotePhysical(name, down)
+        if (name = "")
+            return
+        if this.MatchHidEcho(name, down)
+            return
+        this.NotePhysical(name, down)
     }
 
     static Now() {
@@ -813,6 +890,7 @@ class Engine {
         this.PollPipe()
         this.PollPanic()
         this.ReapOrphans()
+        this.SyncSwallow()
         this.SyncHooks()
         if this.armed
             this.PollTriggers()
@@ -1022,18 +1100,89 @@ class Engine {
     static FocusOk(macro) {
         exe := String(Field(macro, "focusExe", ""))
         if (exe = "")
+            exe := String(Field(this.profile, "focusExe", ""))
+        if (exe = "")
             return true
-        active := ""
-        try active := WinGetProcessName("A")
-        catch
+        active := this.ActiveExe()
+        if (active = "")
             return false
-        active := StrLower(active)
-        exe := StrLower(exe)
-        if (active = exe)
+        return this.FocusMatch(exe, active)
+    }
+
+    static ExeStem(name) {
+        s := StrLower(Trim(String(name)))
+        if (SubStr(s, -4) = ".exe")
+            s := SubStr(s, 1, StrLen(s) - 4)
+        return s
+    }
+
+    ; Dawnwalker.exe and Dawnwalker-Win64-Shipping.exe are the same game.
+    static FocusMatch(want, have) {
+        a := this.ExeStem(want)
+        b := this.ExeStem(have)
+        if (a = "" || b = "")
+            return false
+        if (a = b)
             return true
-        if (!InStr(exe, ".") && active = exe ".exe")
+        if (InStr(b, a "-") = 1 || InStr(a, b "-") = 1)
             return true
         return false
+    }
+
+    static ActiveExe() {
+        hwnd := DllCall("GetForegroundWindow", "Ptr")
+        if !hwnd
+            return ""
+        exe := ""
+        try exe := WinGetProcessName(hwnd)
+        catch
+            exe := ""
+        if (exe != "")
+            return exe
+        return this.ExeFromHwnd(hwnd)
+    }
+
+    static ExeFromHwnd(hwnd) {
+        pid := 0
+        DllCall("GetWindowThreadProcessId", "Ptr", hwnd, "UInt*", &pid)
+        if !pid
+            return ""
+        proc := DllCall("OpenProcess", "UInt", 0x1000, "Int", 0, "UInt", pid, "Ptr")
+        if !proc
+            return ""
+        n := 260
+        path := ""
+        loop 2 {
+            buf := Buffer(n * 2)
+            chars := n
+            ok := DllCall("QueryFullProcessImageNameW", "Ptr", proc, "UInt", 0, "Ptr", buf, "UInt*", &chars, "Int")
+            if ok {
+                path := StrGet(buf, "UTF-16")
+                break
+            }
+            n := 1024
+        }
+        DllCall("CloseHandle", "Ptr", proc)
+        if (path = "")
+            return ""
+        SplitPath path, &name
+        return name
+    }
+
+    ; Keys are swallowed only while the focus window matches. Otherwise the
+    ; user can type normally; macros stay off via FocusOk.
+    static SwallowTriggers() {
+        return this.FocusOk(Map())
+    }
+
+    static SyncSwallow() {
+        want := this.SwallowTriggers()
+        if (this.swallowKnown && want = this.swallowOn)
+            return
+        if (this.swallowKnown && want != this.swallowOn)
+            this.ClearHookBindings()
+        this.swallowOn := want
+        this.swallowKnown := true
     }
 
     static WatchingHold() {
@@ -1197,8 +1346,7 @@ class Engine {
         for key, _ in this.hooks.Clone() {
             if want.Has(key)
                 continue
-            try Hotkey(HookSpec(key), "Off")
-            try Hotkey(HookSpec(key) " up", "Off")
+            this.UnhookKey(key)
             this.hooks.Delete(key)
             if this.physDown.Has(key)
                 this.physDown.Delete(key)
@@ -1259,20 +1407,29 @@ class Engine {
     static Publish(now) {
         dx := 0
         dy := 0
+        hasAbs := false
+        absX := 0
+        absY := 0
         for r in this.runners {
             dx += r.moveX
             dy += r.moveY
+            if r.hasGoto {
+                hasAbs := true
+                absX := r.gotoX
+                absY := r.gotoY
+                r.hasGoto := false
+            }
             r.moveX := 0
             r.moveY := 0
         }
-        if (dx > 2000)
-            dx := 2000
-        if (dx < -2000)
-            dx := -2000
-        if (dy > 2000)
-            dy := 2000
-        if (dy < -2000)
-            dy := -2000
+        if (dx > 16000)
+            dx := 16000
+        if (dx < -16000)
+            dx := -16000
+        if (dy > 16000)
+            dy := 16000
+        if (dy < -16000)
+            dy := -16000
         desired := this.Desired(now)
         downs := []
         ups := []
@@ -1308,6 +1465,31 @@ class Engine {
             this.sent.Push(Map("down", downs, "up", ups, "x", dx, "y", dy))
             return
         }
+        if (hasAbs && !this.PassBoard()) {
+            this.Emit(downs, ups, 0, 0)
+            this.MoveAbs(absX, absY)
+        } else if (hasAbs && this.PassBoard())
+            this.Emit(downs, ups, 0, 0, true, absX, absY)
+        else
+            this.Emit(downs, ups, dx, dy)
+    }
+
+    static Emit(downs, ups, dx, dy, abs := false, ax := 0, ay := 0) {
+        if (this.outputMode != "software") {
+            if (!downs.Length && !ups.Length && dx = 0 && dy = 0 && !abs)
+                return
+            if (abs)
+                this.SendRaw(this.HidJson(downs, ups, 0, 0, true, ax, ay))
+            else {
+                this.HidScale(&dx, &dy)
+                this.SendRaw(this.HidJson(downs, ups, dx, dy))
+            }
+            for k in downs
+                this.QueueHidEcho(k, true)
+            for k in ups
+                this.QueueHidEcho(k, false)
+            return
+        }
         parts := ""
         for k in downs
             parts .= SendPiece(this.OutName(k), "down")
@@ -1317,10 +1499,176 @@ class Engine {
             try Send("{Blind}" parts)
         if (dx != 0 || dy != 0)
             try MouseMove(dx, dy, 0, "R")
+        if (dx != 0 || dy != 0)
+            this.NudgeMouse(dx, dy)
+    }
+
+    static MoveAbs(x, y) {
+        try MouseMove(Integer(x), Integer(y), 0)
+        this.RememberMouse(x, y)
+    }
+
+    static NudgeMouse(dx, dy) {
+        if !this.mouseAtOk
+            return
+        this.mouseAtX += Integer(dx)
+        this.mouseAtY += Integer(dy)
+    }
+
+    static HidJson(downs, ups, dx, dy, abs := false, ax := 0, ay := 0) {
+        extra := abs ? ',"abs":true,"ax":' Integer(ax) ',"ay":' Integer(ay) : ""
+        return '{"v":1,"type":"hid","down":' this.HidKeys(downs) ',"up":' this.HidKeys(ups) ',"x":' Integer(dx) ',"y":' Integer(dy) extra '}'
+    }
+
+    static HidScale(&dx, &dy) {
+        dpi := 96
+        hwnd := WinExist("A")
+        if hwnd {
+            got := DllCall("user32\GetDpiForWindow", "Ptr", hwnd, "UInt")
+            if got
+                dpi := got
+        }
+        if (dpi = 96)
+            dpi := A_ScreenDPI
+        if (dpi = 96)
+            return
+        dx := Integer(Round(dx * dpi / 96))
+        dy := Integer(Round(dy * dpi / 96))
+    }
+
+    static HidKeys(list) {
+        out := "["
+        sep := ""
+        for k in list {
+            ; Logical names. The shell applies swapClicks when it maps HID mouse bits.
+            out .= sep . JSON.Quote(k)
+            sep := ","
+        }
+        return out "]"
+    }
+
+    static FlushApplied() {
+        ups := []
+        for k, _ in this.applied
+            ups.Push(k)
+        if (!this.dry && ups.Length)
+            this.Emit([], ups, 0, 0)
+        this.applied := Map()
+    }
+
+    static PassBoard() {
+        return this.outputMode != "software"
+    }
+
+    static RememberMouse(x, y) {
+        this.mouseAtX := Integer(x)
+        this.mouseAtY := Integer(y)
+        this.mouseAtOk := true
+    }
+
+    static GotoWhere(v) {
+        s := StrLower(Trim(String(v)))
+        if (s = "window" || s = "client")
+            return s
+        return "screen"
+    }
+
+    static LocalToScreen(where, x, y, &sx, &sy) {
+        sx := Integer(x)
+        sy := Integer(y)
+        if (where = "screen")
+            return true
+        ox := 0
+        oy := 0
+        ow := 0
+        oh := 0
+        try {
+            if (where = "client")
+                WinGetClientPos(&ox, &oy, &ow, &oh, "A")
+            else
+                WinGetPos(&ox, &oy, &ow, &oh, "A")
+        } catch
+            return false
+        sx := ox + Integer(x)
+        sy := oy + Integer(y)
+        return true
+    }
+
+    static MousePos(&x, &y) {
+        if (this.PassBoard() && this.mouseAtOk) {
+            x := this.mouseAtX
+            y := this.mouseAtY
+            return
+        }
+        x := 0
+        y := 0
+        try MouseGetPos(&x, &y)
+    }
+
+    static CursorDelta(tx, ty, &dx, &dy) {
+        x := 0
+        y := 0
+        this.MousePos(&x, &y)
+        dx := Integer(tx) - x
+        dy := Integer(ty) - y
+    }
+
+    static QueueHidEcho(key, down) {
+        if !this.PassBoard()
+            return
+        name := String(key)
+        if (name = "")
+            return
+        this.hidEcho.Push({name: name, folded: StrLower(name), down: down ? 1 : 0, until: this.Now() + 150})
+    }
+
+    static MatchHidEcho(name, down) {
+        folded := StrLower(String(name))
+        want := down ? 1 : 0
+        now := this.Now()
+        i := 1
+        while (i <= this.hidEcho.Length) {
+            e := this.hidEcho[i]
+            if (e.until < now) {
+                this.hidEcho.RemoveAt(i)
+                continue
+            }
+            if (e.folded = folded && e.down = want) {
+                this.hidEcho.RemoveAt(i)
+                return true
+            }
+            i++
+        }
+        return false
+    }
+
+    static UnhookKey(key) {
+        for prefix in ["$*", "~$*"] {
+            spec := prefix (key = "``" ? "``" : key)
+            try Hotkey(spec, "Off")
+            try Hotkey(spec " up", "Off")
+        }
+    }
+
+    static ClearHookBindings() {
+        for key, _ in this.hooks.Clone() {
+            this.UnhookKey(key)
+            this.hooks.Delete(key)
+            if this.physDown.Has(key)
+                this.physDown.Delete(key)
+        }
+    }
+
+    static ClicksSwapped() {
+        v := Field(this.profile, "swapClicks", 0)
+        if (v = 1 || v = true)
+            return true
+        s := StrLower(Trim(String(v)))
+        return s = "true" || s = "1"
     }
 
     static OutName(key) {
-        if !Field(this.profile, "swapClicks", false)
+        if !this.ClicksSwapped()
             return key
         if (key = "LButton")
             return "RButton"
@@ -1332,11 +1680,11 @@ class Engine {
     static ReleaseAll() {
         this.StopAll()
         this.RemoveDone()
-        parts := ""
+        ups := []
         for k, _ in this.applied
-            parts .= SendPiece(this.OutName(k), "up")
-        if (parts != "")
-            try Send("{Blind}" parts)
+            ups.Push(k)
+        if (!this.dry && ups.Length)
+            this.Emit([], ups, 0, 0)
         this.applied := Map()
     }
 
@@ -1354,7 +1702,48 @@ class Engine {
             held .= JSON.Quote(k)
         }
         armed := this.armed ? "true" : "false"
-        return '{"v":1,"type":"state","armed":' armed ',"running":[' running '],"held":[' held ']}'
+        return '{"v":1,"type":"state","armed":' armed ',"running":[' running '],"held":[' held '],"front":' JSON.Quote(this.ActiveExe()) ',"windows":' this.WindowListJson() '}'
+    }
+
+    static WindowListJson() {
+        now := this.Now()
+        if (now - this.winAt < 2000 && this.winJson != "")
+            return this.winJson
+        this.winAt := now
+        seen := Map()
+        out := "["
+        sep := ""
+        try list := WinGetList()
+        catch
+            list := []
+        for hwnd in list {
+            exe := ""
+            try exe := WinGetProcessName(hwnd)
+            catch
+                continue
+            if (exe = "")
+                continue
+            key := StrLower(exe)
+            if seen.Has(key)
+                continue
+            seen[key] := true
+            title := ""
+            try title := WinGetTitle(hwnd)
+            catch
+                title := ""
+            out .= sep '{"exe":' JSON.Quote(exe) ',"title":' JSON.Quote(title) '}'
+            sep := ","
+        }
+        front := this.ActiveExe()
+        if (front != "" && !seen.Has(StrLower(front))) {
+            title := ""
+            try title := WinGetTitle("A")
+            catch
+                title := ""
+            out .= sep '{"exe":' JSON.Quote(front) ',"title":' JSON.Quote(title) '}'
+        }
+        this.winJson := out "]"
+        return this.winJson
     }
 
     static Broadcast(force := false) {
@@ -1475,6 +1864,19 @@ class Engine {
             this.SendRaw('{"v":1,"type":"ack","for":"profile","ok":true}')
             return
         }
+        if (type = "output") {
+            mode := String(Field(msg, "mode", "software"))
+            if (mode != "rp2040" && mode != "rp2350")
+                mode := "software"
+            if (mode != this.outputMode) {
+                this.FlushApplied()
+                this.ClearHookBindings()
+                this.outputMode := mode
+                this.mouseAtOk := false
+                this.SyncHooks()
+            }
+            return
+        }
         if (type = "command") {
             action := String(Field(msg, "action", ""))
             if (action = "start")
@@ -1534,12 +1936,42 @@ RunChecks(fails) {
     fails := Check(StrPut("a", "UTF-8") = 2, "utf8 size", fails)
     fails := Check(HookSpec("a") = "$*a", "hook letter", fails)
     fails := Check(HookSpec("``") = "$*``", "hook backtick", fails)
+    Engine.outputMode := "rp2350"
+    fails := Check(HookSpec("a") = "~$*a", "board hook passes keys", fails)
+    Engine.hidEcho := []
+    Engine.QueueHidEcho("b", true)
+    fails := Check(Engine.MatchHidEcho("b", true), "hid echo matches a board tap", fails)
+    fails := Check(!Engine.MatchHidEcho("b", true), "hid echo is consumed once", fails)
+    Engine.outputMode := "software"
+    fails := Check(HookSpec("a") = "$*a", "software hook swallows again", fails)
+    Engine.profile := Map("focusExe", "___never___.exe")
+    fails := Check(!Engine.SwallowTriggers(), "unmatched focus does not swallow", fails)
+    fails := Check(HookSpec("a") = "~$*a", "unfocused software hook passes", fails)
+    Engine.outputMode := "rp2350"
+    fails := Check(HookSpec("a") = "~$*a", "unfocused board hook still passes", fails)
+    Engine.outputMode := "software"
+    Engine.profile := Map()
+    fails := Check(Engine.SwallowTriggers(), "no focus restriction swallows", fails)
+    fails := Check(HookSpec("a") = "$*a", "software swallows without focus exe", fails)
     fails := Check(SendToken("``", "down") = "{```` down}", "send backtick", fails)
     fails := Check(SendToken("q", "up") = "{q up}", "send letter", fails)
+    fails := Check(SafeKey("|") = "\", "pipe key is backslash", fails)
+    fails := Check(Engine.GotoWhere("Client") = "client", "goto client", fails)
+    fails := Check(Engine.GotoWhere("") = "screen", "goto screen default", fails)
+    fails := Check(Engine.FocusMatch("Dawnwalker.exe", "Dawnwalker-Win64-Shipping.exe"), "ue shipping matches editor exe", fails)
+    fails := Check(Engine.FocusMatch("Dawnwalker-Win64-Shipping.exe", "Dawnwalker.exe"), "ue editor matches shipping exe", fails)
+    fails := Check(!Engine.FocusMatch("notepad.exe", "notepad++.exe"), "notepad does not match notepad++", fails)
+    fails := Check(!Engine.FocusMatch("chrome.exe", "Dawnwalker.exe"), "unrelated exe does not match", fails)
     Engine.profile := Map("swapClicks", 1)
+    hid := Engine.HidJson(["LButton", "w"], ["space"], 4, -3)
+    fails := Check(InStr(hid, '"LButton"') && InStr(hid, '"w"') && InStr(hid, '"space"') && InStr(hid, '"x":4') && InStr(hid, '"y":-3') && InStr(hid, '"type":"hid"') && !InStr(hid, '"RButton"'), "hid json keeps logical names", fails)
+    absHid := Engine.HidJson([], [], 0, 0, true, 1565, 75)
+    fails := Check(InStr(absHid, '"abs":true') && InStr(absHid, '"ax":1565') && InStr(absHid, '"ay":75'), "hid json abs goto", fails)
     fails := Check(Engine.OutName("LButton") = "RButton", "swap left sends right", fails)
     fails := Check(Engine.OutName("RButton") = "LButton", "swap right sends left", fails)
     fails := Check(Engine.OutName("MButton") = "MButton", "swap leaves middle", fails)
+    Engine.profile := J("{'swapClicks':true}")
+    fails := Check(Engine.OutName("LButton") = "RButton", "json true swaps left", fails)
     Engine.profile := Map()
     fails := Check(Engine.OutName("LButton") = "LButton", "swap off leaves left", fails)
     sideBasic := J("{'id':'m4','name':'M4','enabled':true,'basic':true,'gapMs':5,'playMode':'whileHeld','trigger':{'kind':'side','button':'XButton1'},'steps':[]}")

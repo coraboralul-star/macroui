@@ -8,6 +8,7 @@ import { MousePad } from "./components/MousePad";
 import { ProfileList } from "./components/MacroList";
 import { MacroStudio } from "./components/MacroStudio";
 import { Mark } from "./components/Mark";
+import { FieldSelect } from "./components/FieldSelect";
 import { SettingsPage, type SettingPane } from "./components/SettingsPage";
 import { keyLabel } from "./keyboard";
 import { pressLabel } from "./recording";
@@ -18,17 +19,22 @@ import {
   defaultProfile,
   MIN_REPEAT_MS,
   newId,
+  normalizeInputMode,
   normalizeProfile,
   renameActive,
+  setFocusExe,
   switchConfig,
   writeActive,
   mouseSteps,
   type EngineState,
   type Macro,
   type PlayMode,
+  type InputMode,
   type Profile,
   type TriggerKind,
 } from "./profile";
+
+type BoardPort = { port: string; chip: string; name: string };
 
 const STORAGE_KEY = "macroui-profile";
 
@@ -54,6 +60,10 @@ export function App() {
   const [picked, setPicked] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ kind: TriggerKind; code: string; x: number; y: number } | null>(null);
   const [graphId, setGraphId] = useState<string | null>(null);
+  const [fault, setFault] = useState<string | null>(null);
+  const [ports, setPorts] = useState<BoardPort[]>([]);
+  const [windows, setWindows] = useState<{ exe: string; title: string }[]>([]);
+  const [maximized, setMaximized] = useState(false);
   const booted = useRef(false);
   const echo = useRef(true);
 
@@ -69,14 +79,45 @@ export function App() {
         booted.current = true;
         setProfile(next);
         setSelected((current) => (next.macros.some((macro) => macro.id === current) ? current : next.macros[0]?.id ?? ""));
+        post({ type: "input", mode: normalizeInputMode(next.inputMode) });
       }
       if (message.type === "state") {
         setEngine({
           armed: Boolean(message.armed),
           running: Array.isArray(message.running) ? message.running as EngineState["running"] : [],
           held: Array.isArray(message.held) ? message.held.filter((key) => typeof key === "string") : [],
+          front: typeof message.front === "string" ? message.front : "",
         });
         setPipe(true);
+        if (Array.isArray(message.windows)) {
+          setWindows(
+            message.windows.flatMap((item) => {
+              if (!item || typeof item !== "object") return [];
+              const row = item as { exe?: unknown; title?: unknown };
+              if (typeof row.exe !== "string" || row.exe === "") return [];
+              return [{ exe: row.exe, title: typeof row.title === "string" ? row.title : "" }];
+            }),
+          );
+        }
+      }
+      if (message.type === "error") {
+        console.error("[vendetta] shell error", message);
+        const detail = typeof message.detail === "string" ? message.detail : "";
+        const code = typeof message.code === "string" ? message.code : "error";
+        setFault(detail || code);
+      }
+      if (message.type === "chrome") {
+        setMaximized(Boolean(message.maximized));
+      }
+      if (message.type === "ports" && Array.isArray(message.devices)) {
+        setPorts(
+          message.devices.flatMap((item) => {
+            if (!item || typeof item !== "object") return [];
+            const row = item as BoardPort;
+            if (typeof row.port !== "string" || typeof row.chip !== "string") return [];
+            return [{ port: row.port, chip: row.chip, name: typeof row.name === "string" ? row.name : row.chip }];
+          }),
+        );
       }
     });
     post({ type: "hello" });
@@ -89,6 +130,7 @@ export function App() {
           echo.current = false;
           setProfile(next);
           setSelected(next.macros[0]?.id ?? "");
+          post({ type: "input", mode: normalizeInputMode(next.inputMode) });
         } catch {
           /* keep the built-in profile */
         }
@@ -174,7 +216,33 @@ export function App() {
     ...extra,
   });
 
+  const focusOptions = useMemo(() => {
+    const rows = [{ value: "", label: "Any window" }];
+    const seen = new Set<string>();
+    const add = (exe: string, title: string) => {
+      const key = exe.toLowerCase();
+      if (!exe || seen.has(key)) return;
+      seen.add(key);
+      const short = exe.replace(/\.exe$/i, "");
+      rows.push({ value: exe, label: title && title.length < 48 ? `${title} - ${short}` : short });
+    };
+    const current = profile.focusExe ?? "";
+    if (current) {
+      const hit = windows.find((row) => row.exe.toLowerCase() === current.toLowerCase());
+      add(current, hit?.title ?? "");
+    }
+    for (const row of windows) add(row.exe, row.title);
+    return rows;
+  }, [windows, profile.focusExe]);
+
   const status = pipe ? (engine.armed ? "Running" : "Idle") : shell ? "Offline" : "Local";
+  const inputMode = normalizeInputMode(profile.inputMode);
+  const inputConnected = inputMode === "software" || ports.some((item) => item.chip === inputMode);
+
+  const setInputMode = (mode: InputMode) => {
+    update({ ...profile, inputMode: mode });
+    post({ type: "input", mode });
+  };
   const openAdvanced = () => {
     setPage("keyboard");
     setBoard("advanced");
@@ -185,12 +253,15 @@ export function App() {
     <>
       <Backdrop />
       <div className="app">
-        <header className="top tex">
-          <div
-            className="brand"
-            onMouseDown={() => post({ type: "window", action: "drag" })}
-            onDoubleClick={() => post({ type: "window", action: "maximize" })}
-          >
+        <header
+          className="top tex"
+          onMouseDown={(event) => {
+            const target = event.target as HTMLElement;
+            if (target.closest("button, input, a, select, textarea, .page-tabs, .chrome")) return;
+            post({ type: "window", action: "drag" });
+          }}
+        >
+          <div className="brand">
             <Mark />
             <div>
               <p className="mark">Vendetta</p>
@@ -220,6 +291,13 @@ export function App() {
               <button type="button" aria-label="Minimize" onClick={() => post({ type: "window", action: "minimize" })}>
                 –
               </button>
+              <button
+                type="button"
+                aria-label={maximized ? "Windowed" : "Full screen"}
+                onClick={() => post({ type: "window", action: "maximize" })}
+              >
+                {maximized ? "❐" : "□"}
+              </button>
               <button type="button" aria-label="Close" className="close" onClick={() => post({ type: "window", action: "close" })}>
                 ×
               </button>
@@ -243,13 +321,14 @@ export function App() {
                   setMenu(null);
                 }}
                 onAdd={() => {
-                  const config = { id: newId(), name: `Profile ${profile.configs.length + 1}`, macros: [] as Macro[] };
+                  const config = { id: newId(), name: `Profile ${profile.configs.length + 1}`, macros: [] as Macro[], focusExe: "" };
                   update({
                     ...profile,
                     configs: [...profile.configs, config],
                     activeId: config.id,
                     name: config.name,
                     macros: [],
+                    focusExe: "",
                   });
                   setSelected("");
                   setPicked(null);
@@ -259,11 +338,27 @@ export function App() {
                   if (profile.configs.length < 2) return;
                   const configs = profile.configs.filter((config) => config.id !== id);
                   const active = configs.find((config) => config.id === profile.activeId) ?? configs[0];
-                  update({ ...profile, configs, activeId: active.id, name: active.name, macros: active.macros });
+                  update({ ...profile, configs, activeId: active.id, name: active.name, macros: active.macros, focusExe: active.focusExe ?? "" });
                   setSelected(active.macros[0]?.id ?? "");
                   setMenu(null);
                 }}
               />
+              <div className="focus-pick">
+                <span>
+                  <span className="settings-row-name">Only when focused</span>
+                  <span className="settings-row-note">
+                    This profile runs only if that window is in front.
+                    {engine.front ? ` Front now - ${engine.front.replace(/\.exe$/i, "")}` : ""}
+                  </span>
+                </span>
+                <FieldSelect
+                  ariaLabel="Only when focused"
+                  value={profile.focusExe ?? ""}
+                  options={focusOptions}
+                  placeholder="Any window"
+                  onChange={(exe) => update(setFocusExe(profile, exe))}
+                />
+              </div>
             </section>
             <section className="rail-block is-quick">
               <h2>Quick settings</h2>
@@ -295,10 +390,6 @@ export function App() {
                     Reload
                   </button>
                 </div>
-                <label className="check quick-swap">
-                  <input type="checkbox" checked={Boolean(profile.swapClicks)} onChange={() => update({ ...profile, swapClicks: !profile.swapClicks })} />
-                  Swap clicks
-                </label>
               </div>
             </section>
           </aside>
@@ -331,7 +422,7 @@ export function App() {
                     pickTrigger(kind, button);
                     setMenu({ kind, code: button, x, y });
                   }}
-                  onSwap={() => update({ ...profile, swapClicks: !profile.swapClicks })}
+                  onSwap={(next) => update({ ...profile, swapClicks: next })}
                 />
               ) : board === "advanced" ? (
                 <MacroStudio
@@ -388,8 +479,9 @@ export function App() {
             pane={setting}
             onPane={setSetting}
             status={status}
-            swapped={Boolean(profile.swapClicks)}
-            onSwap={() => update({ ...profile, swapClicks: !profile.swapClicks })}
+            inputMode={inputMode}
+            onInputMode={setInputMode}
+            connected={inputConnected}
           />
         )}
         {menu ? (
@@ -487,6 +579,14 @@ export function App() {
             setGraphId(null);
           }}
         />
+      ) : null}
+      {fault ? (
+        <div className="fault" role="alert">
+          <p>{fault}</p>
+          <button type="button" aria-label="Dismiss" onClick={() => setFault(null)}>
+            ×
+          </button>
+        </div>
       ) : null}
     </>
   );

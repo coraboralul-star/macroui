@@ -7,6 +7,7 @@ export type LaneCell =
   | { type: "delay"; index: number; ms: number; via: "wait" | "hold" }
   | { type: "join"; index: number }
   | { type: "move"; index: number; x: number; y: number }
+  | { type: "goto"; index: number; x: number; y: number; ms: number; where: string }
   | { type: "run"; index: number; macroId: string }
   | { type: "repeat"; index: number; count: number; steps: Step[] };
 
@@ -65,8 +66,9 @@ export function laneCells(steps: Step[]): LaneCell[] {
       continue;
     }
     if (step.type === "move") cells.push({ type: "move", index, x: step.x, y: step.y });
+    else if (step.type === "goto") cells.push({ type: "goto", index, x: step.x, y: step.y, ms: step.ms ?? 15, where: step.where ?? "screen" });
     else if (step.type === "run") cells.push({ type: "run", index, macroId: step.macroId });
-    else cells.push({ type: "repeat", index, count: step.count, steps: step.steps });
+    else if (step.type === "repeat") cells.push({ type: "repeat", index, count: step.count, steps: step.steps });
     index += 1;
     if (index < steps.length && steps[index].type !== "wait") cells.push({ type: "join", index });
   }

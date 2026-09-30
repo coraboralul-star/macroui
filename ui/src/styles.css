@@ -2307,6 +2307,9 @@ button.ghost:active:not(:disabled) {
 .mouse-face {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 18px 8px;
   background: #1a1714;
   border: 1px solid #6b5e4e;
@@ -2316,6 +2319,8 @@ button.ghost:active:not(:disabled) {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  cursor: default;
+  pointer-events: none;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.12),
     inset 0 -2px 0 rgba(0, 0, 0, 0.45);
@@ -2824,6 +2829,29 @@ button.ghost.is-danger:hover:not(:disabled) {
   flex: 1;
 }
 
+.focus-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.focus-pick .field-select,
+.focus-pick .field-select-btn {
+  width: 100%;
+}
+
+.focus-pick .settings-row-name {
+  display: block;
+}
+
+.focus-pick .settings-row-note {
+  display: block;
+  margin-top: 2px;
+}
+
 .profile-list .rail-head {
   padding: 0 0 8px;
   justify-content: flex-end;
@@ -2843,6 +2871,7 @@ button.ghost.is-danger:hover:not(:disabled) {
 }
 
 .quick-icon {
+  display: block;
   width: 15px;
   height: 15px;
   flex: none;
@@ -2893,7 +2922,180 @@ button.ghost.is-danger:hover:not(:disabled) {
 .settings-lead {
   margin: 0 0 18px;
   color: var(--muted);
-  max-width: 42rem;
+  max-width: 44rem;
+}
+
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 44rem;
+}
+
+.settings-block {
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0;
+  padding: 2px 0;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.settings-row.is-static {
+  cursor: default;
+}
+
+.settings-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-row-name {
+  font-size: 1rem;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: 0;
+}
+
+.settings-row-note {
+  font-size: 0.82rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.settings-row input[type="checkbox"] {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--panel-solid);
+  display: grid;
+  place-items: center;
+}
+
+.settings-row input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.settings-row input[type="checkbox"]:checked::after {
+  content: "";
+  width: 8px;
+  height: 4px;
+  border-left: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+  transform: rotate(-45deg) translate(0, -1px);
+}
+
+.settings-choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 74px;
+  padding: 14px 12px;
+  text-align: left;
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  letter-spacing: 0;
+}
+
+.settings-choice:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+
+.settings-choice.is-on {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.settings-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.settings-status i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.settings-status.is-on {
+  color: var(--text);
+}
+
+.settings-status.is-on i {
+  background: var(--accent);
+}
+
+.settings-fold {
+  color: var(--muted);
+}
+
+.settings-fold summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  list-style: none;
+}
+
+.settings-fold summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-fold summary::before {
+  content: "";
+  display: inline-block;
+  width: 0.4em;
+  height: 0.4em;
+  margin-right: 0.55em;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg) translateY(-1px);
+}
+
+.settings-fold[open] summary::before {
+  transform: rotate(45deg) translateY(-2px);
+}
+
+.settings-fold ol {
+  margin: 10px 0 0;
+  padding-left: 1.2rem;
+}
+
+.settings-fold li {
+  margin: 0 0 6px;
 }
 
 .studio.is-page {
@@ -3812,8 +4014,13 @@ button.ghost.is-danger:hover:not(:disabled) {
 }
 
 .quick-actions > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   height: 2.15rem;
   padding: 0 12px;
+  line-height: 1;
 }
 
 .quick-swap {
@@ -3889,6 +4096,21 @@ button.ghost.is-danger:hover:not(:disabled) {
   padding: 36px 40px;
 }
 
+.mouse-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.mouse-swap {
+  width: min(28rem, 100%);
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
 .mouse-side.is-dock {
   gap: 8px;
 }
@@ -3903,13 +4125,13 @@ button.ghost.is-danger:hover:not(:disabled) {
   border: 1px solid var(--line-strong);
   background: var(--panel);
   color: var(--text);
-  cursor: pointer;
+  cursor: default;
 }
 
 .mouse-face:hover {
-  border-color: var(--accent);
-  background: var(--surface-up);
-  filter: brightness(1.08);
+  border-color: var(--line-strong);
+  background: var(--panel);
+  filter: none;
 }
 
 .mouse-wheel:hover:not(:disabled):not(.is-picked) {
@@ -5499,3 +5721,42 @@ button.ghost.is-danger:hover:not(:disabled) {
 .graph-edit-list button em {
   margin-left: auto;
 }
+
+/* Shell error notice. Overlays everything so a failed save cannot go unseen. */
+.fault {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 10px 10px 14px;
+  background: var(--panel-solid);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+
+.fault p {
+  margin: 0;
+  color: #ffd0d0;
+  font-size: 0.82rem;
+}
+
+.fault button {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.fault button:hover { color: var(--text); }

@@ -1,10 +1,14 @@
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
+using System.IO.Ports;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
+using System.Windows.Interop;
+using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 
 namespace MacroShell;
@@ -21,7 +25,16 @@ public partial class MainWindow : Window
     bool _pageReady;
     bool _launchedEngine;
     bool _closing;
-    string _lastEngine = "";
+    string _lastState = "";
+    string _portsJson = "";
+    string _inputMode = "software";
+    string _outputMode = "software";
+    int _mouseBits;
+    bool _swapClicks;
+    SerialPort? _board;
+    readonly SemaphoreSlim _boardLock = new(1, 1);
+    DispatcherTimer? _portDebounce;
+    int _inputGen;
 
     public MainWindow()
     {
@@ -92,6 +105,30 @@ public partial class MainWindow : Window
         catch { /* already gone */ }
         _cts.Cancel();
         try { _pipe?.Dispose(); } catch { /* closing */ }
+        try
+        {
+            _boardLock.Wait(500);
+            CloseBoard();
+        }
+        catch { CloseBoard(); }
+        finally
+        {
+            try { _boardLock.Release(); } catch { /* not held */ }
+        }
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        if (PresentationSource.FromVisual(this) is HwndSource source)
+            source.AddHook(WndProc);
+    }
+
+    IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == 0x0219)
+            QueuePortRefresh();
+        return IntPtr.Zero;
     }
 
     void OnPageMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -123,14 +160,35 @@ public partial class MainWindow : Window
         {
             _pageReady = true;
             SendToPage(LinkJson());
-            SendToPage(ReadyJson());
-            if (_lastEngine.Length > 0)
-                SendToPage(_lastEngine);
+            SendReady();
+            SendPorts(true);
+            SendWindowState();
+            if (_lastState.Length > 0)
+                SendToPage(_lastState);
             return;
         }
-        if (type == "profile" && node?["profile"] is JsonNode profile)
+        if (type == "input")
         {
-            File.WriteAllText(_profilePath, profile.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            _ = ApplyInput(node?["mode"]?.ToString() ?? "software");
+            return;
+        }
+        if (type == "profile")
+        {
+            if (node?["profile"] is not JsonObject profile || profile["macros"] is not JsonArray)
+            {
+                SendToPage(ErrorJson("shell", "bad-shape", "profile payload was not a profile object"));
+                return;
+            }
+            RememberSwap(profile);
+            try
+            {
+                File.WriteAllText(_profilePath, profile.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            }
+            catch
+            {
+                SendToPage(ErrorJson("shell", "profile-write", "could not save the profile to disk"));
+                return;
+            }
             _ = WritePipe(e.WebMessageAsJson);
             return;
         }
@@ -140,7 +198,8 @@ public partial class MainWindow : Window
             if (action == "reload")
             {
                 _ = WritePipe(e.WebMessageAsJson);
-                SendToPage(ReadyJson());
+                SendReady();
+                SendPorts(true);
                 return;
             }
             _ = WritePipe(e.WebMessageAsJson);
@@ -160,14 +219,22 @@ public partial class MainWindow : Window
                 _pipe = pipe;
                 misses = 0;
                 SendToPage(LinkJson());
-                await WritePipe(ProfileEnvelope());
+                await SendProfileEnvelope();
+                await WritePipe(OutputJson(_outputMode));
                 var buf = new byte[1024 * 1024];
                 while (!ct.IsCancellationRequested)
                 {
                     var n = await pipe.ReadAsync(buf, ct);
                     if (n <= 0) break;
                     var text = Encoding.UTF8.GetString(buf, 0, n);
-                    _lastEngine = text;
+                    var kind = MessageType(text);
+                    if (kind == "state")
+                        _lastState = text;
+                    if (kind == "hid")
+                    {
+                        WriteHid(text);
+                        continue;
+                    }
                     SendToPage(text);
                 }
             }
@@ -182,6 +249,7 @@ public partial class MainWindow : Window
                     TryLaunchEngine();
             }
             _pipe = null;
+            _lastState = "";
             if (!_closing)
                 SendToPage(LinkJson());
             try { await Task.Delay(700, ct); } catch { break; }
@@ -238,19 +306,384 @@ public partial class MainWindow : Window
         Dispatcher.Invoke(() => View.CoreWebView2.PostWebMessageAsJson(json));
     }
 
+    void OnWindowStateChanged(object sender, EventArgs e) => SendWindowState();
+
+    void SendWindowState()
+    {
+        SendToPage(JsonSerializer.Serialize(new { type = "chrome", maximized = WindowState == WindowState.Maximized }));
+    }
+
     string LinkJson() =>
         JsonSerializer.Serialize(new { type = "link", shell = true, pipe = _pipe is { IsConnected: true } });
 
-    string ReadyJson()
+    void SendReady()
     {
-        var profile = JsonNode.Parse(File.ReadAllText(_profilePath)) ?? new JsonObject();
-        return new JsonObject { ["type"] = "ready", ["profile"] = profile }.ToJsonString();
+        string json;
+        try
+        {
+            var profile = JsonNode.Parse(File.ReadAllText(_profilePath)) ?? new JsonObject();
+            RememberSwap(profile);
+            json = new JsonObject { ["type"] = "ready", ["profile"] = profile }.ToJsonString();
+        }
+        catch
+        {
+            json = ErrorJson("shell", "profile-read", "could not read the profile on disk");
+        }
+        SendToPage(json);
     }
 
-    string ProfileEnvelope()
+    async Task SendProfileEnvelope()
     {
-        var profile = JsonNode.Parse(File.ReadAllText(_profilePath)) ?? new JsonObject();
-        return new JsonObject { ["v"] = 1, ["type"] = "profile", ["profile"] = profile }.ToJsonString();
+        string json;
+        try
+        {
+            var profile = JsonNode.Parse(File.ReadAllText(_profilePath)) ?? new JsonObject();
+            RememberSwap(profile);
+            json = new JsonObject { ["v"] = 1, ["type"] = "profile", ["profile"] = profile }.ToJsonString();
+        }
+        catch
+        {
+            SendToPage(ErrorJson("shell", "profile-read", "could not read the profile on disk"));
+            return;
+        }
+        await WritePipe(json);
+    }
+
+    void QueuePortRefresh()
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            _portDebounce ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+            _portDebounce.Stop();
+            _portDebounce.Tick -= OnPortDebounce;
+            _portDebounce.Tick += OnPortDebounce;
+            _portDebounce.Start();
+        });
+    }
+
+    void OnPortDebounce(object? sender, EventArgs e)
+    {
+        _portDebounce?.Stop();
+        SendPorts(false);
+        if (_inputMode is "rp2040" or "rp2350")
+            _ = ApplyInput(_inputMode);
+    }
+
+    void SendPorts(bool force)
+    {
+        var devices = BoardPorts.List().Select(item => new { port = item.Port, chip = item.Chip, name = item.Name }).ToArray();
+        var json = JsonSerializer.Serialize(new { type = "ports", devices });
+        if (!force && json == _portsJson)
+            return;
+        _portsJson = json;
+        SendToPage(json);
+    }
+
+    async Task ApplyInput(string mode)
+    {
+        if (mode != "rp2040" && mode != "rp2350")
+            mode = "software";
+        _inputMode = mode;
+        var gen = Interlocked.Increment(ref _inputGen);
+        await _boardLock.WaitAsync();
+        try
+        {
+            if (gen != _inputGen)
+                return;
+            if (mode == "software")
+            {
+                CloseBoard();
+                await SetOutput("software");
+                return;
+            }
+
+            var hit = BoardPorts.List().FirstOrDefault(item => item.Chip == mode);
+            if (string.IsNullOrEmpty(hit.Port))
+            {
+                CloseBoard();
+                await SetOutput("software");
+                SendToPage(ErrorJson("shell", "no-board", $"no Vendetta {ChipLabel(mode)} board was found"));
+                return;
+            }
+
+            var fail = await Task.Run(() => OpenAndAsk(hit.Port, mode));
+            if (gen != _inputGen)
+                return;
+            if (fail != "")
+            {
+                CloseBoard();
+                await SetOutput("software");
+                if (fail == "mismatch")
+                    SendToPage(ErrorJson("shell", "board-mismatch", $"the board on {hit.Port} is not a Vendetta {ChipLabel(mode)}"));
+                else
+                    SendToPage(ErrorJson("shell", "no-board", $"could not open the Vendetta {ChipLabel(mode)} board"));
+                return;
+            }
+
+            await SetOutput(mode);
+        }
+        finally
+        {
+            _boardLock.Release();
+        }
+    }
+
+    async Task SetOutput(string mode)
+    {
+        _outputMode = mode;
+        await WritePipe(OutputJson(mode));
+    }
+
+    string OpenAndAsk(string port, string mode)
+    {
+        try
+        {
+            if (_board is not { IsOpen: true } || !string.Equals(_board.PortName, port, StringComparison.OrdinalIgnoreCase))
+            {
+                CloseBoard();
+                var serial = new SerialPort(port, 115200)
+                {
+                    NewLine = "\n",
+                    Encoding = new UTF8Encoding(false),
+                    ReadTimeout = 1500,
+                    WriteTimeout = 1500,
+                    DtrEnable = true,
+                    RtsEnable = true,
+                };
+                serial.Open();
+                _board = serial;
+                Thread.Sleep(250);
+            }
+            _board.DiscardInBuffer();
+            _board.WriteLine("?");
+            var reply = (_board.ReadLine() ?? "").Trim();
+            if (mode == "rp2040" && reply.StartsWith("Vendetta RP2040", StringComparison.OrdinalIgnoreCase))
+                return "";
+            if (mode == "rp2350" && reply.StartsWith("Vendetta RP2350", StringComparison.OrdinalIgnoreCase))
+                return "";
+            return "mismatch";
+        }
+        catch
+        {
+            return "open";
+        }
+    }
+
+    void CloseBoard()
+    {
+        _mouseBits = 0;
+        var serial = _board;
+        _board = null;
+        if (serial == null)
+            return;
+        try { serial.Close(); } catch { /* already gone */ }
+        try { serial.Dispose(); } catch { /* already gone */ }
+    }
+
+    static string OutputJson(string mode) =>
+        JsonSerializer.Serialize(new { v = 1, type = "output", mode });
+
+    static string ChipLabel(string mode) => mode == "rp2040" ? "RP2040" : "RP2350";
+
+    void WriteHid(string json)
+    {
+        JsonNode? node;
+        try { node = JsonNode.Parse(json); }
+        catch { return; }
+        var down = ReadNames(node?["down"]);
+        var up = ReadNames(node?["up"]);
+        var dx = AsInt(node?["x"]);
+        var dy = AsInt(node?["y"]);
+        var abs = AsBool(node?["abs"]);
+        var ax = AsInt(node?["ax"]);
+        var ay = AsInt(node?["ay"]);
+        if (!_boardLock.Wait(40))
+            return;
+        try
+        {
+            if (_board is not { IsOpen: true })
+                return;
+            var serial = _board;
+            serial.ReadTimeout = 80;
+            var bits = _mouseBits;
+            var mouseTouch = false;
+            foreach (var raw in down)
+            {
+                var name = HidMap.SwapClick(raw, _swapClicks);
+                if (HidMap.MouseBit(name, out var bit))
+                {
+                    bits |= 1 << bit;
+                    mouseTouch = true;
+                }
+                else if (HidMap.KeyUsage(name, out var usage))
+                    BoardLine(serial, $"K {usage} 1");
+            }
+            if (abs)
+            {
+                SteerMouse(serial, bits, ax, ay);
+                mouseTouch = false;
+                dx = 0;
+                dy = 0;
+            }
+            else if (mouseTouch || dx != 0 || dy != 0)
+            {
+                BoardLine(serial, $"M {bits} {dx} {dy} 0");
+                dx = 0;
+                dy = 0;
+                mouseTouch = false;
+            }
+            foreach (var raw in up)
+            {
+                var name = HidMap.SwapClick(raw, _swapClicks);
+                if (HidMap.MouseBit(name, out var bit))
+                {
+                    bits &= ~(1 << bit);
+                    mouseTouch = true;
+                }
+                else if (HidMap.KeyUsage(name, out var usage))
+                    BoardLine(serial, $"K {usage} 0");
+            }
+            if (mouseTouch)
+                BoardLine(serial, $"M {bits} 0 0 0");
+            _mouseBits = bits;
+        }
+        catch
+        {
+            CloseBoard();
+        }
+        finally
+        {
+            _boardLock.Release();
+        }
+    }
+
+    static void BoardLine(SerialPort serial, string line)
+    {
+        serial.WriteLine(line);
+        try { serial.ReadLine(); }
+        catch { /* ok / hid-busy / timeout */ }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll")]
+    static extern bool GetCursorPos(out POINT lpPoint);
+
+    [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    static extern bool LogicalToPhysicalPointForPerMonitorDPI(IntPtr hWnd, ref POINT lpPoint);
+
+    [DllImport("user32.dll")]
+    static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    static void SteerMouse(SerialPort serial, int bits, int ax, int ay)
+    {
+        var hwnd = GetForegroundWindow();
+        var target = new POINT { X = ax, Y = ay };
+        if (hwnd != IntPtr.Zero)
+        {
+            if (!LogicalToPhysicalPointForPerMonitorDPI(hwnd, ref target))
+            {
+                var dpi = GetDpiForWindow(hwnd);
+                if (dpi == 0)
+                    dpi = 96;
+                target.X = (int)Math.Round(ax * dpi / 96.0);
+                target.Y = (int)Math.Round(ay * dpi / 96.0);
+            }
+        }
+        if (!GetCursorPos(out var cur))
+            return;
+        var leftX = target.X - cur.X;
+        var leftY = target.Y - cur.Y;
+        for (var i = 0; i < 64; i++)
+        {
+            if (leftX == 0 && leftY == 0)
+                break;
+            var sx = Math.Clamp(leftX, -127, 127);
+            var sy = Math.Clamp(leftY, -127, 127);
+            BoardLine(serial, $"M {bits} {sx} {sy} 0");
+            if (!GetCursorPos(out var now))
+                break;
+            if (now.X != cur.X || now.Y != cur.Y)
+            {
+                leftX = target.X - now.X;
+                leftY = target.Y - now.Y;
+                cur = now;
+            }
+            else
+            {
+                leftX -= sx;
+                leftY -= sy;
+            }
+        }
+    }
+
+    void RememberSwap(JsonNode? profile)
+    {
+        _swapClicks = false;
+        if (profile?["swapClicks"] is not JsonValue v)
+            return;
+        if (v.TryGetValue(out bool b))
+            _swapClicks = b;
+        else if (v.TryGetValue(out int n))
+            _swapClicks = n != 0;
+        else if (v.TryGetValue(out string? s))
+            _swapClicks = string.Equals(s, "true", StringComparison.OrdinalIgnoreCase) || s == "1";
+    }
+
+    static int AsInt(JsonNode? node)
+    {
+        if (node is JsonValue v)
+        {
+            if (v.TryGetValue(out int i))
+                return i;
+            if (v.TryGetValue(out long l))
+                return (int)l;
+            if (v.TryGetValue(out double d))
+                return (int)d;
+        }
+        return 0;
+    }
+
+    static bool AsBool(JsonNode? node)
+    {
+        if (node is not JsonValue v)
+            return false;
+        if (v.TryGetValue(out bool b))
+            return b;
+        if (v.TryGetValue(out int n))
+            return n != 0;
+        return false;
+    }
+
+    static List<string> ReadNames(JsonNode? node)
+    {
+        var names = new List<string>();
+        if (node is not JsonArray list)
+            return names;
+        foreach (var item in list)
+        {
+            if (item is not JsonValue v || !v.TryGetValue(out string? name) || string.IsNullOrEmpty(name))
+                continue;
+            names.Add(name);
+        }
+        return names;
+    }
+
+    static string ErrorJson(string where, string code, string detail) =>
+        JsonSerializer.Serialize(new { v = 1, type = "error", where, code, detail });
+
+    static string MessageType(string json)
+    {
+        try { return JsonNode.Parse(json)?["type"]?.ToString() ?? ""; }
+        catch { return ""; }
     }
 
     static string FindRepo()

@@ -17,7 +17,7 @@ export function MousePad({
   picked: string | null;
   swapped: boolean;
   onAssign: (kind: TriggerKind, button: string, x: number, y: number) => void;
-  onSwap: () => void;
+  onSwap: (next: boolean) => void;
 }) {
   const bound = (kind: TriggerKind, button: string) =>
     macros.some((macro) => macro.trigger.kind === kind && macro.trigger.button === button);
@@ -28,38 +28,47 @@ export function MousePad({
   };
 
   return (
-    <div className="board mouse-pad" aria-label="Mouse">
-      <div className="mouse-side is-dock">
-        {SIDES.map((side) => (
+    <div className="mouse-page">
+      <div className="board mouse-pad" aria-label="Mouse">
+        <div className="mouse-side is-dock">
+          {SIDES.map((side) => (
+            <button
+              key={side.button}
+              type="button"
+              className={`keycap mouse-thumb${bound(side.kind, side.button) ? " is-bound" : ""}${picked === side.button ? " is-picked" : ""}`}
+              onClick={(event) => open(side.kind, side.button, event)}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              {side.label}
+            </button>
+          ))}
+        </div>
+        <div className="mouse-shell">
+          <div className="mouse-clicks">
+            <div className={`mouse-face${swapped ? " is-swapped" : ""}`}>
+              {swapped ? "Right" : "Left"}
+            </div>
+            <div className={`mouse-face${swapped ? " is-swapped" : ""}`}>
+              {swapped ? "Left" : "Right"}
+            </div>
+          </div>
           <button
-            key={side.button}
             type="button"
-            className={`keycap mouse-thumb${bound(side.kind, side.button) ? " is-bound" : ""}${picked === side.button ? " is-picked" : ""}`}
-            onClick={(event) => open(side.kind, side.button, event)}
+            className={`keycap mouse-wheel${bound("mouse", "MButton") ? " is-bound" : ""}${picked === "MButton" ? " is-picked" : ""}`}
+            onClick={(event) => open("mouse", "MButton", event)}
             onContextMenu={(event) => event.preventDefault()}
           >
-            {side.label}
-          </button>
-        ))}
-      </div>
-      <div className="mouse-shell">
-        <div className="mouse-clicks">
-          <button type="button" className={`mouse-face${swapped ? " is-swapped" : ""}`} title="Swap" onClick={onSwap}>
-            {swapped ? "Right" : "Left"}
-          </button>
-          <button type="button" className={`mouse-face${swapped ? " is-swapped" : ""}`} title="Swap" onClick={onSwap}>
-            {swapped ? "Left" : "Right"}
+            Middle
           </button>
         </div>
-        <button
-          type="button"
-          className={`keycap mouse-wheel${bound("mouse", "MButton") ? " is-bound" : ""}${picked === "MButton" ? " is-picked" : ""}`}
-          onClick={(event) => open("mouse", "MButton", event)}
-          onContextMenu={(event) => event.preventDefault()}
-        >
-          Middle
-        </button>
       </div>
+      <label className="settings-row mouse-swap">
+        <span>
+          <span className="settings-row-name">Swap clicks</span>
+          <span className="settings-row-note">Left and right click trade places in playback.</span>
+        </span>
+          <input type="checkbox" checked={swapped} onChange={(event) => onSwap(event.target.checked)} />
+      </label>
     </div>
   );
 }

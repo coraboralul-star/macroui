@@ -3,11 +3,35 @@ import { normalizeRecording, type Recording } from "./recording";
 export type PlayMode = "once" | "repeat" | "whileHeld" | "toggle" | "onRelease";
 export type TriggerKind = "key" | "mouse" | "side";
 export type KeyAction = "down" | "up" | "tap";
+export type InputMode = "software" | "rp2040" | "rp2350";
+
+export const INPUT_MODES: { value: InputMode; label: string }[] = [
+  { value: "software", label: "Default" },
+  { value: "rp2040", label: "RP2040" },
+  { value: "rp2350", label: "RP2350" },
+];
+
+export function normalizeInputMode(value: unknown): InputMode {
+  return value === "rp2040" || value === "rp2350" ? value : "software";
+}
+
+export type GotoWhere = "screen" | "window" | "client";
+
+export const GOTO_WHERE: { value: GotoWhere; label: string }[] = [
+  { value: "screen", label: "Screen" },
+  { value: "window", label: "Window" },
+  { value: "client", label: "Client" },
+];
+
+export function normalizeGotoWhere(value: unknown): GotoWhere {
+  return value === "window" || value === "client" ? value : "screen";
+}
 
 export type Step =
   | { type: "key"; action: KeyAction; key: string; holdMs?: number }
   | { type: "mouse"; action: KeyAction; button: string; holdMs?: number }
   | { type: "move"; x: number; y: number }
+  | { type: "goto"; x: number; y: number; ms?: number; where?: GotoWhere }
   | { type: "wait"; ms: number }
   | { type: "repeat"; count: number; steps: Step[] }
   | { type: "run"; macroId: string };
@@ -49,6 +73,7 @@ export type Config = {
   id: string;
   name: string;
   macros: Macro[];
+  focusExe?: string;
 };
 
 export type Profile = {
@@ -61,6 +86,10 @@ export type Profile = {
   macros: Macro[];
   /** Recorded left and right clicks trade places. Those buttons are never triggers. */
   swapClicks?: boolean;
+  /** Where Publish() should send keys and mouse: this PC, or a Vendetta USB board. */
+  inputMode?: InputMode;
+  /** If set, this profile only runs while that process is the foreground window. */
+  focusExe?: string;
 };
 
 export const MIN_REPEAT_MS = 18;
@@ -69,6 +98,8 @@ export type EngineState = {
   armed: boolean;
   running: { id: string; name: string }[];
   held: string[];
+  front?: string;
+  windows?: { exe: string; title: string }[];
 };
 
 export const KEY_OPTIONS = [
@@ -153,6 +184,7 @@ export const defaultProfile: Profile = {
   configs: [{ id: "default", name: "Default", macros: starter }],
   macros: starter,
   swapClicks: false,
+  inputMode: "software",
 };
 
 export function newId(): string {
@@ -212,15 +244,22 @@ export function applyGap(macro: Macro, gapMs: number): Macro {
 
 export function writeActive(profile: Profile, macros: Macro[]): Profile {
   const configs = profile.configs.map((config) =>
-    config.id === profile.activeId ? { ...config, macros } : config,
+    config.id === profile.activeId ? { ...config, macros, focusExe: profile.focusExe ?? "" } : config,
   );
   return { ...profile, configs, macros };
+}
+
+export function setFocusExe(profile: Profile, focusExe: string): Profile {
+  const configs = profile.configs.map((config) =>
+    config.id === profile.activeId ? { ...config, focusExe } : config,
+  );
+  return { ...profile, configs, focusExe };
 }
 
 export function switchConfig(profile: Profile, id: string): Profile {
   const config = profile.configs.find((item) => item.id === id);
   if (!config) return profile;
-  return { ...profile, activeId: id, name: config.name, macros: config.macros };
+  return { ...profile, activeId: id, name: config.name, macros: config.macros, focusExe: config.focusExe ?? "" };
 }
 
 export function renameActive(profile: Profile, name: string): Profile {
@@ -238,6 +277,8 @@ export function blankStep(type: Step["type"]): Step {
       return { type: "mouse", action: "tap", button: "LButton", holdMs: 15 };
     case "move":
       return { type: "move", x: 0, y: 0 };
+    case "goto":
+      return { type: "goto", x: 0, y: 0, ms: 15, where: "screen" };
     case "wait":
       return { type: "wait", ms: 50 };
     case "repeat":
@@ -268,8 +309,9 @@ export function normalizeProfile(value: unknown): Profile {
         id: item?.id || newId(),
         name: item?.name || `Profile ${index + 1}`,
         macros: Array.isArray(item?.macros) ? onePerTrigger(item.macros.map(normalizeMacro)) : [],
+        focusExe: typeof item?.focusExe === "string" ? item.focusExe : "",
       }))
-    : [{ id: "default", name: value.name || "Default", macros }];
+    : [{ id: "default", name: value.name || "Default", macros, focusExe: typeof (value as Profile).focusExe === "string" ? (value as Profile).focusExe : "" }];
   const activeId = configs.some((config) => config.id === value.activeId) ? value.activeId : configs[0].id;
   const active = configs.find((config) => config.id === activeId) ?? configs[0];
   const live = saved.length ? active.macros : macros;
@@ -281,6 +323,8 @@ export function normalizeProfile(value: unknown): Profile {
     configs: configs.map((config) => (config.id === activeId ? { ...config, macros: live } : config)),
     macros: live,
     swapClicks: Boolean((value as Profile).swapClicks),
+    inputMode: normalizeInputMode((value as Profile).inputMode),
+    focusExe: active.focusExe || String((value as Profile).focusExe ?? ""),
   };
 }
 

@@ -1,5 +1,5 @@
 import type { Macro, Step } from "../profile";
-import { blankStep } from "../profile";
+import { blankStep, GOTO_WHERE, normalizeGotoWhere } from "../profile";
 import { pressLabel } from "../recording";
 import { Capture, type Captured } from "./Capture";
 import { FieldSelect } from "./FieldSelect";
@@ -14,6 +14,7 @@ const INSERTS: { id: string; label: string; step: () => Step }[] = [
   { id: "up", label: "↑", step: () => ({ type: "key", action: "up", key: "w" }) },
   { id: "mouse", label: "Click", step: () => blankStep("mouse") },
   { id: "move", label: "Move", step: () => blankStep("move") },
+  { id: "goto", label: "Go to", step: () => blankStep("goto") },
   { id: "wait", label: "Wait", step: () => blankStep("wait") },
   { id: "repeat", label: "Repeat", step: () => blankStep("repeat") },
   { id: "run", label: "Run", step: () => blankStep("run") },
@@ -228,7 +229,7 @@ function NodeView({
             : undefined
         }
       >
-        {node.type === "press" ? pressLabel(node.button) : node.type === "move" ? "move" : "run"}
+        {node.type === "press" ? pressLabel(node.button) : node.type === "move" ? "move" : node.type === "goto" ? "go to" : "run"}
       </b>
       {node.type === "press" && node.action === "down" ? (
         <button type="button" className="arrow" aria-label="Down" onClick={() => onChange(patchPress(steps, node, { action: "up" }))}>↓</button>
@@ -250,6 +251,19 @@ function NodeView({
         <span className="move-xy">
           <input aria-label="Move x" type="number" value={node.x} onChange={(event) => onChange(swap(steps, node, { type: "move", x: Number(event.target.value) || 0, y: node.y }))} />
           <input aria-label="Move y" type="number" value={node.y} onChange={(event) => onChange(swap(steps, node, { type: "move", x: node.x, y: Number(event.target.value) || 0 }))} />
+        </span>
+      ) : null}
+      {node.type === "goto" ? (
+        <span className="move-xy">
+          <FieldSelect
+            ariaLabel="Go to space"
+            value={normalizeGotoWhere(node.where)}
+            options={GOTO_WHERE}
+            onChange={(where) => onChange(swap(steps, node, { type: "goto", x: node.x, y: node.y, ms: node.ms, where: normalizeGotoWhere(where) }))}
+          />
+          <input aria-label="Go to x" type="number" value={node.x} onChange={(event) => onChange(swap(steps, node, { type: "goto", x: Number(event.target.value) || 0, y: node.y, ms: node.ms, where: node.where }))} />
+          <input aria-label="Go to y" type="number" value={node.y} onChange={(event) => onChange(swap(steps, node, { type: "goto", x: node.x, y: Number(event.target.value) || 0, ms: node.ms, where: node.where }))} />
+          <input aria-label="Go to ms" type="number" min={0} value={node.ms} onChange={(event) => onChange(swap(steps, node, { type: "goto", x: node.x, y: node.y, ms: Math.max(0, Math.round(Number(event.target.value) || 0)), where: node.where }))} />
         </span>
       ) : null}
       {node.type === "run" ? (

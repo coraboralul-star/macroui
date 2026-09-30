@@ -66,6 +66,7 @@ export function stepPhrase(step: Step): string {
   }
   if (step.type === "wait") return `wait ${step.ms} ms`;
   if (step.type === "move") return `move ${step.x}, ${step.y}`;
+  if (step.type === "goto") return `go to ${step.x}, ${step.y} (${step.where || "screen"})`;
   if (step.type === "repeat") return `repeat ${step.count}`;
   if (step.type === "run") return "run a macro";
   return "";
@@ -94,6 +95,7 @@ function pushBeats(steps: Step[], out: string[]) {
       }
     } else if (step.type === "wait") out.push(`${step.ms} ms`);
     else if (step.type === "move") out.push(`move ${step.x}, ${step.y}`);
+    else if (step.type === "goto") out.push(`go to ${step.x}, ${step.y} (${step.where || "screen"})`);
     else if (step.type === "repeat") {
       out.push(step.count === 0 ? "until it stops" : `${step.count} times`);
       pushBeats(step.steps, out);

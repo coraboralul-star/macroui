@@ -18,6 +18,7 @@ export const LIBRARY: LibraryItem[] = [
   { id: "up", group: "Input", label: "Key up", detail: "Release a held key", create: () => ({ type: "key", action: "up", key: "w" }) },
   { id: "click", group: "Input", label: "Click", detail: "Mouse button", create: () => blankStep("mouse") },
   { id: "move", group: "Input", label: "Move", detail: "Cursor offset", create: () => blankStep("move") },
+  { id: "goto", group: "Input", label: "Go to", detail: "Cursor to a Screen, Window, or Client point", create: () => blankStep("goto") },
   { id: "wait", group: "Timing", label: "Wait", detail: "Pause between actions", create: () => blankStep("wait") },
   { id: "repeat", group: "Flow", label: "Repeat", detail: "Run the steps inside again", create: () => blankStep("repeat") },
   { id: "run", group: "Flow", label: "Run macro", detail: "Start another macro", create: () => blankStep("run") },

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { KeyAction, Macro, Step } from "../profile";
-import { KEY_OPTIONS, MOUSE_OPTIONS, SIDE_OPTIONS, blankStep } from "../profile";
+import { GOTO_WHERE, KEY_OPTIONS, MOUSE_OPTIONS, SIDE_OPTIONS, blankStep, normalizeGotoWhere } from "../profile";
 import { Chips } from "./Chips";
 import { FieldSelect } from "./FieldSelect";
 
@@ -14,6 +14,7 @@ const STEP_TYPES: { value: Step["type"]; label: string }[] = [
   { value: "key", label: "Key" },
   { value: "mouse", label: "Click" },
   { value: "move", label: "Move" },
+  { value: "goto", label: "Go to" },
   { value: "wait", label: "Wait" },
   { value: "repeat", label: "Repeat" },
   { value: "run", label: "Run" },
@@ -147,6 +148,21 @@ function StepFields({
       </>
     );
   }
+  if (step.type === "goto") {
+    return (
+      <>
+        <FieldSelect
+          ariaLabel="Go to space"
+          value={normalizeGotoWhere(step.where)}
+          options={GOTO_WHERE}
+          onChange={(where) => onChange({ ...step, where: normalizeGotoWhere(where) })}
+        />
+        <NumberBox label="X" value={step.x} onChange={(x) => onChange({ ...step, x })} />
+        <NumberBox label="Y" value={step.y} onChange={(y) => onChange({ ...step, y })} />
+        <NumberBox label="ms" value={step.ms ?? 15} min={0} onChange={(ms) => onChange({ ...step, ms })} />
+      </>
+    );
+  }
   if (step.type === "wait") {
     return <NumberBox label="ms" value={step.ms} min={1} onChange={(ms) => onChange({ ...step, ms })} />;
   }
@@ -217,6 +233,7 @@ function label(step: Step) {
   if (step.type === "key") return "Key";
   if (step.type === "mouse") return "Click";
   if (step.type === "move") return "Move";
+  if (step.type === "goto") return "Go to";
   if (step.type === "wait") return "Wait";
   if (step.type === "repeat") return "Repeat";
   return "Run";

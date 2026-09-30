@@ -4,3 +4,11 @@ obj/
 *.user
 engine/engine.log
 engine/self-test-result.txt
+firmware/build/
+firmware/out/
+profiles/*.json
+shell/bin/**/runtimes/android-*/
+shell/bin/**/runtimes/linux-*/
+shell/bin/**/runtimes/maccatalyst-*/
+shell/bin/**/runtimes/osx-*/
+shell/bin/**/runtimes/unix/

@@ -13,9 +13,12 @@
         ResizeMode="CanResize"
         WindowStartupLocation="CenterScreen"
         Loaded="OnLoaded"
-        Closed="OnClosed">
+        Closed="OnClosed"
+        StateChanged="OnWindowStateChanged">
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="7" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False" />
     </shell:WindowChrome.WindowChrome>
-    <wv2:WebView2 x:Name="View" />
+    <Grid Background="#070708">
+        <wv2:WebView2 x:Name="View" Margin="6" />
+    </Grid>
 </Window>

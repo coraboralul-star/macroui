@@ -78,6 +78,7 @@ export function EventLane({
     },
     { kind: "label", text: "Extra" },
     { kind: "item", label: "Look", run: () => onChange(insertSteps(steps, index, [{ type: "move", x: 0, y: 0 }])) },
+    { kind: "item", label: "Go to", run: () => onChange(insertSteps(steps, index, [{ type: "goto", x: 0, y: 0, ms: 15, where: "screen" }])) },
     { kind: "item", label: "Jump", run: () => onChange(insertSteps(steps, index, pressPair("key", "Space"))) },
     ...(macros.length
       ? [{ kind: "item" as const, label: "Chain", run: () => onChange(insertSteps(steps, index, [{ type: "run", macroId: macros[0]?.id ?? "" }])) }]
@@ -347,6 +348,55 @@ function CellView({
             type="number"
             value={cell.y}
             onChange={(event) => onChange(steps.map((step, index) => (index === cell.index && step.type === "move" ? { ...step, y: Number(event.target.value) || 0 } : step)))}
+          />
+        </small>
+      </span>
+    );
+  }
+  if (cell.type === "goto") {
+    return (
+      <span
+        className={`ev${dragFrom === cell.index ? " is-dragging" : ""}${targeted ? " is-target" : ""}`}
+        draggable={!readOnly}
+        onDragStart={(event) => {
+          event.dataTransfer.setData("text/plain", String(cell.index));
+          event.dataTransfer.effectAllowed = "move";
+          onDragIndex(cell.index);
+        }}
+        onDragEnd={onDragEnd}
+        onDragOver={onAllowDrop(cell.index)}
+        onDrop={onDropAt(cell.index)}
+        onContextMenu={(event) => onMenu(event, [{ kind: "item", label: "Delete", run: () => onChange(deleteAct(steps, cell.index)) }])}
+      >
+        <b>Go to</b>
+        <small>
+          <select
+            aria-label="Go to space"
+            value={cell.where}
+            onChange={(event) => onChange(steps.map((step, index) => (index === cell.index && step.type === "goto" ? { ...step, where: event.target.value as "screen" | "window" | "client" } : step)))}
+          >
+            <option value="screen">Screen</option>
+            <option value="window">Window</option>
+            <option value="client">Client</option>
+          </select>
+          <input
+            aria-label="Go to x"
+            type="number"
+            value={cell.x}
+            onChange={(event) => onChange(steps.map((step, index) => (index === cell.index && step.type === "goto" ? { ...step, x: Number(event.target.value) || 0 } : step)))}
+          />
+          <input
+            aria-label="Go to y"
+            type="number"
+            value={cell.y}
+            onChange={(event) => onChange(steps.map((step, index) => (index === cell.index && step.type === "goto" ? { ...step, y: Number(event.target.value) || 0 } : step)))}
+          />
+          <input
+            aria-label="Go to ms"
+            type="number"
+            min={0}
+            value={cell.ms}
+            onChange={(event) => onChange(steps.map((step, index) => (index === cell.index && step.type === "goto" ? { ...step, ms: Math.max(0, Math.round(Number(event.target.value) || 0)) } : step)))}
           />
         </small>
       </span>
