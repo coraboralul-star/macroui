@@ -353,6 +353,7 @@ export function App() {
                 </span>
                 <FieldSelect
                   ariaLabel="Only when focused"
+                  prefer="up"
                   value={profile.focusExe ?? ""}
                   options={focusOptions}
                   placeholder="Any window"

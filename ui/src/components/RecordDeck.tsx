@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Macro } from "../profile";
 import { applyDelayMode } from "../eventLane";
+import { NumberField } from "./NumberField";
 import { RecordSurface } from "./RecordSurface";
 import { compileRecording, type Recording } from "../recording";
 
@@ -56,6 +57,7 @@ export function RecordDeck({
       resetKey={macro.id}
       steps={macro.steps}
       macros={macros}
+      allowScanWait={macro.playMode !== "onRelease"}
       onSteps={(steps) => {
         setDelayMode("custom");
         onChange({ ...macro, steps });
@@ -84,13 +86,11 @@ export function RecordDeck({
               {delayMode === "fixed" ? (
                 <label className="gear-ms">
                   ms
-                  <input
-                    aria-label="Fixed delay"
-                    type="number"
+                  <NumberField
+                    ariaLabel="Fixed delay"
                     min={0}
                     value={fixedMs}
-                    onChange={(event) => {
-                      const ms = Math.max(0, Math.round(Number(event.target.value) || 0));
+                    onChange={(ms) => {
                       setFixedMs(ms);
                       setDelayMode("fixed");
                       onChange({

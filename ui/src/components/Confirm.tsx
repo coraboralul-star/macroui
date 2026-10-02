@@ -3,11 +3,13 @@ import { createPortal } from "react-dom";
 
 export function Confirm({
   title,
+  note,
   action = "Delete",
   onConfirm,
   onCancel,
 }: {
   title: string;
+  note?: string;
   action?: string;
   onConfirm: () => void;
   onCancel: () => void;
@@ -33,6 +35,7 @@ export function Confirm({
     <div className="confirm">
       <div className="confirm-card">
         <p>{title}</p>
+        {note ? <small className="confirm-note">{note}</small> : null}
         <div className="confirm-row">
           <button type="button" onClick={onCancel}>
             Cancel

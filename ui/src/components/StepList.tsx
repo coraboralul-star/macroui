@@ -3,6 +3,7 @@ import type { KeyAction, Macro, Step } from "../profile";
 import { GOTO_WHERE, KEY_OPTIONS, MOUSE_OPTIONS, SIDE_OPTIONS, blankStep, normalizeGotoWhere } from "../profile";
 import { Chips } from "./Chips";
 import { FieldSelect } from "./FieldSelect";
+import { NumberField } from "./NumberField";
 
 const ACTIONS = [
   { value: "down", label: "Down" },
@@ -16,11 +17,12 @@ const STEP_TYPES: { value: Step["type"]; label: string }[] = [
   { value: "move", label: "Move" },
   { value: "goto", label: "Go to" },
   { value: "wait", label: "Wait" },
+  { value: "scanWait", label: "Scan Wait" },
   { value: "repeat", label: "Repeat" },
   { value: "run", label: "Run" },
 ];
 
-const QUICK_KEYS = ["w", "a", "s", "d", "space", "shift", "ctrl", "f", "q", "e", "1", "2"];
+const QUICK_KEYS = ["w", "a", "s", "d", "space", "LShift", "RShift", "LCtrl", "RCtrl", "f", "q", "e", "1", "2"];
 
 export function StepList({
   steps,
@@ -143,8 +145,8 @@ function StepFields({
   if (step.type === "move") {
     return (
       <>
-        <NumberBox label="X" value={step.x} onChange={(x) => onChange({ ...step, x })} />
-        <NumberBox label="Y" value={step.y} onChange={(y) => onChange({ ...step, y })} />
+        <NumberBox label="X" signed value={step.x} onChange={(x) => onChange({ ...step, x })} />
+        <NumberBox label="Y" signed value={step.y} onChange={(y) => onChange({ ...step, y })} />
       </>
     );
   }
@@ -157,13 +159,13 @@ function StepFields({
           options={GOTO_WHERE}
           onChange={(where) => onChange({ ...step, where: normalizeGotoWhere(where) })}
         />
-        <NumberBox label="X" value={step.x} onChange={(x) => onChange({ ...step, x })} />
-        <NumberBox label="Y" value={step.y} onChange={(y) => onChange({ ...step, y })} />
+        <NumberBox label="X" signed value={step.x} onChange={(x) => onChange({ ...step, x })} />
+        <NumberBox label="Y" signed value={step.y} onChange={(y) => onChange({ ...step, y })} />
         <NumberBox label="ms" value={step.ms ?? 15} min={0} onChange={(ms) => onChange({ ...step, ms })} />
       </>
     );
   }
-  if (step.type === "wait") {
+  if (step.type === "wait" || step.type === "scanWait") {
     return <NumberBox label="ms" value={step.ms} min={1} onChange={(ms) => onChange({ ...step, ms })} />;
   }
   if (step.type === "repeat") {
@@ -209,21 +211,24 @@ function NumberBox({
   label,
   value,
   min,
+  signed,
   onChange,
 }: {
   label: string;
   value: number;
   min?: number;
+  signed?: boolean;
   onChange: (value: number) => void;
 }) {
   return (
     <label className="num">
       <span>{label}</span>
-      <input
-        type="number"
-        value={Number.isFinite(value) ? value : 0}
+      <NumberField
+        ariaLabel={label}
         min={min}
-        onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
+        signed={signed}
+        value={Number.isFinite(value) ? value : 0}
+        onChange={onChange}
       />
     </label>
   );
@@ -234,7 +239,7 @@ function label(step: Step) {
   if (step.type === "mouse") return "Click";
   if (step.type === "move") return "Move";
   if (step.type === "goto") return "Go to";
-  if (step.type === "wait") return "Wait";
+  if (step.type === "wait" || step.type === "scanWait") return "Wait";
   if (step.type === "repeat") return "Repeat";
   return "Run";
 }

@@ -34,19 +34,19 @@ export const MAIN: KeyCell[][] = [
     { label: "Enter", code: "enter", w: 2.25 },
   ],
   [
-    { label: "Shift", code: "shift", w: 2.25 },
+    { label: "Shift", code: "LShift", w: 2.25 },
     ..."zxcvbnm".split("").map((letter) => ({ label: letter.toUpperCase(), code: letter })),
     { label: ",", code: "," }, { label: ".", code: "." }, { label: "/", code: "/" },
-    { label: "Shift", code: "shift", w: 2.75 },
+    { label: "Shift", code: "RShift", w: 2.75 },
   ],
   [
-    { label: "Ctrl", code: "ctrl", w: 1.25 },
+    { label: "Ctrl", code: "LCtrl", w: 1.25 },
     { label: "Win", code: "LWin", w: 1.25 },
-    { label: "Alt", code: "alt", w: 1.25 },
+    { label: "Alt", code: "LAlt", w: 1.25 },
     { label: "Space", code: "space", w: 7.5 },
-    { label: "Alt", code: "alt", w: 1.25 },
+    { label: "Alt", code: "RAlt", w: 1.25 },
     { label: "Win", code: "RWin", w: 1.25 },
-    { label: "Ctrl", code: "ctrl", w: 1.25 },
+    { label: "Ctrl", code: "RCtrl", w: 1.25 },
   ],
 ];
 
@@ -112,11 +112,13 @@ function eachKey(visit: (label: string, code: string) => void) {
 }
 
 export function keyLabel(code: string): string {
+  const name = canonKey(code);
+  if (SIDED.has(name)) return name;
   let found = "";
-  eachKey((label, name) => {
-    if (name === code) found = label;
+  eachKey((label, key) => {
+    if (key === name || key === code) found = label;
   });
-  return capKey(found || code);
+  return capKey(found || name);
 }
 
 function capKey(label: string) {
@@ -190,13 +192,24 @@ function dist(spot: KeySpot, x: number, y: number) {
   return Math.hypot(c.x - x, c.y - y);
 }
 
-export function canonCode(code: string) {
+const SIDED = new Set(["LShift", "RShift", "LCtrl", "RCtrl", "LAlt", "RAlt", "LWin", "RWin"]);
+
+export function canonKey(code: string) {
   const lower = code.toLowerCase();
-  if (lower === "lshift" || lower === "rshift") return "shift";
-  if (lower === "lcontrol" || lower === "rcontrol" || lower === "lctrl" || lower === "rctrl") return "ctrl";
-  if (lower === "lalt" || lower === "ralt") return "alt";
+  if (lower === "shift" || lower === "lshift") return "LShift";
+  if (lower === "rshift") return "RShift";
+  if (lower === "ctrl" || lower === "control" || lower === "lctrl" || lower === "lcontrol") return "LCtrl";
+  if (lower === "rctrl" || lower === "rcontrol") return "RCtrl";
+  if (lower === "alt" || lower === "lalt" || lower === "lmenu") return "LAlt";
+  if (lower === "ralt" || lower === "rmenu") return "RAlt";
+  if (lower === "lwin" || lower === "lmeta") return "LWin";
+  if (lower === "rwin" || lower === "rmeta") return "RWin";
   if (lower === "spacebar") return "space";
   return code;
+}
+
+export function canonCode(code: string) {
+  return canonKey(code);
 }
 
 export function clusterAround(codes: string[]): { hot: KeySpot[]; near: KeySpot[] } {

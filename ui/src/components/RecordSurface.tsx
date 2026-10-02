@@ -14,6 +14,7 @@ export function RecordSurface({
   onCapture,
   onClear,
   onLive,
+  allowScanWait = true,
 }: {
   resetKey: string;
   steps: Step[];
@@ -23,6 +24,7 @@ export function RecordSurface({
   onCapture?: (recording: Recording) => void;
   onClear: () => void;
   onLive?: (events: RecEvent[] | null) => void;
+  allowScanWait?: boolean;
 }) {
   const [live, setLive] = useState<RecEvent[] | null>(null);
   const [saved, setSaved] = useState(steps);
@@ -50,9 +52,9 @@ export function RecordSurface({
       <div className="rec-stage">
         <div className="lane-wrap well" data-chrome={live ? "" : undefined}>
           {live ? (
-            <EventLane steps={shown} macros={macros} empty="" readOnly onChange={() => {}} />
+            <EventLane steps={shown} macros={macros} empty="" readOnly allowScanWait={allowScanWait} onChange={() => {}} />
           ) : (
-            <EventLane steps={steps} macros={macros} empty="" onChange={onSteps} />
+            <EventLane steps={steps} macros={macros} empty="" allowScanWait={allowScanWait} onChange={onSteps} />
           )}
         </div>
         <RecordBar

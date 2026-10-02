@@ -1,3 +1,4 @@
+import { canonKey } from "./keyboard";
 import type { Step } from "./profile";
 
 export type RecEvent = {
@@ -26,12 +27,12 @@ export type Press = {
 
 const CODE: Record<string, string> = {
   Space: "space",
-  ShiftLeft: "shift",
-  ShiftRight: "shift",
-  ControlLeft: "ctrl",
-  ControlRight: "ctrl",
-  AltLeft: "alt",
-  AltRight: "alt",
+  ShiftLeft: "LShift",
+  ShiftRight: "RShift",
+  ControlLeft: "LCtrl",
+  ControlRight: "RCtrl",
+  AltLeft: "LAlt",
+  AltRight: "RAlt",
   Tab: "tab",
   Enter: "enter",
   Backspace: "backspace",
@@ -112,7 +113,7 @@ export function normalizeRecording(value: unknown): Recording | null {
     if (!item || typeof item !== "object") continue;
     const event = item as Partial<RecEvent>;
     const kind = event.kind === "mouse" ? "mouse" : event.kind === "key" ? "key" : null;
-    const button = typeof event.button === "string" ? event.button : "";
+    const button = typeof event.button === "string" ? canonKey(event.button) : "";
     if (!kind || !isEngineKey(button)) continue;
     events.push({
       t: Math.max(0, Math.round(Number(event.t) || 0)),
@@ -228,7 +229,7 @@ export function glance(steps: Step[], limit = 16): string[] {
       } else if (step.type === "mouse") {
         const name = pressLabel(step.button);
         out.push(step.action === "down" ? `hold ${name}` : step.action === "up" ? `up ${name}` : name);
-      } else if (step.type === "wait") out.push(`${step.ms}ms`);
+      } else if (step.type === "wait" || step.type === "scanWait") out.push(`${step.ms}ms`);
       else if (step.type === "move") out.push("move");
       else if (step.type === "goto") out.push("go to");
       else if (step.type === "run") out.push("run");

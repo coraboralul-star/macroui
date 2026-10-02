@@ -1,6 +1,7 @@
 import type { Step } from "./profile";
 import type { RecEvent } from "./recording";
 import { pressLabel } from "./recording";
+import { keyLabel } from "./keyboard";
 
 export type LaneCell =
   | { type: "act"; index: number; part: "down" | "up" | "single"; title: string; subtitle: string }
@@ -10,6 +11,10 @@ export type LaneCell =
   | { type: "goto"; index: number; x: number; y: number; ms: number; where: string }
   | { type: "run"; index: number; macroId: string }
   | { type: "repeat"; index: number; count: number; steps: Step[] };
+
+export function isSleep(step: Step | undefined): step is Extract<Step, { type: "wait" } | { type: "scanWait" }> {
+  return !!step && (step.type === "wait" || step.type === "scanWait");
+}
 
 export function liveSteps(events: RecEvent[], mode: "recorded" | "fixed" | "none", fixedMs: number): Step[] {
   const steps: Step[] = [];
@@ -40,7 +45,7 @@ export function laneCells(steps: Step[]): LaneCell[] {
       cells.push({ type: "delay", index, ms: step.holdMs ?? 20, via: "hold" });
       cells.push({ type: "act", index, part: "up", title: name, subtitle: "Up" });
       index += 1;
-      if (index < steps.length && steps[index].type !== "wait") cells.push({ type: "join", index });
+      if (index < steps.length && !isSleep(steps[index])) cells.push({ type: "join", index });
       continue;
     }
     if (step.type === "key" || step.type === "mouse") {
@@ -53,14 +58,14 @@ export function laneCells(steps: Step[]): LaneCell[] {
         subtitle: step.action === "down" ? "Down" : step.action === "up" ? "Up" : "Press",
       });
       index += 1;
-      if (index < steps.length && steps[index].type === "wait") {
-        const wait = steps[index];
-        if (wait.type === "wait") cells.push({ type: "delay", index, ms: wait.ms, via: "wait" });
+      const wait = steps[index];
+      if (isSleep(wait)) {
+        cells.push({ type: "delay", index, ms: wait.ms, via: "wait" });
         index += 1;
       } else if (index < steps.length) cells.push({ type: "join", index });
       continue;
     }
-    if (step.type === "wait") {
+    if (isSleep(step)) {
       cells.push({ type: "delay", index, ms: step.ms, via: "wait" });
       index += 1;
       continue;
@@ -70,7 +75,7 @@ export function laneCells(steps: Step[]): LaneCell[] {
     else if (step.type === "run") cells.push({ type: "run", index, macroId: step.macroId });
     else if (step.type === "repeat") cells.push({ type: "repeat", index, count: step.count, steps: step.steps });
     index += 1;
-    if (index < steps.length && steps[index].type !== "wait") cells.push({ type: "join", index });
+    if (index < steps.length && !isSleep(steps[index])) cells.push({ type: "join", index });
   }
   if (steps.length === 0) return [{ type: "join", index: 0 }];
   if (cells[0]?.type !== "join" || cells[0].index !== 0) cells.unshift({ type: "join", index: 0 });
@@ -158,7 +163,7 @@ export function setDelay(steps: Step[], index: number, ms: number, via: "wait" |
     if (via === "hold" && (step.type === "key" || step.type === "mouse") && step.action === "tap") {
       return { ...step, holdMs: Math.max(1, ms) };
     }
-    if (via === "wait" && step.type === "wait") return { ...step, ms: Math.max(0, ms) };
+    if (via === "wait" && isSleep(step)) return { ...step, ms: Math.max(0, ms) };
     return step;
   });
 }
@@ -174,7 +179,7 @@ export function replaceAct(steps: Step[], index: number, button: string, input: 
 export function applyDelayMode(steps: Step[], mode: "fixed" | "none", ms: number): Step[] {
   if (mode === "none") {
     return steps.flatMap((step): Step[] => {
-      if (step.type === "wait") return [];
+      if (isSleep(step)) return [];
       if (step.type === "repeat") return [{ ...step, steps: applyDelayMode(step.steps, mode, ms) }];
       if ((step.type === "key" || step.type === "mouse") && step.action === "tap") {
         return step.type === "key"
@@ -185,7 +190,7 @@ export function applyDelayMode(steps: Step[], mode: "fixed" | "none", ms: number
     });
   }
   return steps.map((step) => {
-    if (step.type === "wait") return { ...step, ms };
+    if (isSleep(step)) return { ...step, ms };
     if (step.type === "repeat") return { ...step, steps: applyDelayMode(step.steps, mode, ms) };
     if ((step.type === "key" || step.type === "mouse") && step.action === "tap") return { ...step, holdMs: ms };
     return step;
@@ -244,9 +249,9 @@ function partner(steps: Step[], index: number): number | null {
 }
 
 function label(button: string) {
-  const name = pressLabel(button);
-  if (name.length === 1) return name.toUpperCase();
-  return name.charAt(0).toUpperCase() + name.slice(1);
+  if (button === "LButton" || button === "RButton" || button === "MButton" || button === "XButton1" || button === "XButton2")
+    return pressLabel(button);
+  return keyLabel(button);
 }
 
 function samePress(a: Step, b: Step) {

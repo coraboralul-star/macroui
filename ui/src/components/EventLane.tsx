@@ -1,9 +1,11 @@
 import { useEffect, useState, type DragEvent as ReactDragEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
+import { LIBRARY, LIBRARY_GROUPS, LIBRARY_MIME, libraryItem, librarySteps, matchInput } from "../library";
 import type { Macro, Step } from "../profile";
 import { Capture, type Captured } from "./Capture";
 import { FieldSelect } from "./FieldSelect";
-import { canPlace, deleteAct, dropHold, expandTaps, insertDelay, insertSteps, laneCells, moveStep, pressPair, replaceAct, setDelay, type LaneCell } from "../eventLane";
+import { NumberField } from "./NumberField";
+import { canPlace, deleteAct, dropHold, expandTaps, insertSteps, laneCells, moveStep, replaceAct, setDelay, type LaneCell } from "../eventLane";
 
 type MenuLine = { kind: "label"; text: string } | { kind: "item"; label: string; run: () => void };
 
@@ -13,20 +15,23 @@ export function EventLane({
   onChange,
   empty = "",
   readOnly = false,
+  allowScanWait = true,
 }: {
   steps: Step[];
   macros: Macro[];
   onChange: (steps: Step[]) => void;
   empty?: string;
   readOnly?: boolean;
+  allowScanWait?: boolean;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuLine[] } | null>(null);
   const [editDelay, setEditDelay] = useState<string | null>(null);
   const [pending, setPending] = useState<number | null>(null);
   const [replace, setReplace] = useState<number | null>(null);
-  const [insertAt, setInsertAt] = useState<number | null>(null);
+  const [insertAt, setInsertAt] = useState<{ index: number; id: string } | null>(null);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [target, setTarget] = useState<number | null>(null);
+  const [libAt, setLibAt] = useState<number | null>(null);
   const cells = laneCells(steps);
 
   useEffect(() => {
@@ -35,7 +40,15 @@ export function EventLane({
     if (next !== steps) onChange(next);
   }, [steps, readOnly]);
 
+  const fromLib = (event: ReactDragEvent) => !readOnly && event.dataTransfer.types.includes(LIBRARY_MIME);
+
   const allowDrop = (slot: number, order: number) => (event: ReactDragEvent) => {
+    if (fromLib(event)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      setLibAt(slot);
+      return;
+    }
     if (readOnly || dragFrom == null || !canPlace(steps, dragFrom, slot)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
@@ -43,6 +56,16 @@ export function EventLane({
   };
   const dropAt = (slot: number) => (event: ReactDragEvent) => {
     event.preventDefault();
+    // A nested lane sits inside an outer one, so a drop must not reach both.
+    event.stopPropagation();
+    setLibAt(null);
+    const lib = event.dataTransfer.getData(LIBRARY_MIME);
+    if (lib) {
+      const extra = librarySteps(lib);
+      if (extra.some((step) => step.type === "scanWait") && !allowScanWait) return;
+      if (extra.length) onChange(insertSteps(steps, slot, extra));
+      return;
+    }
     const raw = event.dataTransfer.getData("text/plain");
     const from = dragFrom ?? (raw === "" ? Number.NaN : Number(raw));
     setDragFrom(null);
@@ -63,27 +86,36 @@ export function EventLane({
     setMenu({ x: event.clientX, y: event.clientY, items });
   };
 
-  const insertMenu = (index: number): MenuLine[] => [
-    { kind: "label", text: "Insert" },
-    { kind: "item", label: "Key", run: () => setInsertAt(index) },
-    { kind: "item", label: "Mouse", run: () => setInsertAt(index) },
-    { kind: "label", text: "Time" },
-    {
-      kind: "item",
-      label: "Wait",
-      run: () => {
-        onChange(insertDelay(steps, index));
-        setPending(index);
-      },
-    },
-    { kind: "label", text: "Extra" },
-    { kind: "item", label: "Look", run: () => onChange(insertSteps(steps, index, [{ type: "move", x: 0, y: 0 }])) },
-    { kind: "item", label: "Go to", run: () => onChange(insertSteps(steps, index, [{ type: "goto", x: 0, y: 0, ms: 15, where: "screen" }])) },
-    { kind: "item", label: "Jump", run: () => onChange(insertSteps(steps, index, pressPair("key", "Space"))) },
-    ...(macros.length
-      ? [{ kind: "item" as const, label: "Chain", run: () => onChange(insertSteps(steps, index, [{ type: "run", macroId: macros[0]?.id ?? "" }])) }]
-      : []),
-  ];
+  const insertMenu = (index: number): MenuLine[] => {
+    const lines: MenuLine[] = [];
+    for (const group of LIBRARY_GROUPS) {
+      const items = LIBRARY.filter(
+        (item) =>
+          item.group === group &&
+          item.kind === "step" &&
+          (item.id !== "runMacro" || macros.length > 0) &&
+          (item.id !== "scanWait" || allowScanWait),
+      );
+      if (!items.length) continue;
+      lines.push({ kind: "label", text: group });
+      for (const item of items) {
+        if (item.kind !== "step") continue;
+        lines.push({
+          kind: "item",
+          label: item.label,
+          run: () => {
+            if (item.pick) {
+              setInsertAt({ index, id: item.id });
+              return;
+            }
+            onChange(insertSteps(steps, index, item.create()));
+            if (item.id === "wait" || item.id === "scanWait") setPending(index);
+          },
+        });
+      }
+    }
+    return lines;
+  };
 
   const editKey = (index: number) => setReplace(index);
 
@@ -96,6 +128,13 @@ export function EventLane({
         if ((event.target as HTMLElement).closest(".ev, .ev-plus, .ev-delay, .ev-repeat, input, select, button")) return;
         openMenu(event, insertMenu(steps.length));
       }}
+      onDragOver={(event) => {
+        if (!fromLib(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={() => setLibAt(null)}
+      onDrop={dropAt(steps.length)}
     >
       {cells.length === 0 && empty ? <p className="deck-empty">{empty}</p> : null}
       {cells.map((cell, order) => (
@@ -109,7 +148,7 @@ export function EventLane({
             editDelay === `${cell.type}-${order}` ||
             (pending != null && cell.type === "delay" && cell.via === "wait" && cell.index === pending)
           }
-          targeted={target === order}
+          targeted={target === order || (cell.type === "join" && libAt === cell.index)}
           onEditDelay={() => setEditDelay(`${cell.type}-${order}`)}
           onCloseDelay={() => {
             setEditDelay(null);
@@ -127,6 +166,7 @@ export function EventLane({
           }}
           onAllowDrop={(slot) => allowDrop(slot, order)}
           onDropAt={dropAt}
+          allowScanWait={allowScanWait}
         />
       ))}
       {menu
@@ -154,13 +194,13 @@ export function EventLane({
             document.body,
           )
         : null}
-      {insertAt != null ? (
+      {insertAt ? (
         <Capture
-          title="Add key"
+          title={libraryItem(insertAt.id)?.label ?? "Add key"}
           onCancel={() => setInsertAt(null)}
           onPick={(captured: Captured) => {
             const kind = captured.kind === "key" ? "key" : "mouse";
-            onChange(insertSteps(steps, insertAt, pressPair(kind, captured.button)));
+            onChange(insertSteps(steps, insertAt.index, librarySteps(matchInput(insertAt.id, kind), captured.button)));
             setInsertAt(null);
           }}
         />
@@ -198,6 +238,7 @@ function CellView({
   onDragEnd,
   onAllowDrop,
   onDropAt,
+  allowScanWait,
 }: {
   cell: LaneCell;
   steps: Step[];
@@ -216,6 +257,7 @@ function CellView({
   onDragEnd: () => void;
   onAllowDrop: (slot: number) => (event: ReactDragEvent) => void;
   onDropAt: (slot: number) => (event: ReactDragEvent) => void;
+  allowScanWait: boolean;
 }) {
   if (readOnly && cell.type === "join") return null;
   if (readOnly && cell.type === "delay") return <span className="ev-delay">{cell.ms} ms</span>;
@@ -244,20 +286,14 @@ function CellView({
   }
   if (cell.type === "delay") {
     return editing ? (
-      <input
+      <NumberField
         className="ev-delay"
-        aria-label="Delay ms"
+        ariaLabel="Delay ms"
         autoFocus
-        type="number"
         min={0}
-        defaultValue={cell.ms}
-        onBlur={(event) => {
-          onChange(setDelay(steps, cell.index, Math.max(0, Math.round(Number(event.target.value) || 0)), cell.via));
-          onCloseDelay();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-        }}
+        value={cell.ms}
+        onChange={(ms) => onChange(setDelay(steps, cell.index, ms, cell.via))}
+        onBlur={onCloseDelay}
       />
     ) : (
       <button
@@ -298,15 +334,11 @@ function CellView({
           {readOnly ? (
             <em>{cell.count === 0 ? "until stop" : `${cell.count}×`}</em>
           ) : (
-            <input
-              aria-label="Repeat count"
-              type="number"
+            <NumberField
+              ariaLabel="Repeat count"
               min={0}
               value={cell.count}
-              onChange={(event) => {
-                const count = Math.max(0, Math.round(Number(event.target.value) || 0));
-                onChange(steps.map((step, index) => (index === cell.index && step.type === "repeat" ? { ...step, count } : step)));
-              }}
+              onChange={(count) => onChange(steps.map((step, index) => (index === cell.index && step.type === "repeat" ? { ...step, count } : step)))}
             />
           )}
         </div>
@@ -315,6 +347,7 @@ function CellView({
           macros={macros}
           empty=""
           readOnly={readOnly}
+          allowScanWait={allowScanWait}
           onChange={(inner) => onChange(steps.map((step, index) => (index === cell.index && step.type === "repeat" ? { ...step, steps: inner } : step)))}
         />
       </div>
@@ -337,17 +370,17 @@ function CellView({
       >
         <b>Move</b>
         <small>
-          <input
-            aria-label="Move x"
-            type="number"
+          <NumberField
+            ariaLabel="Move x"
+            signed
             value={cell.x}
-            onChange={(event) => onChange(steps.map((step, index) => (index === cell.index && step.type === "move" ? { ...step, x: Number(event.target.value) || 0 } : step)))}
+            onChange={(x) => onChange(steps.map((step, index) => (index === cell.index && step.type === "move" ? { ...step, x } : step)))}
           />
-          <input
-            aria-label="Move y"
-            type="number"
+          <NumberField
+            ariaLabel="Move y"
+            signed
             value={cell.y}
-            onChange={(event) => onChange(steps.map((step, index) => (index === cell.index && step.type === "move" ? { ...step, y: Number(event.target.value) || 0 } : step)))}
+            onChange={(y) => onChange(steps.map((step, index) => (index === cell.index && step.type === "move" ? { ...step, y } : step)))}
           />
         </small>
       </span>
@@ -379,24 +412,23 @@ function CellView({
             <option value="window">Window</option>
             <option value="client">Client</option>
           </select>
-          <input
-            aria-label="Go to x"
-            type="number"
+          <NumberField
+            ariaLabel="Go to x"
+            signed
             value={cell.x}
-            onChange={(event) => onChange(steps.map((step, index) => (index === cell.index && step.type === "goto" ? { ...step, x: Number(event.target.value) || 0 } : step)))}
+            onChange={(x) => onChange(steps.map((step, index) => (index === cell.index && step.type === "goto" ? { ...step, x } : step)))}
           />
-          <input
-            aria-label="Go to y"
-            type="number"
+          <NumberField
+            ariaLabel="Go to y"
+            signed
             value={cell.y}
-            onChange={(event) => onChange(steps.map((step, index) => (index === cell.index && step.type === "goto" ? { ...step, y: Number(event.target.value) || 0 } : step)))}
+            onChange={(y) => onChange(steps.map((step, index) => (index === cell.index && step.type === "goto" ? { ...step, y } : step)))}
           />
-          <input
-            aria-label="Go to ms"
-            type="number"
+          <NumberField
+            ariaLabel="Go to ms"
             min={0}
             value={cell.ms}
-            onChange={(event) => onChange(steps.map((step, index) => (index === cell.index && step.type === "goto" ? { ...step, ms: Math.max(0, Math.round(Number(event.target.value) || 0)) } : step)))}
+            onChange={(ms) => onChange(steps.map((step, index) => (index === cell.index && step.type === "goto" ? { ...step, ms } : step)))}
           />
         </small>
       </span>

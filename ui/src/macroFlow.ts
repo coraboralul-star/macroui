@@ -17,6 +17,21 @@ export function playModeLabel(mode: PlayMode): string {
   return "Once";
 }
 
+/** Editor nearest-up / play-full. Not the keyboard Playback "On release" mode. */
+export function usesReleaseStop(macro: Macro): boolean {
+  if (macro.playMode === "whileHeld" || macro.playMode === "toggle") return true;
+  return shownBlocks(macro).some((block) => block.type === "whileHeld" || block.type === "tapHold");
+}
+
+/** Basic editor only shows On release for a single-block hold macro. */
+export function showBriefRelease(macro: Macro): boolean {
+  return usesReleaseStop(macro) && shownBlocks(macro).length === 1;
+}
+
+export function blockCanReleaseStop(block: Block): boolean {
+  return block.type === "whileHeld" || block.type === "steps" || block.type === "repeat";
+}
+
 export function triggerInspect(trigger: string, mode: PlayMode, coerced: boolean): string {
   if (!trigger) return "Bind a key or mouse button from Remap or Mouse.";
   if (mode === "whileHeld") return `${trigger} must stay down. Let go and this macro stops. Bind it from Remap or Mouse.`;
@@ -40,7 +55,6 @@ export function place(item: Macro): string {
 }
 
 export function heldName(button: string): string {
-  if (button === "LShift" || button === "RShift" || button === "shift") return "Shift";
   if (button === "CapsLock") return "Caps";
   if (button === "LButton" || button === "RButton" || button === "MButton" || button === "XButton1" || button === "XButton2")
     return pressLabel(button);
@@ -64,7 +78,7 @@ export function stepPhrase(step: Step): string {
     if (step.action === "up") return `${name} up`;
     return `click ${name}`;
   }
-  if (step.type === "wait") return `wait ${step.ms} ms`;
+  if (step.type === "wait" || step.type === "scanWait") return `wait ${step.ms} ms`;
   if (step.type === "move") return `move ${step.x}, ${step.y}`;
   if (step.type === "goto") return `go to ${step.x}, ${step.y} (${step.where || "screen"})`;
   if (step.type === "repeat") return `repeat ${step.count}`;
@@ -83,46 +97,19 @@ export function repressLine(block: Extract<Block, { type: "tapHold" }>): string 
   return `Repress ${key} ${block.gapMs}ms after ${when} ${watchVerb(tracked.length)} pressed`;
 }
 
-function pushBeats(steps: Step[], out: string[]) {
-  for (const step of steps) {
-    if (step.type === "key" || step.type === "mouse") {
-      const name = step.type === "key" ? keyLabel(step.key) : pressLabel(step.button);
-      if (step.action === "down") out.push(`${name} down`);
-      else if (step.action === "up") out.push(`${name} up`);
-      else {
-        out.push(name);
-        if (step.holdMs) out.push(`${step.holdMs} ms`);
-      }
-    } else if (step.type === "wait") out.push(`${step.ms} ms`);
-    else if (step.type === "move") out.push(`move ${step.x}, ${step.y}`);
-    else if (step.type === "goto") out.push(`go to ${step.x}, ${step.y} (${step.where || "screen"})`);
-    else if (step.type === "repeat") {
-      out.push(step.count === 0 ? "until it stops" : `${step.count} times`);
-      pushBeats(step.steps, out);
-    } else if (step.type === "run") out.push("run a macro");
-  }
-}
-
-function clipBeats(beats: string[], limit = 4): string {
-  if (!beats.length) return "";
-  if (beats.length <= limit) return beats.join(", ");
-  return `${beats.slice(0, limit).join(", ")} ...`;
-}
-
+/** One short line under a node title. The title already carries the rule. */
 export function nodeHint(block: Block): string {
-  if (block.type === "wait") return `${block.ms} ms`;
+  if (block.type === "wait") return "";
   if (block.type === "tapHold") {
-    const key = heldName(block.key) || "Key";
     const tracked = block.watch.map((item) => heldName(item)).filter(Boolean);
-    return clipBeats(tracked.length ? [key, "after", ...tracked] : [key]);
+    if (!tracked.length) return "No tracked keys";
+    return tracked.length > 3 ? `${tracked.slice(0, 3).join(" ")} +${tracked.length - 3}` : tracked.join(" ");
   }
-  if (block.type === "repeat" && !block.steps.length) return block.count === 0 ? "Until it stops" : `${block.count} times`;
-  const beats: string[] = [];
-  if (block.type === "ifShort") beats.push(`${block.minCycles} times`);
-  if (block.type === "repeat") beats.push(block.count === 0 ? "Until it stops" : `${block.count} times`);
-  if ("steps" in block) pushBeats(block.steps, beats);
-  if (block.type === "then" && block.forMs) beats.push(`${block.forMs} ms`);
-  return clipBeats(beats);
+  const count = block.steps.length;
+  const body = count ? `${count} step${count === 1 ? "" : "s"}` : "No steps";
+  if (block.type === "ifShort") return `${body} · ${block.minCycles}×`;
+  if (block.type === "then" && block.forMs) return `${body} · ${block.forMs} ms`;
+  return body;
 }
 
 export function blockMeta(block: Block): string {
@@ -142,29 +129,6 @@ export function blockHint(block: Block): string {
   if (block.type === "then") return block.forMs ? `runs ${block.forMs} ms after release` : "runs after release";
   if (block.type === "repeat") return block.count === 0 ? "until it stops" : `${block.count}×`;
   return phrase(block.steps);
-}
-
-export function flowText(block: Block, trigger: string): string {
-  if (block.type === "wait") return `Wait ${block.ms} ms`;
-  if (block.type === "tapHold") return repressLine(block);
-  const body = phrase(block.steps);
-  if (block.type === "whileHeld") {
-    const lead = trigger ? `While ${trigger} is held` : "While the trigger is held";
-    return body ? `${lead}: ${body}` : lead;
-  }
-  if (block.type === "ifShort") {
-    const lead = `If released before ${block.underMs} ms, keep going ${block.minCycles}×`;
-    return body ? `${lead}: ${body}` : lead;
-  }
-  if (block.type === "then") {
-    const lead = block.forMs > 0 ? `After release, for ${block.forMs} ms` : "After release";
-    return body ? `${lead}: ${body}` : lead;
-  }
-  if (block.type === "repeat") {
-    const lead = block.count === 0 ? "Repeat until it stops" : `Repeat ${block.count} times`;
-    return body ? `${lead}: ${body}` : lead;
-  }
-  return body ? `Do once: ${body}` : "Do once";
 }
 
 export function linkLabel(from: Block | null, to: Block): string {
@@ -305,8 +269,8 @@ export function setupNote(block: Block, prev: Block | null, next: Block | null, 
   if (block.type === "ifShort") return "Put this right after a hold loop to split early-tap vs held-too-long.";
   if (block.type === "then") return `This runs after ${key} is already up. Hold length does not matter here.`;
   if (block.type === "repeat") return block.count === 0 ? "This repeats until it stops. It is not tied to holding the bind." : `This repeats ${block.count} times on its own count.`;
-  if (block.type === "wait") return `This pause delays the next block by ${block.ms} ms.`;
   if (block.type === "tapHold") return repressLine(block);
+  if (block.type === "wait") return `This pause delays the next block by ${block.ms} ms.`;
   return "This block runs once, then hands off. Record keys in Edit.";
 }
 

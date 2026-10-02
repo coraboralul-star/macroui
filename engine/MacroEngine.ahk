@@ -66,6 +66,13 @@ AsNum(v, def) {
     return def
 }
 
+AsBool(v) {
+    if (v = true || v = 1)
+        return true
+    s := StrLower(Trim(String(v)))
+    return (s = "true" || s = "1")
+}
+
 SafeKey(name) {
     name := String(name)
     if (name = "|")
@@ -120,12 +127,21 @@ SendMouseButton(key, dir) {
     DllCall("SendInput", "UInt", 1, "Ptr", inp, "Int", size)
 }
 
+SendName(key) {
+    if (key = "LCtrl")
+        return "LControl"
+    if (key = "RCtrl")
+        return "RControl"
+    return key
+}
+
 ; Software: $* swallows the trigger so the game only sees SendInput.
 ; Board: ~$* lets the Pico's keys through. The low-level hook still eats the
 ; real keyboard trigger, otherwise a Pico "b" is swallowed by the B macro.
 ; When a focus window is set and that window is not active, ~$* so typing works.
 HookSpec(key) {
-    prefix := (Engine.PassBoard() || !Engine.SwallowTriggers()) ? "~$*" : "$*"
+    key := SendName(key)
+    prefix := (Engine.PassBoard() || !Engine.SwallowTriggers() || Engine.PassKey(key)) ? "~$*" : "$*"
     if (key = "``")
         return prefix "``"
     return prefix key
@@ -151,8 +167,18 @@ TriggerHook(name) {
         raw := SubStr(raw, 2)
     if (raw = "")
         return
+    raw := NormKey(raw)
+    if (raw = "")
+        return
     ; The mouse hook owns side buttons. The hotkey also fires for buttons we send back out.
     if (IsMouseButton(raw) && Engine.hMouseHook)
+        return
+    ; SendLevel can fire this after our own Send. That must not start another macro.
+    if Engine.Echoing(raw, up)
+        return
+    ; The LL hook already recorded the real finger. Updating again here lets a
+    ; late send hotkey overwrite a real release and leave the trigger stuck.
+    if (Engine.rawOk && !IsMouseButton(raw))
         return
     Engine.NotePhysical(raw, !up)
 }
@@ -190,12 +216,14 @@ IsMouseButton(key) {
 
 Alias(name) {
     static table := Map(
-        "Space", "space", "Tab", "tab", "Enter", "enter", "Escape", "escape", "Backspace", "backspace",
-        "Up", "up", "Down", "down", "Left", "left", "Right", "right",
-        "Ins", "Insert", "Del", "Delete",
-        "LShift", "shift", "RShift", "shift", "Shift", "shift",
-        "LControl", "ctrl", "RControl", "ctrl", "Control", "ctrl",
-        "LAlt", "alt", "RAlt", "alt", "Alt", "alt",
+        "space", "space", "tab", "tab", "enter", "enter", "escape", "escape", "backspace", "backspace",
+        "up", "up", "down", "down", "left", "left", "right", "right",
+        "ins", "Insert", "del", "Delete",
+        "shift", "LShift", "lshift", "LShift", "rshift", "RShift",
+        "ctrl", "LCtrl", "control", "LCtrl", "lctrl", "LCtrl", "lcontrol", "LCtrl",
+        "rctrl", "RCtrl", "rcontrol", "RCtrl",
+        "alt", "LAlt", "lalt", "LAlt", "ralt", "RAlt",
+        "lwin", "LWin", "rwin", "RWin",
         "|", "\"
     )
     name := String(name)
@@ -203,11 +231,44 @@ Alias(name) {
         return ""
     if table.Has(name)
         return table[name]
+    low := StrLower(name)
+    if table.Has(low)
+        return table[low]
     if RegExMatch(name, "i)^F(\d+)$", &hit)
         return "f" hit[1]
     if (StrLen(name) = 1)
         return StrLower(name)
     return name
+}
+
+; One name everywhere. Old "shift" files become LShift. Left and right stay distinct.
+NormKey(name) {
+    key := SafeKey(Alias(String(name)))
+    if (key = "")
+        key := SafeKey(String(name))
+    return key
+}
+
+; LL hook often reports the generic VK. Scan + extended bit pick left vs right.
+SideKey(vk, scan, flags) {
+    ext := flags & 0x01
+    if (vk = 0xA0 || (vk = 0x10 && scan != 0x36))
+        return "LShift"
+    if (vk = 0xA1 || (vk = 0x10 && scan = 0x36))
+        return "RShift"
+    if (vk = 0xA2 || (vk = 0x11 && !ext))
+        return "LCtrl"
+    if (vk = 0xA3 || (vk = 0x11 && ext))
+        return "RCtrl"
+    if (vk = 0xA4 || (vk = 0x12 && !ext))
+        return "LAlt"
+    if (vk = 0xA5 || (vk = 0x12 && ext))
+        return "RAlt"
+    if (vk = 0x5B)
+        return "LWin"
+    if (vk = 0x5C)
+        return "RWin"
+    return ""
 }
 
 CompileBlocks(blocks) {
@@ -223,26 +284,73 @@ CompileBlocks(blocks) {
             mute := Field(block, "mute", [])
             if !(mute is Array)
                 mute := []
-            steps.Push(Map("type", "holdLoop", "steps", child, "mute", mute))
+            steps.Push(Map("type", "holdLoop", "steps", child, "mute", mute, "releaseStop", BlockReleaseStop(block)))
         }
         else if (kind = "ifShort")
             steps.Push(Map("type", "ifShort", "underMs", AsNum(Field(block, "underMs", 150), 150), "minCycles", AsNum(Field(block, "minCycles", 3), 3), "steps", child))
         else if (kind = "then")
             steps.Push(Map("type", "burst", "forMs", AsNum(Field(block, "forMs", 0), 0), "steps", child))
         else if (kind = "repeat")
-            steps.Push(Map("type", "repeat", "count", AsNum(Field(block, "count", 1), 1), "steps", child))
+            steps.Push(Map("type", "repeat", "count", AsNum(Field(block, "count", 1), 1), "steps", child, "releaseStop", BlockReleaseStop(block)))
         else if (kind = "wait")
             steps.Push(Map("type", "wait", "ms", AsNum(Field(block, "ms", 0), 0)))
         else if (kind = "steps")
-            steps.Push(Map("type", "repeat", "count", 1, "steps", child))
+            steps.Push(Map("type", "repeat", "count", 1, "steps", child, "releaseStop", BlockReleaseStop(block)))
         else if (kind = "tapHold") {
             watch := Field(block, "watch", [])
             if !(watch is Array)
                 watch := []
-            steps.Push(Map("type", "edgeHold", "key", SafeKey(Field(block, "key", "z")), "watch", watch, "armMs", AsNum(Field(block, "armMs", 5), 5), "gapMs", AsNum(Field(block, "gapMs", 80), 80)))
+            steps.Push(Map("type", "edgeHold", "key", NormKey(Field(block, "key", "z")), "watch", watch, "armMs", AsNum(Field(block, "armMs", 5), 5), "gapMs", AsNum(Field(block, "gapMs", 80), 80), "ignore", NormalizeIgnore(Field(block, "ignore", "off")), "ignoreMs", AsNum(Field(block, "ignoreMs", 0), 0), "pauseWatch", NormalizePause(Field(block, "pauseWatch", "off"))))
+        }
+        else if (kind = "pressHold") {
+            if (child is Array) {
+                for s in child
+                    if (s is Map)
+                        steps.Push(s)
+            }
+            key := NormKey(Field(block, "key", ""))
+            if (key != "" && (!(child is Array) || child.Length = 0)) {
+                steps.Push(Map("type", "key", "action", "down", "key", key))
+                steps.Push(Map("type", "wait", "ms", 18))
+                steps.Push(Map("type", "key", "action", "up", "key", key))
+            }
+            steps.Push(Map("type", "scanWait", "ms", AsNum(Field(block, "holdMs", 200), 200)))
         }
     }
     return steps
+}
+
+HasHoldLoop(steps) {
+    if !(steps is Array)
+        return false
+    for step in steps {
+        if (step is Map && String(Field(step, "type", "")) = "holdLoop")
+            return true
+    }
+    return false
+}
+
+NormalizeIgnore(value) {
+    mode := String(value)
+    if (mode = "macro" || mode = "both")
+        return mode
+    return "off"
+}
+
+NormalizePause(value) {
+    if (value = true || value = 1)
+        return "off"
+    s := StrLower(Trim(String(value)))
+    if (s = "block")
+        return "block"
+    return "off"
+}
+
+BlockReleaseStop(block) {
+    s := String(Field(block, "releaseStop", ""))
+    if (s = "finish" || s = "nextUp")
+        return s
+    return ""
 }
 
 class Runner {
@@ -258,6 +366,7 @@ class Runner {
         this.echoDown := Map()
         this.stack := []
         this.waitUntil := 0
+        this.scanWait := false
         this.done := false
         this.moveX := 0
         this.moveY := 0
@@ -265,12 +374,17 @@ class Runner {
         this.gotoX := 0
         this.gotoY := 0
         this.didGoto := false
+        this.releaseStop := String(Field(macro, "releaseStop", "nextUp"))
+        if (this.releaseStop != "finish")
+            this.releaseStop := "nextUp"
+        this.stopping := false
+        this.sawUp := false
         mode := modeOverride != "" ? String(modeOverride) : String(Field(macro, "playMode", "once"))
         this.mode := mode
         this.trigger := ""
         trig := Field(macro, "trigger", Map())
         if (trig is Map)
-            this.trigger := SafeKey(Field(trig, "button", ""))
+            this.trigger := NormKey(Field(trig, "button", ""))
         this.cycles := 0
         this.heldMs := 0
         this.startedAt := -1
@@ -280,14 +394,44 @@ class Runner {
         else if (mode = "whileHeld" || mode = "toggle")
             repeats := 0
         blocks := Field(macro, "blocks", [])
-        if (Field(macro, "advanced", false) && (blocks is Array) && blocks.Length > 0)
-            this.stack.Push({steps: CompileBlocks(blocks), index: 1, repeatsLeft: 1})
+        if (Field(macro, "advanced", false) && (blocks is Array) && blocks.Length > 0) {
+            compiled := CompileBlocks(blocks)
+            ; Hold loops loop themselves. Everything else follows playback:
+            ; play once must not restart the whole graph.
+            if HasHoldLoop(compiled)
+                topRepeats := 1
+            else
+                topRepeats := repeats
+            this.stack.Push({steps: compiled, index: 1, repeatsLeft: topRepeats})
+        }
         else {
             steps := Field(macro, "steps", [])
             if !(steps is Array)
                 steps := []
             this.stack.Push({steps: steps, index: 1, repeatsLeft: repeats})
         }
+    }
+
+    AskStop() {
+        if this.done
+            return
+        this.stopping := true
+        if (this.StopMode() = "nextUp" && this.sawUp)
+            this.MarkDone()
+    }
+
+    StopMode() {
+        i := this.stack.Length
+        while (i >= 1) {
+            frame := this.stack[i]
+            i--
+            if !(frame is Object) || !frame.HasProp("releaseStop")
+                continue
+            mode := String(frame.releaseStop)
+            if (mode = "finish" || mode = "nextUp")
+                return mode
+        }
+        return this.releaseStop
     }
 
     MarkDone() {
@@ -299,8 +443,10 @@ class Runner {
             for frame in this.stack
                 frames.Push(frame)
         }
-        for frame in frames
+        for frame in frames {
             this.ReleaseFrameMute(frame)
+            this.ReleaseFramePause(frame)
+        }
         this.holds := Map()
         this.pulses := Map()
         this.echoDown := Map()
@@ -324,6 +470,23 @@ class Runner {
         Engine.UnmuteIds(frame.mute)
     }
 
+    ArmPause(frame) {
+        ids := frame.HasProp("pauseOnce") ? frame.pauseOnce : []
+        if !(ids is Array) || (ids.Length = 0)
+            return
+        frame.pauseOn := true
+        Engine.ArmOnceLock(ids)
+    }
+
+    ReleaseFramePause(frame) {
+        if !(frame is Object)
+            return
+        if !(frame.HasProp("pauseOn") && frame.pauseOn)
+            return
+        frame.pauseOn := false
+        Engine.ReleaseOnceLock(frame.pauseOnce)
+    }
+
     Advance(now) {
         this.moveX := 0
         this.moveY := 0
@@ -334,11 +497,22 @@ class Runner {
         for k, releaseAt in this.pulses.Clone()
             if (releaseAt <= now && this.pulses.Has(k))
                 this.pulses.Delete(k)
-        if (this.waitUntil != 0 && now < this.waitUntil)
+        if (this.waitUntil != 0 && now < this.waitUntil) {
+            if this.HoldShouldStop() {
+                this.MarkDone()
+                return
+            }
             return
+        }
         this.waitUntil := 0
+        this.scanWait := false
+        if (this.stopping && this.StopMode() = "nextUp" && this.sawUp) {
+            this.MarkDone()
+            return
+        }
         if (this.startedAt < 0)
             this.startedAt := now
+        this.heldMs := now - this.startedAt
         loop 64 {
             if (this.done || this.stack.Length = 0) {
                 this.MarkDone()
@@ -356,6 +530,13 @@ class Runner {
                 if (frame.HasProp("holdLoop") && frame.holdLoop) {
                     this.cycles++
                     this.heldMs := now - this.startedAt
+                    if this.stopping {
+                        this.ReleaseFrameMute(frame)
+                        if this.done
+                            return
+                        this.stack.Pop()
+                        continue
+                    }
                     if (this.trigger != "" && Engine.KeyDown(this.trigger)) {
                         if (steps.Length = 0) {
                             this.waitUntil := now + 1
@@ -379,6 +560,10 @@ class Runner {
                     continue
                 }
                 if (frame.repeatsLeft = 0) {
+                    if this.stopping {
+                        this.MarkDone()
+                        return
+                    }
                     frame.index := 1
                     continue
                 }
@@ -392,7 +577,12 @@ class Runner {
             }
             step := steps[frame.index]
             frame.index++
-            if (this.Exec(step, now) = "wait")
+            result := this.Exec(step, now)
+            if (result = "again") {
+                frame.index--
+                return
+            }
+            if (result = "wait")
                 return
         }
         if (this.waitUntil = 0)
@@ -403,19 +593,29 @@ class Runner {
         if !(step is Map)
             return ""
         kind := String(Field(step, "type", ""))
-        if (kind = "wait") {
+        if (kind = "wait" || kind = "scanWait") {
+            if (kind = "scanWait") {
+                if (this.trigger != "" && !Engine.FingerDown(this.trigger)) {
+                    this.MarkDone()
+                    return "wait"
+                }
+                this.scanWait := true
+            } else
+                this.scanWait := false
             ms := AsNum(Field(step, "ms", 0), 0) / this.speed
             this.waitUntil := now + Max(1, Round(ms))
             return "wait"
         }
         if (kind = "key" || kind = "mouse") {
-            key := SafeKey(kind = "key" ? Field(step, "key", "") : Field(step, "button", ""))
+            key := NormKey(kind = "key" ? Field(step, "key", "") : Field(step, "button", ""))
             if (key = "")
                 return ""
             action := String(Field(step, "action", "tap"))
             if (action = "down") {
                 this.holds[key] := true
                 this.pressedNow[key] := true
+                this.sawUp := false
+                Engine.lastSent[key] := now
                 if this.pulses.Has(key)
                     this.pulses.Delete(key)
             } else if (action = "up") {
@@ -426,15 +626,21 @@ class Runner {
                     this.pulses.Delete(key)
                 if this.pressedNow.Has(key)
                     this.pressedNow.Delete(key)
+                this.sawUp := true
                 ; A down and up in the same tick would never be sent. Hold it for one tick.
                 if just {
                     this.pulses[key] := now + 1
                     this.waitUntil := now + 1
                     return "wait"
                 }
+                if (this.stopping && this.StopMode() = "nextUp") {
+                    this.MarkDone()
+                    return "wait"
+                }
             } else {
                 hold := AsNum(Field(step, "holdMs", 1), 1) / this.speed
                 this.pulses[key] := now + Max(1, Round(hold))
+                Engine.lastSent[key] := now
             }
             return ""
         }
@@ -479,23 +685,34 @@ class Runner {
             child := Field(step, "steps", [])
             if !(child is Array)
                 child := []
-            this.stack.Push({steps: child, index: 1, repeatsLeft: count})
+            this.stack.Push({steps: child, index: 1, repeatsLeft: count, releaseStop: String(Field(step, "releaseStop", ""))})
             return ""
         }
         if (kind = "edgeHold") {
-            key := SafeKey(Field(step, "key", ""))
+            key := NormKey(Field(step, "key", ""))
             watch := Field(step, "watch", [])
             if !(watch is Array)
                 watch := []
             prev := Map()
             for item in watch {
-                name := SafeKey(Alias(String(item)))
-                if (name = "")
-                    name := SafeKey(item)
+                name := NormKey(item)
                 if (name != "")
                     prev[name] := false
             }
-            this.stack.Push({steps: [], index: 1, repeatsLeft: 1, edgeHold: true, edgeKey: key, edgePrev: prev, edgePhase: "down", edgeArm: AsNum(Field(step, "armMs", 5), 5), edgeGap: AsNum(Field(step, "gapMs", 80), 80), edgeRepeatAt: now + Engine.KeyDelayMs()})
+            mute := []
+            pauseOnce := []
+            pauseMode := NormalizePause(Field(step, "pauseWatch", "off"))
+            if (pauseMode = "once" || pauseMode = "block") {
+                ids := Engine.MacrosOnWatch(watch, this.id)
+                if (pauseMode = "block")
+                    mute := ids
+                else
+                    pauseOnce := ids
+            }
+            frame := {steps: [], index: 1, repeatsLeft: 1, edgeHold: true, edgeKey: key, edgePrev: prev, edgePhase: "down", edgeArm: AsNum(Field(step, "armMs", 5), 5), edgeGap: AsNum(Field(step, "gapMs", 80), 80), edgeIgnore: NormalizeIgnore(Field(step, "ignore", "off")), edgeIgnoreMs: AsNum(Field(step, "ignoreMs", 0), 0), edgeLock: Map(), edgeRepeatAt: now + Engine.KeyDelayMs(), mute: mute, muteOn: false, pauseOnce: pauseOnce, pauseOn: false}
+            this.stack.Push(frame)
+            this.ArmMute(frame)
+            this.ArmPause(frame)
             if (key != "")
                 this.holds[key] := true
             if (this.trigger != "" && this.trigger != key)
@@ -504,6 +721,10 @@ class Runner {
             return "wait"
         }
         if (kind = "holdLoop") {
+            if this.stopping
+                return ""
+            if (this.trigger != "" && Engine.physDown.Has(this.trigger) && !Engine.KeyDown(this.trigger))
+                return ""
             child := Field(step, "steps", [])
             if !(child is Array)
                 child := []
@@ -516,13 +737,18 @@ class Runner {
                 if (name != "" && name != this.id)
                     clean.Push(name)
             }
-            frame := {steps: child, index: 1, repeatsLeft: 1, holdLoop: true, mute: clean, muteOn: false}
+            frame := {steps: child, index: 1, repeatsLeft: 1, holdLoop: true, mute: clean, muteOn: false, releaseStop: String(Field(step, "releaseStop", ""))}
             this.stack.Push(frame)
             this.ArmMute(frame)
             return ""
         }
         if (kind = "ifShort") {
             under := AsNum(Field(step, "underMs", 150), 150)
+            still := this.trigger != "" && Engine.KeyDown(this.trigger)
+            if (still && this.heldMs < under) {
+                this.waitUntil := now + 1
+                return "again"
+            }
             if (this.heldMs >= under)
                 return ""
             left := Floor(AsNum(Field(step, "minCycles", 0), 0)) - this.cycles
@@ -563,7 +789,34 @@ class Runner {
             this.pulses.Delete(key)
     }
 
+    HoldShouldStop() {
+        if this.stack.Length = 0
+            return false
+        frame := this.stack[-1]
+        if !(frame is Object)
+            return false
+        watching := (frame.HasProp("edgeHold") && frame.edgeHold)
+        if (this.HasProp("scanWait") && this.scanWait) {
+            if this.stopping
+                return true
+            return this.trigger != "" && !Engine.FingerDown(this.trigger)
+        }
+        if !watching
+            return false
+        if this.stopping
+            return true
+        return this.trigger != "" && !Engine.KeyDown(this.trigger)
+    }
+
     TickEdge(frame, now) {
+        if this.stopping {
+            this.MarkDone()
+            return
+        }
+        if (this.trigger != "" && !Engine.KeyDown(this.trigger)) {
+            this.MarkDone()
+            return
+        }
         key := frame.edgeKey
         if (frame.edgePhase = "arm") {
             this.DropHold(key)
@@ -586,7 +839,7 @@ class Runner {
         pulsed := false
         for name, wasDown in frame.edgePrev {
             isDown := Engine.FingerDown(name)
-            if (isDown && !wasDown && !pulsed) {
+            if (isDown && !wasDown && !pulsed && this.AcceptWatch(frame, name, now)) {
                 frame.edgePhase := "arm"
                 pulsed := true
             }
@@ -598,6 +851,22 @@ class Runner {
         }
         this.RepeatHold(frame, now)
         this.waitUntil := now + 5
+    }
+
+    AcceptWatch(frame, name, now) {
+        mode := frame.HasProp("edgeIgnore") ? String(frame.edgeIgnore) : "off"
+        ms := frame.HasProp("edgeIgnoreMs") ? AsNum(frame.edgeIgnoreMs, 0) : 0
+        if !frame.HasProp("edgeLock")
+            frame.edgeLock := Map()
+        last := frame.edgeLock.Has(name) ? frame.edgeLock[name] : -100000
+        if (mode != "off" && ms > 0 && now - last < ms) {
+            if (mode = "both")
+                return false
+            if (mode = "macro" && (Engine.SentDown(name) || Engine.SentSince(name, last)))
+                return false
+        }
+        frame.edgeLock[name] := now
+        return true
     }
 
     RepeatHold(frame, now) {
@@ -624,6 +893,10 @@ class Runner {
 class Engine {
     static runners := []
     static muted := Map()
+    static onceLock := Map()
+    static oncePass := Map()
+    static passKeys := Map()
+    static sendNow := Map()
     static pending := []
     static applied := Map()
     static prevDown := Map()
@@ -639,6 +912,7 @@ class Engine {
     static dry := false
     static finger := Map()
     static sent := []
+    static lastSent := Map()
     static busy := false
     static panicWas := false
     static hPipe := 0
@@ -676,7 +950,7 @@ class Engine {
     }
 
     static NotePhysical(name, down) {
-        name := String(name)
+        name := NormKey(name)
         if (name = "")
             return
         this.physDown[name] := down
@@ -694,11 +968,16 @@ class Engine {
             vk := A_Index
             label := ""
             try label := GetKeyName(Format("vk{:X}", vk))
-            button := SafeKey(Alias(label))
+            button := NormKey(label)
             if (button != "")
                 this.vkName[vk] := button
         }
-        for vk, button in Map(0x10, "shift", 0xA0, "shift", 0xA1, "shift", 0x11, "ctrl", 0xA2, "ctrl", 0xA3, "ctrl", 0x12, "alt", 0xA4, "alt", 0xA5, "alt", 0x20, "space", 0x0D, "enter")
+        for vk, button in Map(
+            0x10, "LShift", 0xA0, "LShift", 0xA1, "RShift",
+            0x11, "LCtrl", 0xA2, "LCtrl", 0xA3, "RCtrl",
+            0x12, "LAlt", 0xA4, "LAlt", 0xA5, "RAlt",
+            0x5B, "LWin", 0x5C, "RWin",
+            0x20, "space", 0x0D, "enter")
             this.vkName[vk] := button
     }
 
@@ -734,13 +1013,18 @@ class Engine {
         flags := NumGet(info, 8, "UInt")
         if (flags & 0x12)
             return false
+        extraOff := 16
+        if (NumGet(info, extraOff, "Ptr") = this.echo)
+            return false
         up := (msg = 0x101 || msg = 0x105 || (flags & 0x80))
         vk := NumGet(info, 0, "UInt")
-        name := ""
-        if (vk = 0x0D && (flags & 0x01))
+        scan := NumGet(info, 4, "UInt")
+        name := SideKey(vk, scan, flags)
+        if (name = "" && vk = 0x0D && (flags & 0x01))
             name := "NumpadEnter"
-        else if this.vkName.Has(vk)
+        else if (name = "" && this.vkName.Has(vk))
             name := this.vkName[vk]
+        name := NormKey(name)
         if (name = "")
             return false
         if this.MatchHidEcho(name, !up)
@@ -887,6 +1171,7 @@ class Engine {
 
     static Tick() {
         now := this.Now()
+        this.sendNow := Map()
         this.PollPipe()
         this.PollPanic()
         this.ReapOrphans()
@@ -956,7 +1241,7 @@ class Engine {
         trig := Field(macro, "trigger", Map())
         if !(trig is Map)
             return macro
-        button := SafeKey(Field(trig, "button", ""))
+        button := NormKey(Field(trig, "button", ""))
         if (button = "" || button = "LButton" || button = "RButton")
             return macro
         hold := 18
@@ -1011,6 +1296,12 @@ class Engine {
             if (r.id != id)
                 kept.Push(r)
         this.pending := kept
+    }
+
+    static AskStop(id) {
+        for r in this.runners
+            if (r.id = id)
+                r.AskStop()
     }
 
     static StopAll() {
@@ -1070,6 +1361,173 @@ class Engine {
         return (slot is Map) && Integer(slot["count"]) > 0
     }
 
+    static SameKey(a, b) {
+        left := NormKey(a)
+        right := NormKey(b)
+        if (left = "" || right = "")
+            return false
+        return (left = right || StrLower(left) = StrLower(right))
+    }
+
+    static MacrosOnWatch(watch, skipId) {
+        ids := []
+        if !(watch is Array)
+            return ids
+        macros := Field(this.profile, "macros", [])
+        if !(macros is Array)
+            return ids
+        skip := String(skipId)
+        for macro in macros {
+            if !(macro is Map)
+                continue
+            id := String(Field(macro, "id", ""))
+            if (id = "" || id = skip)
+                continue
+            trig := Field(macro, "trigger", Map())
+            button := (trig is Map) ? String(Field(trig, "button", "")) : ""
+            if (button = "")
+                continue
+            for item in watch {
+                if this.SameKey(button, item) {
+                    ids.Push(id)
+                    break
+                }
+            }
+        }
+        return ids
+    }
+
+    static MacroTrigger(id) {
+        macro := this.FindMacro(id)
+        if !(macro is Map)
+            return ""
+        trig := Field(macro, "trigger", Map())
+        button := (trig is Map) ? String(Field(trig, "button", "")) : ""
+        return NormKey(button)
+    }
+
+    static PassKey(key) {
+        k := NormKey(key)
+        return k != "" && this.passKeys.Has(k) && Integer(this.passKeys[k]) > 0
+    }
+
+    static Sending(key) {
+        k := NormKey(key)
+        return k != "" && this.sendNow.Has(k)
+    }
+
+    static HoldingOut(key) {
+        k := NormKey(key)
+        return k != "" && this.applied.Has(k)
+    }
+
+    ; Sent keys can fire $* hotkeys. Downs we are outputting are echo, not a finger.
+    ; Ups still count unless this exact Send is in flight, so a real release can stop a hold.
+    static Echoing(key, up := false) {
+        if this.Sending(key)
+            return true
+        return !up && this.HoldingOut(key)
+    }
+
+    static AddPass(key) {
+        if (key = "")
+            return
+        this.passKeys[key] := (this.passKeys.Has(key) ? Integer(this.passKeys[key]) : 0) + 1
+        this.RebindKey(key)
+    }
+
+    static DropPass(key) {
+        if (key = "" || !this.passKeys.Has(key))
+            return
+        n := Integer(this.passKeys[key]) - 1
+        if (n <= 0)
+            this.passKeys.Delete(key)
+        else
+            this.passKeys[key] := n
+        this.RebindKey(key)
+    }
+
+    static RebindKey(key) {
+        if this.dry || (key = "") || !this.hooks.Has(key)
+            return
+        this.UnhookKey(key)
+        try {
+            Hotkey(HookSpec(key), TriggerHook, "On")
+            Hotkey(HookSpec(key) " up", TriggerHook, "On")
+        } catch as err
+            this.Log("rebind " key " " err.Message)
+    }
+
+    static EnsurePass(id) {
+        if this.oncePass.Has(id)
+            return
+        key := this.MacroTrigger(id)
+        if (key = "")
+            return
+        this.oncePass[id] := key
+        this.AddPass(key)
+    }
+
+    static StartOncePlay(macro) {
+        mode := String(Field(macro, "playMode", "once"))
+        if this.HasTapHold(macro)
+            mode := "whileHeld"
+        override := (mode = "whileHeld" || mode = "toggle") ? "" : "once"
+        this.StartRunner(macro, override)
+    }
+
+    static ArmOnceLock(ids) {
+        if !(ids is Array)
+            return
+        for raw in ids {
+            id := String(raw)
+            if (id = "")
+                continue
+            this.EnsurePass(id)
+            if this.HasRunner(id) {
+                this.onceLock[id] := "done"
+                continue
+            }
+            macro := this.FindMacro(id)
+            key := this.MacroTrigger(id)
+            down := key != "" && this.KeyDown(key)
+            if (macro is Map && down) {
+                this.StartOncePlay(macro)
+                this.onceLock[id] := "done"
+                continue
+            }
+            this.onceLock[id] := "open"
+        }
+    }
+
+    static ReleaseOnceLock(ids) {
+        if !(ids is Array)
+            return
+        for raw in ids {
+            id := String(raw)
+            if (id = "")
+                continue
+            if this.oncePass.Has(id) {
+                this.DropPass(this.oncePass[id])
+                this.oncePass.Delete(id)
+            }
+            if this.onceLock.Has(id)
+                this.onceLock.Delete(id)
+        }
+    }
+
+    static OnceOpen(id) {
+        return this.onceLock.Has(id) && this.onceLock[id] = "open"
+    }
+
+    static OnceDone(id) {
+        return this.onceLock.Has(id) && this.onceLock[id] = "done"
+    }
+
+    static SpendOnce(id) {
+        this.onceLock[id] := "done"
+    }
+
     static FlushPending() {
         for r in this.pending
             this.runners.Push(r)
@@ -1082,6 +1540,9 @@ class Engine {
             if !r.done
                 kept.Push(r)
         this.runners := kept
+        for id, state in this.onceLock
+            if (state = "done" && !this.HasRunner(id))
+                this.EnsurePass(id)
     }
 
     static ReapOrphans() {
@@ -1191,37 +1652,66 @@ class Engine {
                 continue
         if (r.mode = "whileHeld" || r.mode = "toggle")
             return true
-        for frame in r.stack
+        for frame in r.stack {
             if (frame.HasProp("holdLoop") && frame.holdLoop)
                 return true
+            if (frame.HasProp("edgeHold") && frame.edgeHold)
+                return true
+            if (r.HasProp("scanWait") && r.scanWait)
+                return true
+        }
         }
         return false
     }
 
     ; Real finger, including keys this macro is not hooked to. "P" ignores keys the macro itself sends.
     static FingerDown(name) {
-        key := SafeKey(Alias(String(name)))
-        if (key = "")
-            key := SafeKey(String(name))
+        key := NormKey(name)
         if (key = "")
             return false
         if (this.dry && this.finger.Has(key))
             return this.finger[key]
         if (this.physDown.Has(key))
             return this.physDown[key]
+        if this.Echoing(key)
+            return false
         down := false
         try down := GetKeyState(key, "P")
         return down
     }
 
+    static SentDown(name) {
+        key := NormKey(name)
+        if (key = "")
+            return false
+        for r in this.runners {
+            if r.done
+                continue
+            if r.holds.Has(key)
+                return true
+            if r.pulses.Has(key)
+                return true
+        }
+        return false
+    }
+
+    static SentSince(name, since) {
+        key := NormKey(name)
+        if (key = "" || !this.lastSent.Has(key))
+            return false
+        return this.lastSent[key] >= since
+    }
+
     static KeyDown(button) {
-        key := SafeKey(button)
+        key := NormKey(button)
         if (key = "")
             return false
         ; Every trigger, recorded or basic, uses the physical finger while that hook is up.
         ; GetKeyState mixes in keys the macro itself is sending.
         if (this.rawOk || this.hooks.Has(key))
             return this.physDown.Has(key) && this.physDown[key]
+        if this.Echoing(key)
+            return false
         down := false
         try down := GetKeyState(key, "P")
         return down
@@ -1269,15 +1759,47 @@ class Engine {
                 this.StopRunner(id)
                 continue
             }
+            if this.OnceDone(id) {
+                if this.HasRunner(id) {
+                    mode := String(Field(macro, "playMode", "once"))
+                    if this.HasTapHold(macro)
+                        mode := "whileHeld"
+                    if (!down && (mode = "whileHeld"))
+                        this.AskStop(id)
+                    continue
+                }
+                this.EnsurePass(id)
+                continue
+            }
+            once := this.OnceOpen(id)
             mode := String(Field(macro, "playMode", "once"))
             if this.HasTapHold(macro)
                 mode := "whileHeld"
-            else if (Field(macro, "advanced", false) && mode = "whileHeld")
-                mode := "once"
+            ; Playback "On release" means start when the key comes up. That is not
+            ; the editor On release (nearest up / play full) stop rule.
+            if (Field(macro, "advanced", false) && mode != "onRelease") {
+                if (down && !was) {
+                    if once
+                        this.StartOncePlay(macro)
+                    else
+                        this.StartRunner(macro)
+                    if once
+                        this.SpendOnce(id)
+                } else if (!down && this.HasRunner(id) && !once) {
+                    if this.HoldsOnRelease(macro)
+                        this.AskStop(id)
+                }
+                continue
+            }
             action := this.TriggerAction(mode, down, was, this.HasRunner(id))
-            if (action = "start")
-                this.StartRunner(macro)
-            else if (action = "stop")
+            if (action = "start") {
+                if once
+                    this.StartOncePlay(macro)
+                else
+                    this.StartRunner(macro)
+                if once
+                    this.SpendOnce(id)
+            } else if (action = "stop")
                 this.StopRunner(id)
         }
     }
@@ -1289,6 +1811,21 @@ class Engine {
         for block in blocks
             if (block is Map && String(Field(block, "type", "")) = "tapHold")
                 return true
+        return false
+    }
+
+    static HoldsOnRelease(macro) {
+        mode := String(Field(macro, "playMode", "once"))
+        if (mode = "whileHeld" || mode = "toggle")
+            return true
+        blocks := Field(macro, "blocks", [])
+        if !(blocks is Array)
+            return false
+        for block in blocks {
+            kind := String(Field(block, "type", ""))
+            if (kind = "whileHeld" || kind = "tapHold")
+                return true
+        }
         return false
     }
 
@@ -1336,7 +1873,7 @@ class Engine {
                         continue
                     trig := Field(macro, "trigger", Map())
                     button := (trig is Map) ? String(Field(trig, "button", "")) : ""
-                    key := SafeKey(button)
+                    key := NormKey(button)
                     if (key = "" || key = "Pause" || key = "LButton" || key = "RButton")
                         continue
                     want[key] := true
@@ -1456,8 +1993,10 @@ class Engine {
         for k, _ in this.applied
             if !desired.Has(k)
                 ups.Push(k)
-        for k in downs
+        for k in downs {
             this.applied[k] := true
+            this.lastSent[k] := now
+        }
         for k in ups
             if this.applied.Has(k)
                 this.applied.Delete(k)
@@ -1495,8 +2034,15 @@ class Engine {
             parts .= SendPiece(this.OutName(k), "down")
         for k in ups
             parts .= SendPiece(this.OutName(k), "up")
-        if (parts != "")
+        if (parts != "") {
+            this.sendNow := Map()
+            for k in downs
+                this.sendNow[k] := true
+            for k in ups
+                this.sendNow[k] := true
             try Send("{Blind}" parts)
+            ; Leave sendNow set until the next tick so a late $* hotkey is still echo.
+        }
         if (dx != 0 || dy != 0)
             try MouseMove(dx, dy, 0, "R")
         if (dx != 0 || dy != 0)
@@ -1668,6 +2214,7 @@ class Engine {
     }
 
     static OutName(key) {
+        key := SendName(key)
         if !this.ClicksSwapped()
             return key
         if (key = "LButton")
@@ -2022,7 +2569,15 @@ RunChecks(fails) {
     fails := Check(Engine.vkName.Has(0x42) && Engine.vkName[0x42] = "b", "vk b", fails)
     fails := Check(Engine.vkName[0x20] = "space", "vk space", fails)
     fails := Check(Engine.vkName[0x70] = "f1", "vk f1", fails)
-    fails := Check(Engine.vkName[0xA0] = "shift", "vk shift", fails)
+    fails := Check(Engine.vkName[0xA0] = "LShift", "vk left shift", fails)
+    fails := Check(Engine.vkName[0xA1] = "RShift", "vk right shift", fails)
+    fails := Check(NormKey("shift") = "LShift", "shift means left shift", fails)
+    fails := Check(NormKey("RShift") = "RShift", "right shift stays right", fails)
+    fails := Check(Engine.SameKey("shift", "LShift"), "old shift matches LShift", fails)
+    fails := Check(!Engine.SameKey("LShift", "RShift"), "left and right shift differ", fails)
+    fails := Check(SideKey(0x10, 0x36, 0) = "RShift", "right scan is RShift", fails)
+    fails := Check(SideKey(0x11, 0x1D, 1) = "RCtrl", "extended ctrl is RCtrl", fails)
+    fails := Check(HookSpec("LCtrl") = "$*LControl", "ctrl hook uses LControl", fails)
     fails := Check(Engine.TriggerAction("once", true, false, false) = "start", "once starts on press", fails)
     fails := Check(Engine.TriggerAction("once", true, true, true) = "", "once ignores hold", fails)
     fails := Check(Engine.TriggerAction("once", false, true, true) = "", "once ignores release", fails)
@@ -2235,6 +2790,37 @@ RunChecks(fails) {
     Engine.physDown.Delete("b")
     Engine.profile := savedProfile
 
+    split := J("{'id':'split-b','name':'Split','enabled':true,'advanced':true,'playMode':'whileHeld','trigger':{'kind':'key','button':'b'},'steps':[],'blocks':[{'type':'ifShort','underMs':130,'minCycles':1,'steps':[{'type':'key','action':'down','key':'o'},{'type':'wait','ms':10}]},{'type':'whileHeld','steps':[{'type':'key','action':'down','key':'x'},{'type':'wait','ms':10}]}]}")
+    Engine.hooks["b"] := true
+    Engine.profile := Map("macros", [split])
+    Engine.NotePhysical("b", true)
+    Engine.prevDown["split-b"] := false
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    quick := Engine.runners[1]
+    quick.Advance(0)
+    fails := Check(!Engine.Desired(0).Has("o") && !Engine.Desired(0).Has("x"), "if-released-first waits before sending", fails)
+    Engine.NotePhysical("b", false)
+    Engine.PollTriggers()
+    quick.Advance(40)
+    fails := Check(Engine.Desired(40).Has("o") && !Engine.Desired(40).Has("x"), "a quick tap sends the short path once", fails)
+    quick.Advance(50)
+    Engine.RemoveDone()
+    fails := Check(!Engine.HasRunner("split-b") && !Engine.Desired(50).Has("x"), "a quick tap does not run the hold loop", fails)
+    Engine.NotePhysical("b", true)
+    Engine.prevDown["split-b"] := false
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    heldSplit := Engine.runners[1]
+    heldSplit.Advance(0)
+    heldSplit.Advance(130)
+    fails := Check(!Engine.Desired(130).Has("o") && Engine.Desired(130).Has("x"), "holding past the window starts the hold loop", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.hooks.Delete("b")
+    Engine.physDown.Delete("b")
+    Engine.profile := savedProfile
+
     Engine.muted := Map()
     hot := J("{'id':'hot','name':'Hot','enabled':true,'playMode':'toggle','trigger':{'kind':'key','button':'f'},'steps':[{'type':'wait','ms':5000}]}")
     idle := J("{'id':'idle','name':'Idle','enabled':true,'playMode':'toggle','trigger':{'kind':'key','button':'g'},'steps':[{'type':'wait','ms':5000}]}")
@@ -2326,9 +2912,351 @@ RunChecks(fails) {
     Engine.StopAll()
     Engine.RemoveDone()
     fails := Check(!Engine.Desired(95).Has("z") && !Engine.Desired(95).Has("XButton1"), "physical release clears z", fails)
+    Engine.NotePhysical("XButton1", true)
+    Engine.finger["t"] := false
+    Engine.StartRunner(tap)
+    Engine.FlushPending()
+    sprintHold := Engine.runners[1]
+    sprintHold.Advance(0)
+    sprintHold.Advance(5)
+    fails := Check(Engine.Desired(5).Has("z") && Engine.Desired(5).Has("XButton1"), "sprint stays down before release", fails)
+    Engine.NotePhysical("XButton1", false)
+    sprintHold.Advance(6)
+    fails := Check(sprintHold.done && !Engine.Desired(6).Has("z") && !Engine.Desired(6).Has("XButton1"), "releasing sprint while holding stops the repress", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
     Engine.hooks.Delete("XButton1")
     Engine.physDown.Delete("XButton1")
     Engine.finger := Map()
+
+    lock := J("{'id':'lock-z','name':'Lock','enabled':true,'advanced':true,'playMode':'whileHeld','trigger':{'kind':'side','button':'XButton1'},'steps':[],'blocks':[{'type':'tapHold','key':'z','watch':['t'],'armMs':5,'gapMs':80,'ignore':'macro','ignoreMs':150}]}")
+    spamT := J("{'id':'spam-t','name':'Spam T','enabled':true,'advanced':true,'playMode':'once','trigger':{'kind':'key','button':'f'},'steps':[],'blocks':[{'type':'steps','steps':[{'type':'key','action':'down','key':'t'}]}]}")
+    Engine.hooks["XButton1"] := true
+    Engine.NotePhysical("XButton1", true)
+    Engine.finger["t"] := false
+    Engine.StartRunner(lock)
+    Engine.FlushPending()
+    gate := Engine.runners[1]
+    gate.Advance(0)
+    Engine.finger["t"] := true
+    gate.Advance(10)
+    fails := Check(gate.stack[-1].edgePhase = "arm", "lock takes the first tracked press", fails)
+    gate.Advance(15)
+    gate.Advance(95)
+    fails := Check(gate.stack[-1].edgePhase = "down", "lock returns to hold after the first repress", fails)
+    Engine.finger["t"] := false
+    gate.Advance(100)
+    Engine.finger["t"] := true
+    gate.Advance(110)
+    fails := Check(gate.stack[-1].edgePhase = "arm", "macro lock still takes a physical press inside the window", fails)
+    gate.Advance(115)
+    gate.Advance(195)
+    fails := Check(gate.stack[-1].edgePhase = "down", "macro lock returns to hold after a physical press", fails)
+    Engine.StartRunner(spamT)
+    Engine.FlushPending()
+    Engine.runners[2].Advance(200)
+    Engine.finger["t"] := false
+    gate.Advance(200)
+    Engine.finger["t"] := true
+    gate.Advance(210)
+    fails := Check(gate.stack[-1].edgePhase = "down", "macro lock skips a sent key inside the window", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.NotePhysical("XButton1", true)
+    Engine.finger["t"] := false
+    both := J("{'id':'lock-both','name':'Both','enabled':true,'advanced':true,'playMode':'whileHeld','trigger':{'kind':'side','button':'XButton1'},'steps':[],'blocks':[{'type':'tapHold','key':'z','watch':['t'],'armMs':5,'gapMs':80,'ignore':'both','ignoreMs':150}]}")
+    Engine.StartRunner(both)
+    Engine.FlushPending()
+    hard := Engine.runners[1]
+    hard.Advance(0)
+    Engine.finger["t"] := true
+    hard.Advance(10)
+    hard.Advance(15)
+    hard.Advance(95)
+    Engine.finger["t"] := false
+    hard.Advance(100)
+    Engine.finger["t"] := true
+    hard.Advance(110)
+    fails := Check(hard.stack[-1].edgePhase = "down", "both lock skips a physical press inside the window", fails)
+    Engine.finger["t"] := false
+    hard.Advance(260)
+    Engine.finger["t"] := true
+    hard.Advance(270)
+    fails := Check(hard.stack[-1].edgePhase = "arm", "both lock takes a press after the window", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.hooks.Delete("XButton1")
+    Engine.physDown.Delete("XButton1")
+    Engine.finger := Map()
+
+    Engine.muted := Map()
+    Engine.onceLock := Map()
+    Engine.oncePass := Map()
+    Engine.passKeys := Map()
+    Engine.sendNow := Map()
+    fails := Check(NormalizePause("once") = "off", "once is not a lock", fails)
+    fails := Check(NormalizePause("block") = "block", "block stays a mute", fails)
+    Engine.sendNow["t"] := true
+    fails := Check(Engine.Sending("t"), "sending marks a key the engine just sent", fails)
+    Engine.sendNow := Map()
+    fails := Check(!Engine.Sending("t"), "sending can be cleared", fails)
+
+    Engine.hooks["LShift"] := true
+    if Engine.physDown.Has("LShift")
+        Engine.physDown.Delete("LShift")
+    Engine.applied := Map()
+    Engine.sendNow := Map()
+    Engine.applied["LShift"] := true
+    TriggerHook("$*LShift")
+    fails := Check(!Engine.KeyDown("LShift"), "a sent shift is not a physical press", fails)
+    Engine.applied := Map()
+    Engine.sendNow["LShift"] := true
+    TriggerHook("$*LShift")
+    fails := Check(!Engine.KeyDown("LShift"), "sendNow still blocks a late shift hotkey", fails)
+    Engine.sendNow := Map()
+    TriggerHook("$*LShift")
+    fails := Check(Engine.KeyDown("LShift"), "a real left shift is still physical", fails)
+    Engine.rawOk := true
+    Engine.applied := Map()
+    Engine.sendNow := Map()
+    Engine.NotePhysical("LShift", false)
+    TriggerHook("$*LShift")
+    fails := Check(!Engine.KeyDown("LShift"), "the ll hook owns the finger while a send hotkey fires", fails)
+    Engine.rawOk := false
+    sender := J("{'id':'send-t','name':'T','enabled':true,'playMode':'whileHeld','trigger':{'kind':'key','button':'t'},'steps':[{'type':'key','action':'down','key':'shift'},{'type':'wait','ms':10},{'type':'key','action':'up','key':'shift'},{'type':'wait','ms':10}]}")
+    target := J("{'id':'shift-mac','name':'Shift','enabled':true,'playMode':'whileHeld','trigger':{'kind':'key','button':'LShift'},'steps':[{'type':'wait','ms':80}]}")
+    Engine.profile := Map("macros", [sender, target])
+    Engine.hooks["t"] := true
+    Engine.prevDown := Map()
+    Engine.applied := Map()
+    Engine.sendNow := Map()
+    Engine.NotePhysical("LShift", false)
+    Engine.NotePhysical("t", true)
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    fails := Check(Engine.HasRunner("send-t"), "t macro starts from the finger", fails)
+    if Engine.HasRunner("send-t") {
+        for r in Engine.runners
+            if (r.id = "send-t" && !r.done)
+                r.Advance(0)
+    }
+    Engine.FlushPending()
+    for k, _ in Engine.Desired(0)
+        Engine.applied[k] := true
+    TriggerHook("$*LShift")
+    Engine.PollTriggers()
+    fails := Check(!Engine.HasRunner("shift-mac"), "t sending shift does not start the shift macro", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.applied := Map()
+    Engine.sendNow := Map()
+    Engine.hooks.Delete("LShift")
+    Engine.hooks.Delete("t")
+    if Engine.physDown.Has("LShift")
+        Engine.physDown.Delete("LShift")
+    if Engine.physDown.Has("t")
+        Engine.physDown.Delete("t")
+    Engine.profile := Map()
+    pause := J("{'id':'pause-z','name':'Pause','enabled':true,'advanced':true,'playMode':'whileHeld','trigger':{'kind':'side','button':'XButton1'},'steps':[],'blocks':[{'type':'tapHold','key':'z','watch':['t','XButton2'],'armMs':5,'gapMs':80,'ignore':'off','ignoreMs':0,'pauseWatch':'once'}]}")
+    spamT := J("{'id':'spam-t','name':'Spam T','enabled':true,'playMode':'toggle','trigger':{'kind':'key','button':'t'},'steps':[{'type':'wait','ms':50}]}")
+    other := J("{'id':'other-f','name':'Other','enabled':true,'playMode':'toggle','trigger':{'kind':'key','button':'f'},'steps':[{'type':'wait','ms':5000}]}")
+    Engine.profile := Map("macros", [pause, spamT, other])
+    Engine.hooks["XButton1"] := true
+    Engine.hooks["t"] := true
+    Engine.hooks["f"] := true
+    Engine.NotePhysical("XButton1", true)
+    Engine.StartRunner(spamT)
+    Engine.StartRunner(other)
+    Engine.FlushPending()
+    Engine.StartRunner(pause)
+    Engine.FlushPending()
+    gate := ""
+    for r in Engine.runners
+        if (r.id = "pause-z" && !r.done)
+            gate := r
+    gate.Advance(0)
+    Engine.FlushPending()
+    Engine.RemoveDone()
+    fails := Check(Engine.HasRunner("spam-t") && !Engine.OnceOpen("spam-t") && !Engine.OnceDone("spam-t") && !Engine.PassKey("t"), "once leaves tracked macros running with no lock", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.muted := Map()
+    Engine.onceLock := Map()
+    Engine.oncePass := Map()
+    Engine.passKeys := Map()
+    Engine.hooks.Delete("XButton1")
+    Engine.hooks.Delete("t")
+    Engine.hooks.Delete("f")
+    Engine.physDown.Delete("XButton1")
+    if Engine.physDown.Has("t")
+        Engine.physDown.Delete("t")
+    if Engine.physDown.Has("f")
+        Engine.physDown.Delete("f")
+    Engine.finger := Map()
+
+    block := J("{'id':'block-z','name':'Block','enabled':true,'advanced':true,'playMode':'whileHeld','trigger':{'kind':'side','button':'XButton1'},'steps':[],'blocks':[{'type':'tapHold','key':'z','watch':['t','XButton2'],'armMs':5,'gapMs':80,'ignore':'off','ignoreMs':0,'pauseWatch':'block'}]}")
+    Engine.profile := Map("macros", [block, spamT, other])
+    Engine.hooks["XButton1"] := true
+    Engine.hooks["t"] := true
+    Engine.hooks["f"] := true
+    Engine.NotePhysical("XButton1", true)
+    Engine.NotePhysical("t", false)
+    Engine.StartRunner(spamT)
+    Engine.StartRunner(other)
+    Engine.FlushPending()
+    Engine.StartRunner(block)
+    Engine.FlushPending()
+    wall := ""
+    for r in Engine.runners
+        if (r.id = "block-z" && !r.done)
+            wall := r
+    wall.Advance(0)
+    Engine.RemoveDone()
+    fails := Check(!Engine.HasRunner("spam-t") && Engine.IsMuted("spam-t"), "block mutes a tracked macro", fails)
+    fails := Check(Engine.HasRunner("other-f") && !Engine.IsMuted("other-f"), "block leaves other macros alone", fails)
+    fails := Check(!Engine.PassKey("t"), "block keeps swallowing the tracked key", fails)
+    Engine.prevDown["spam-t"] := false
+    Engine.NotePhysical("t", true)
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    fails := Check(!Engine.HasRunner("spam-t"), "block does not let the tracked macro play", fails)
+    Engine.StopRunner("block-z")
+    Engine.RemoveDone()
+    Engine.FlushPending()
+    fails := Check(Engine.HasRunner("spam-t") && !Engine.IsMuted("spam-t"), "release unmutes the tracked macro", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.muted := Map()
+    Engine.onceLock := Map()
+    Engine.oncePass := Map()
+    Engine.passKeys := Map()
+    Engine.hooks.Delete("XButton1")
+    Engine.hooks.Delete("t")
+    Engine.hooks.Delete("f")
+    Engine.physDown.Delete("XButton1")
+    if Engine.physDown.Has("t")
+        Engine.physDown.Delete("t")
+    Engine.finger := Map()
+    Engine.profile := Map()
+
+    drain := J("{'id':'drain-up','name':'Drain','enabled':true,'advanced':true,'releaseStop':'nextUp','playMode':'once','trigger':{'kind':'key','button':'r'},'steps':[],'blocks':[{'type':'steps','steps':[{'type':'key','action':'down','key':'b'},{'type':'wait','ms':50},{'type':'key','action':'up','key':'b'},{'type':'wait','ms':10},{'type':'key','action':'down','key':'k'},{'type':'wait','ms':50},{'type':'key','action':'up','key':'k'}]}]}")
+    Engine.StartRunner(drain)
+    Engine.FlushPending()
+    cut := Engine.runners[1]
+    cut.Advance(0)
+    fails := Check(Engine.Desired(0).Has("b"), "stop at up starts with b down", fails)
+    cut.AskStop()
+    cut.Advance(50)
+    fails := Check(!Engine.Desired(50).Has("b") && !Engine.Desired(50).Has("k"), "stop at up releases b and skips k", fails)
+    fails := Check(cut.done, "stop at up ends on the first up", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+
+    full := J("{'id':'drain-full','name':'Full','enabled':true,'advanced':true,'releaseStop':'finish','playMode':'once','trigger':{'kind':'key','button':'r'},'steps':[],'blocks':[{'type':'steps','steps':[{'type':'key','action':'down','key':'b'},{'type':'wait','ms':50},{'type':'key','action':'up','key':'b'},{'type':'wait','ms':10},{'type':'key','action':'down','key':'k'},{'type':'wait','ms':50},{'type':'key','action':'up','key':'k'}]}]}")
+    Engine.StartRunner(full)
+    Engine.FlushPending()
+    play := Engine.runners[1]
+    play.Advance(0)
+    play.AskStop()
+    play.Advance(50)
+    fails := Check(!play.done, "finish on release keeps going after the first up", fails)
+    play.Advance(60)
+    fails := Check(Engine.Desired(60).Has("k"), "finish on release still presses k", fails)
+    play.Advance(110)
+    fails := Check(play.done && !Engine.Desired(110).Has("k"), "finish on release ends after the last up", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+
+    fails := Check(!Engine.HoldsOnRelease(drain), "play once without a hold loop does not use on-release", fails)
+    fails := Check(Engine.HoldsOnRelease(J("{'playMode':'whileHeld','blocks':[]}")), "while held playback uses on-release", fails)
+    onceWait := J("{'id':'once-wait','name':'Once','enabled':true,'advanced':true,'playMode':'once','trigger':{'kind':'key','button':'r'},'steps':[],'blocks':[{'type':'wait','ms':80}]}")
+    Engine.profile := Map("macros", [onceWait])
+    Engine.hooks["r"] := true
+    Engine.prevDown := Map()
+    Engine.NotePhysical("r", true)
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    fails := Check(Engine.HasRunner("once-wait"), "play once starts on press", fails)
+    Engine.NotePhysical("r", false)
+    Engine.PollTriggers()
+    fails := Check(Engine.HasRunner("once-wait"), "play once keeps going after release", fails)
+    waitOnce := Engine.runners[1]
+    waitOnce.Advance(0)
+    waitOnce.Advance(80)
+    Engine.RemoveDone()
+    fails := Check(!Engine.HasRunner("once-wait"), "play once advanced finishes after one pass", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.NotePhysical("r", false)
+    playUp := J("{'id':'play-up','name':'Up','enabled':true,'advanced':true,'playMode':'onRelease','trigger':{'kind':'key','button':'r'},'steps':[],'blocks':[{'type':'wait','ms':80}]}")
+    Engine.profile := Map("macros", [playUp])
+    Engine.prevDown := Map()
+    Engine.NotePhysical("r", true)
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    fails := Check(!Engine.HasRunner("play-up"), "playback on release ignores press", fails)
+    Engine.NotePhysical("r", false)
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    fails := Check(Engine.HasRunner("play-up"), "playback on release starts when the key comes up", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.hooks.Delete("r")
+    if Engine.physDown.Has("r")
+        Engine.physDown.Delete("r")
+    Engine.profile := Map()
+
+    override := J("{'id':'block-full','name':'Block','enabled':true,'advanced':true,'releaseStop':'nextUp','playMode':'whileHeld','trigger':{'kind':'key','button':'r'},'steps':[],'blocks':[{'type':'whileHeld','releaseStop':'finish','mute':[],'steps':[{'type':'key','action':'down','key':'b'},{'type':'wait','ms':50},{'type':'key','action':'up','key':'b'},{'type':'wait','ms':10},{'type':'key','action':'down','key':'k'},{'type':'wait','ms':50},{'type':'key','action':'up','key':'k'}]}]}")
+    Engine.StartRunner(override)
+    Engine.FlushPending()
+    over := Engine.runners[1]
+    over.Advance(0)
+    over.AskStop()
+    over.Advance(50)
+    fails := Check(!over.done, "block play full overrides macro nearest up", fails)
+    over.Advance(60)
+    fails := Check(Engine.Desired(60).Has("k"), "block play full still presses k", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+
+    holdGate := J("{'id':'scan-hold','name':'Hold','enabled':true,'advanced':true,'playMode':'once','trigger':{'kind':'key','button':'b'},'steps':[],'blocks':[{'type':'steps','steps':[{'type':'key','action':'down','key':'o'},{'type':'wait','ms':10},{'type':'key','action':'up','key':'o'},{'type':'scanWait','ms':80}]},{'type':'steps','steps':[{'type':'key','action':'down','key':'x'},{'type':'wait','ms':10}]}]}")
+    Engine.hooks["b"] := true
+    Engine.NotePhysical("b", true)
+    Engine.StartRunner(holdGate)
+    Engine.FlushPending()
+    gate := Engine.runners[1]
+    gate.Advance(0)
+    fails := Check(Engine.Desired(0).Has("o") && !Engine.Desired(0).Has("x"), "scan wait runs the keys first", fails)
+    gate.Advance(10)
+    fails := Check(!Engine.Desired(10).Has("o") && !Engine.Desired(10).Has("x"), "scan wait starts after those keys", fails)
+    Engine.NotePhysical("b", false)
+    gate.Advance(40)
+    Engine.RemoveDone()
+    fails := Check(!Engine.HasRunner("scan-hold") && !Engine.Desired(40).Has("x"), "scan wait exits if the trigger lets go", fails)
+    Engine.NotePhysical("b", true)
+    Engine.StartRunner(holdGate)
+    Engine.FlushPending()
+    heldGate := Engine.runners[1]
+    heldGate.Advance(0)
+    heldGate.Advance(10)
+    heldGate.Advance(90)
+    fails := Check(Engine.Desired(90).Has("x"), "scan wait continues after the hold", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    scanOnly := J("{'id':'scan-only','name':'Scan','enabled':true,'advanced':true,'playMode':'once','trigger':{'kind':'key','button':'b'},'steps':[],'blocks':[{'type':'steps','steps':[{'type':'scanWait','ms':80}]},{'type':'steps','steps':[{'type':'key','action':'down','key':'x'},{'type':'wait','ms':10}]}]}")
+    Engine.NotePhysical("b", true)
+    Engine.StartRunner(scanOnly)
+    Engine.FlushPending()
+    scan := Engine.runners[1]
+    scan.Advance(0)
+    fails := Check(!Engine.Desired(0).Has("x"), "scan wait can run with no keys around it", fails)
+    scan.Advance(80)
+    fails := Check(Engine.Desired(80).Has("x"), "scan wait continues after the sleep", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.hooks.Delete("b")
+    if Engine.physDown.Has("b")
+        Engine.physDown.Delete("b")
 
     DllCall("Winmm.dll\timeBeginPeriod", "UInt", 1)
     clockMacro := J("{'id':'clock-5','name':'Clock','enabled':true,'basic':false,'playMode':'once','trigger':{'kind':'key','button':'b'},'steps':[{'type':'wait','ms':5}]}")

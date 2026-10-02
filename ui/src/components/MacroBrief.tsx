@@ -1,8 +1,9 @@
-import { heldName, place, shownBlocks } from "../macroFlow";
+import { heldName, place, showBriefRelease, shownBlocks } from "../macroFlow";
 import type { Block, Macro, Step } from "../profile";
 import { BlockLead } from "./BlockLead";
 import { EventLane } from "./EventLane";
 import { KeyFace } from "./KeyFace";
+import { ReleaseField } from "./ReleaseField";
 
 export function MacroBrief({
   macro,
@@ -28,15 +29,17 @@ export function MacroBrief({
           spellCheck={false}
           onChange={(event) => onChange({ ...macro, name: event.target.value })}
         />
-        <button type="button" className={macro.busy ? "is-on" : "ghost"} onClick={() => onChange({ ...macro, busy: !macro.busy })}>
-          Skip if running
-        </button>
-        <button type="button" className="ghost is-danger" onClick={onDelete}>
-          Delete
-        </button>
-        <button type="button" className="studio-new is-primary" onClick={onOpenGraph}>
-          Open advanced
-        </button>
+        <div className="brief-actions">
+          {showBriefRelease(macro) ? (
+            <ReleaseField compact label="Macro on release" value={macro.releaseStop} onChange={(releaseStop) => onChange({ ...macro, releaseStop: releaseStop ?? "nextUp" })} />
+          ) : null}
+          <button type="button" className="ghost is-danger" onClick={onDelete}>
+            Delete
+          </button>
+          <button type="button" className="studio-new is-primary" onClick={onOpenGraph}>
+            Advanced
+          </button>
+        </div>
       </div>
       <p className="brief-trigger">
         Trigger
@@ -48,17 +51,7 @@ export function MacroBrief({
             <li key={block.id} className="brief-card">
               <div className="brief-body">
                 <p className="brief-lead">
-                  {block.type === "tapHold" ? (
-                    <>
-                      Repress <KeyFace label={heldName(block.key) || "Key"} />
-                    </>
-                  ) : (
-                    <BlockLead
-                      type={block.type}
-                      trigger={trigger}
-                      beforeMs={block.type === "ifShort" ? block.underMs : undefined}
-                    />
-                  )}
+                  <BlockLead block={block} trigger={trigger} />
                 </p>
                 <BlockBody block={block} />
               </div>
@@ -66,7 +59,7 @@ export function MacroBrief({
           ))}
         </ol>
       ) : (
-        <p className="brief-empty">This macro is empty. Open advanced to hook blocks together.</p>
+        <p className="brief-empty">This macro is empty. Use Advanced to hook blocks together.</p>
       )}
     </section>
   );
@@ -85,14 +78,12 @@ function BlockBody({ block }: { block: Block }) {
             {tracked.map((item) => (
               <span key={item} className="ev ev-act">
                 <b>{heldName(item)}</b>
-                <small>Pressed</small>
               </span>
             ))}
           </div>
         ) : (
-          <p className="brief-empty">Empty</p>
+          <p className="brief-empty">None</p>
         )}
-        <p className="brief-meta">{block.armMs} ms</p>
         <p className="brief-meta">
           Release <KeyFace label={key} />
         </p>

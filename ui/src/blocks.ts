@@ -1,4 +1,4 @@
-import { newId, type Block } from "./profile";
+import { newId, type Block, type PlayMode, type Step } from "./profile";
 
 export function createBlock(type: Block["type"]): Block {
   const id = newId();
@@ -7,7 +7,7 @@ export function createBlock(type: Block["type"]): Block {
   if (type === "ifShort") return { id, type, underMs: 150, minCycles: 3, steps: [] };
   if (type === "then") return { id, type, forMs: 55, steps: [] };
   if (type === "repeat") return { id, type, count: 1, steps: [] };
-  if (type === "tapHold") return { id, type, key: "z", watch: ["LShift", "CapsLock", "t", "XButton2", "p"], armMs: 5, gapMs: 80 };
+  if (type === "tapHold") return { id, type, key: "z", watch: ["LShift", "CapsLock", "t", "XButton2", "p"], armMs: 5, gapMs: 80, ignore: "off", ignoreMs: 150, pauseWatch: "off" };
   return { id, type: "wait", ms: 13 };
 }
 
@@ -35,26 +35,6 @@ export function shiftBlock(blocks: Block[], id: string, dir: -1 | 1): Block[] {
   return next;
 }
 
-export function blockTitle(type: Block["type"]): string {
-  if (type === "whileHeld") return "While held";
-  if (type === "ifShort") return "If released before";
-  if (type === "then") return "After release";
-  if (type === "repeat") return "Repeat";
-  if (type === "wait") return "Wait";
-  if (type === "tapHold") return "Repress";
-  return "Do once";
-}
-
-export function blockPick(type: Block["type"]): { name: string; blurb: string } {
-  if (type === "whileHeld") return { name: "While held", blurb: "Loops while down" };
-  if (type === "ifShort") return { name: "Quick tap", blurb: "Let go early" };
-  if (type === "then") return { name: "On release", blurb: "After let go" };
-  if (type === "repeat") return { name: "Repeat", blurb: "N times" };
-  if (type === "wait") return { name: "Wait", blurb: "Delay" };
-  if (type === "tapHold") return { name: "Repress", blurb: "Tap again" };
-  return { name: "Once", blurb: "Run once" };
-}
-
 export function insertTyped(blocks: Block[], index: number, type: Block["type"]): { blocks: Block[]; pick: string } {
   const next = blocks.slice();
   const at = Math.max(0, Math.min(index, next.length));
@@ -77,4 +57,28 @@ export function insertTyped(blocks: Block[], index: number, type: Block["type"])
   const item = createBlock(type);
   next.splice(at, 0, item);
   return { blocks: next, pick: item.id };
+}
+
+/** Steps need a block to live in, so a loose step dropped on the canvas gets a Run Once. */
+export function insertStepBlock(blocks: Block[], index: number, steps: Step[]): { blocks: Block[]; pick: string } {
+  const item: Block = { id: newId(), type: "steps", steps };
+  const next = blocks.slice();
+  next.splice(Math.max(0, Math.min(index, next.length)), 0, item);
+  return { blocks: next, pick: item.id };
+}
+
+export function appendSteps(block: Block, steps: Step[]): Block {
+  if (!takesSteps(block)) return block;
+  return { ...block, steps: [...block.steps, ...steps] };
+}
+
+export function takesSteps(block: Block): block is Extract<Block, { steps: Step[] }> {
+  return block.type !== "wait" && block.type !== "tapHold";
+}
+
+/** Scan wait only belongs where the trigger is still supposed to be down. */
+export function allowsScanWait(block: Block | null, playMode?: PlayMode): boolean {
+  if (playMode === "onRelease") return false;
+  if (!block) return true;
+  return block.type === "whileHeld" || block.type === "steps" || block.type === "repeat";
 }

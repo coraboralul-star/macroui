@@ -64,7 +64,7 @@ export function MacroStudio({
             <div className="brief-wrap">
               <div className="brief-head is-simple">
                 <button type="button" className="studio-new is-primary" onClick={() => onOpenGraph(macro.id)}>
-                  Open advanced
+                  Advanced
                 </button>
               </div>
               <MacroEditor

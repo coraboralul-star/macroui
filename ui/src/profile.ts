@@ -1,6 +1,9 @@
+import { canonKey } from "./keyboard";
 import { normalizeRecording, type Recording } from "./recording";
 
 export type PlayMode = "once" | "repeat" | "whileHeld" | "toggle" | "onRelease";
+/** After the trigger comes up, keep going until the next key/mouse up, or until this pass ends. */
+export type ReleaseStop = "nextUp" | "finish";
 export type TriggerKind = "key" | "mouse" | "side";
 export type KeyAction = "down" | "up" | "tap";
 export type InputMode = "software" | "rp2040" | "rp2350";
@@ -27,25 +30,50 @@ export function normalizeGotoWhere(value: unknown): GotoWhere {
   return value === "window" || value === "client" ? value : "screen";
 }
 
+export type IgnoreLock = "off" | "macro" | "both";
+
+export const IGNORE_LOCKS: { value: IgnoreLock; label: string }[] = [
+  { value: "off", label: "Off" },
+  { value: "macro", label: "Macro" },
+  { value: "both", label: "Both" },
+];
+
+export function normalizeIgnoreLock(value: unknown): IgnoreLock {
+  return value === "macro" || value === "both" ? value : "off";
+}
+
+export type PauseWatch = "off" | "block";
+
+export const PAUSE_WATCH: { value: PauseWatch; label: string }[] = [
+  { value: "off", label: "Off" },
+  { value: "block", label: "Block" },
+];
+
+export function normalizePauseWatch(value: unknown): PauseWatch {
+  if (value === "block") return "block";
+  return "off";
+}
+
 export type Step =
   | { type: "key"; action: KeyAction; key: string; holdMs?: number }
   | { type: "mouse"; action: KeyAction; button: string; holdMs?: number }
   | { type: "move"; x: number; y: number }
   | { type: "goto"; x: number; y: number; ms?: number; where?: GotoWhere }
   | { type: "wait"; ms: number }
+  | { type: "scanWait"; ms: number }
   | { type: "repeat"; count: number; steps: Step[] }
   | { type: "run"; macroId: string };
 
 export type Trigger = { kind: TriggerKind; button: string };
 
 export type Block =
-  | { id: string; type: "whileHeld"; steps: Step[]; mute: string[] }
+  | { id: string; type: "whileHeld"; steps: Step[]; mute: string[]; releaseStop?: ReleaseStop }
   | { id: string; type: "ifShort"; underMs: number; minCycles: number; steps: Step[] }
   | { id: string; type: "then"; forMs: number; steps: Step[] }
-  | { id: string; type: "repeat"; count: number; steps: Step[] }
+  | { id: string; type: "repeat"; count: number; steps: Step[]; releaseStop?: ReleaseStop }
   | { id: string; type: "wait"; ms: number }
-  | { id: string; type: "steps"; steps: Step[] }
-  | { id: string; type: "tapHold"; key: string; watch: string[]; armMs: number; gapMs: number };
+  | { id: string; type: "steps"; steps: Step[]; releaseStop?: ReleaseStop }
+  | { id: string; type: "tapHold"; key: string; watch: string[]; armMs: number; gapMs: number; ignore: IgnoreLock; ignoreMs: number; pauseWatch: PauseWatch };
 
 export type Macro = {
   id: string;
@@ -67,6 +95,8 @@ export type Macro = {
   advanced?: boolean;
   busy?: boolean;
   blocks?: Block[];
+  /** Advanced only. Hold still repeats. Release uses this instead of cutting immediately. */
+  releaseStop?: ReleaseStop;
 };
 
 export type Config = {
@@ -104,7 +134,7 @@ export type EngineState = {
 
 export const KEY_OPTIONS = [
   "w", "a", "s", "d", "q", "e", "r", "f", "c", "v", "x", "z",
-  "space", "shift", "ctrl", "alt", "tab", "enter", "escape", "backspace",
+  "space", "LShift", "RShift", "LCtrl", "RCtrl", "LAlt", "RAlt", "tab", "enter", "escape", "backspace",
   "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
   "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
   "up", "down", "left", "right",
@@ -128,6 +158,19 @@ export const PLAY_MODES: { value: PlayMode; label: string }[] = [
   { value: "toggle", label: "Toggle" },
   { value: "onRelease", label: "On release" },
 ];
+
+export const RELEASE_STOPS: { value: ReleaseStop; label: string }[] = [
+  { value: "nextUp", label: "Nearest up" },
+  { value: "finish", label: "Play full" },
+];
+
+export function normalizeReleaseStop(value: unknown): ReleaseStop {
+  return value === "finish" ? "finish" : "nextUp";
+}
+
+function optionalReleaseStop(value: unknown): ReleaseStop | undefined {
+  return value === "finish" || value === "nextUp" ? value : undefined;
+}
 
 const starter: Macro[] = [
     {
@@ -207,6 +250,7 @@ export function blankMacro(): Macro {
     recording: null,
     basic: false,
     gapMs: MIN_REPEAT_MS,
+    releaseStop: "nextUp",
   };
 }
 
@@ -281,6 +325,8 @@ export function blankStep(type: Step["type"]): Step {
       return { type: "goto", x: 0, y: 0, ms: 15, where: "screen" };
     case "wait":
       return { type: "wait", ms: 50 };
+    case "scanWait":
+      return { type: "scanWait", ms: 80 };
     case "repeat":
       return { type: "repeat", count: 2, steps: [] };
     case "run":
@@ -344,7 +390,8 @@ function normalizeMacro(value: Macro): Macro {
   const trigger = value.trigger ?? { kind: "key" as const, button: "f" };
   const kind = trigger.kind ?? "key";
   const rawButton = typeof trigger.button === "string" ? trigger.button : defaultButton(kind);
-  const button = rawButton === "LButton" || rawButton === "RButton" ? "" : rawButton;
+  const sided = kind === "key" ? canonKey(rawButton) : rawButton;
+  const button = sided === "LButton" || sided === "RButton" ? "" : sided;
   const gap = Number(value.gapMs);
   const gapMs = Number.isFinite(gap) && gap >= 0 ? Math.round(gap) : MIN_REPEAT_MS;
   const basic = Boolean(value.basic);
@@ -352,7 +399,7 @@ function normalizeMacro(value: Macro): Macro {
     ? kind === "key"
       ? basicSteps(button, gapMs)
       : mouseSteps(button, gapMs)
-    : Array.isArray(value.steps) ? value.steps : [];
+    : Array.isArray(value.steps) ? normalizeSteps(value.steps) : [];
   return {
     id: value.id || newId(),
     name: value.name || "Macro",
@@ -371,12 +418,25 @@ function normalizeMacro(value: Macro): Macro {
     advanced: Boolean(value.advanced),
     busy: Boolean(value.busy),
     blocks: normalizeBlocks(value.blocks),
+    releaseStop: normalizeReleaseStop(value.releaseStop),
   };
 }
 
 function muteIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
+function normalizeSteps(steps: Step[]): Step[] {
+  return steps.flatMap((step): Step[] => {
+    if (step.type === "key") return [{ ...step, key: canonKey(step.key) }];
+    if (step.type === "scanWait") {
+      const ms = Number(step.ms);
+      return [{ type: "scanWait", ms: Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : 0 }];
+    }
+    if (step.type === "repeat" && Array.isArray(step.steps)) return [{ ...step, steps: normalizeSteps(step.steps) }];
+    return [step];
+  });
 }
 
 function normalizeBlocks(value: unknown): Block[] {
@@ -393,15 +453,22 @@ function normalizeBlocks(value: unknown): Block[] {
       count?: number;
       ms?: number;
       key?: string;
+      button?: string;
+      holdMs?: number;
       watch?: string[];
       armMs?: number;
       gapMs?: number;
+      ignore?: unknown;
+      ignoreMs?: number;
+      pauseWatch?: unknown;
       mute?: unknown;
+      releaseStop?: unknown;
     };
     const id = raw.id || newId();
-    const steps = Array.isArray(raw.steps) ? raw.steps : [];
-    if (raw.type === "steps") return [{ id, type: "steps", steps }];
-    if (raw.type === "whileHeld") return [{ id, type: "whileHeld", steps, mute: muteIds(raw.mute) }];
+    const steps = Array.isArray(raw.steps) ? normalizeSteps(raw.steps) : [];
+    const releaseStop = optionalReleaseStop(raw.releaseStop);
+    if (raw.type === "steps") return [{ id, type: "steps", steps, ...(releaseStop ? { releaseStop } : {}) }];
+    if (raw.type === "whileHeld") return [{ id, type: "whileHeld", steps, mute: muteIds(raw.mute), ...(releaseStop ? { releaseStop } : {}) }];
     if (raw.type === "ifShort") {
       const under = Number(raw.underMs);
       const cycles = Number(raw.minCycles);
@@ -413,7 +480,7 @@ function normalizeBlocks(value: unknown): Block[] {
     }
     if (raw.type === "repeat") {
       const count = Number(raw.count);
-      return [{ id, type: "repeat", count: Number.isFinite(count) && count >= 0 ? Math.round(count) : 1, steps }];
+      return [{ id, type: "repeat", count: Number.isFinite(count) && count >= 0 ? Math.round(count) : 1, steps, ...(releaseStop ? { releaseStop } : {}) }];
     }
     if (raw.type === "wait") {
       const ms = Number(raw.ms);
@@ -422,15 +489,30 @@ function normalizeBlocks(value: unknown): Block[] {
     if (raw.type === "tapHold") {
       const arm = Number(raw.armMs);
       const gap = Number(raw.gapMs);
-      const watch = Array.isArray(raw.watch) ? raw.watch.filter((item) => typeof item === "string" && item) : [];
+      const watch = Array.isArray(raw.watch) ? raw.watch.filter((item) => typeof item === "string" && item).map(canonKey) : [];
+      const ignoreMs = Number(raw.ignoreMs);
       return [{
         id,
         type: "tapHold",
-        key: raw.key || "z",
+        key: canonKey(raw.key || "z"),
         watch,
         armMs: Number.isFinite(arm) && arm >= 0 ? Math.round(arm) : 5,
         gapMs: Number.isFinite(gap) && gap >= 0 ? Math.round(gap) : 80,
+        ignore: normalizeIgnoreLock(raw.ignore),
+        ignoreMs: Number.isFinite(ignoreMs) && ignoreMs >= 0 ? Math.round(ignoreMs) : 0,
+        pauseWatch: normalizePauseWatch(raw.pauseWatch),
       }];
+    }
+    if (raw.type === "pressHold") {
+      const holdMs = Number(raw.holdMs);
+      const ms = Number.isFinite(holdMs) && holdMs >= 0 ? Math.round(holdMs) : 80;
+      const key = canonKey(raw.key || "");
+      const migrated: Step[] = [];
+      if (key) {
+        migrated.push({ type: "key", action: "down", key }, { type: "wait", ms: 18 }, { type: "key", action: "up", key });
+      }
+      migrated.push({ type: "scanWait", ms });
+      return [{ id, type: "steps", steps: migrated }];
     }
     return [];
   });

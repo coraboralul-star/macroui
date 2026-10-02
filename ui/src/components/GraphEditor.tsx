@@ -1,19 +1,23 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent } from "react";
-import { blockPick, cloneBlock, insertTyped, reorderBlocks } from "../blocks";
+import { appendSteps, cloneBlock, insertStepBlock, insertTyped, reorderBlocks, takesSteps, allowsScanWait } from "../blocks";
 import { pressPair } from "../eventLane";
+import { LIBRARY, LIBRARY_MIME, MENU_GROUPS, libraryItem, librarySteps, matchInput } from "../library";
 import { compileRecording, type RecEvent } from "../recording";
-import { effectivePlayMode, GRAPH_NODE_H, GRAPH_NODE_W, graphLayout, place, shownBlocks } from "../macroFlow";
-import type { Block, Macro } from "../profile";
-import { BlockFields } from "./Advanced";
+import { effectivePlayMode, GRAPH_NODE_H, GRAPH_NODE_W, graphLayout, place, shownBlocks, usesReleaseStop } from "../macroFlow";
+import type { Block, Macro, Step } from "../profile";
+import { BlockFields } from "./BlockFields";
 import { BlockLead } from "./BlockLead";
 import { Capture } from "./Capture";
 import { Confirm } from "./Confirm";
 import { GraphPreview } from "./GraphPreview";
 import { KeyFace } from "./KeyFace";
+import { Library } from "./Library";
 import { RecordSurface } from "./RecordSurface";
+import { ReleaseField } from "./ReleaseField";
 import { SlideToggle } from "./SlideToggle";
 
-const ADD: Block["type"][] = ["whileHeld", "ifShort", "then", "repeat", "wait", "steps", "tapHold"];
+/** Where a library item lands: inside a block, or between blocks. */
+type Spot = { block: string } | { at: number };
 
 export function GraphEditor({
   macros,
@@ -44,6 +48,8 @@ export function GraphEditor({
   const [capture, setCapture] = useState<{ slot: "hold" | "watch" | "step" | "bind" } | null>(null);
   const [live, setLive] = useState<RecEvent[] | null>(null);
   const [wipe, setWipe] = useState<"macro" | "block" | null>(null);
+  const [libOver, setLibOver] = useState<string | null>(null);
+  const [libPick, setLibPick] = useState<{ id: string; spot: Spot } | null>(null);
   const panDrag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
 
   useEffect(() => {
@@ -69,7 +75,7 @@ export function GraphEditor({
 
   const layout = useMemo(() => graphLayout(blocks), [blocks]);
 
-  const commit = (next: Block[], pick?: string) => {
+  const commit = (next: Block[], pick?: string, patch?: Partial<Macro>) => {
     if (!macro) return;
     onChange({
       ...macro,
@@ -78,6 +84,8 @@ export function GraphEditor({
       blocks: next,
       steps: [],
       playMode: next.some((block) => block.type === "tapHold") ? "whileHeld" : macro.playMode,
+      releaseStop: macro.releaseStop === "finish" ? "finish" : "nextUp",
+      ...patch,
     });
     if (pick) setPicked(pick);
   };
@@ -93,12 +101,6 @@ export function GraphEditor({
     commit(next, next[Math.max(0, selectedIndex - 1)]?.id ?? "");
   };
 
-  const addAt = (index: number, type: Block["type"]) => {
-    const next = insertTyped(blocks, index, type);
-    setMenu(null);
-    commit(next.blocks, next.pick);
-  };
-
   const dropOn = (index: number) => (event: DragEvent) => {
     event.preventDefault();
     const fromId = dragId || event.dataTransfer.getData("text/plain");
@@ -106,6 +108,91 @@ export function GraphEditor({
     setDropAt(null);
     if (!fromId) return;
     commit(reorderBlocks(blocks, fromId, index), fromId);
+  };
+
+  const fromLib = (event: DragEvent) => event.dataTransfer.types.includes(LIBRARY_MIME);
+
+  const slotOf = (spot: Spot) => ("at" in spot ? spot.at : blocks.findIndex((block) => block.id === spot.block) + 1);
+
+  /** Steps go into the block they landed on. Anything else gets a Run Once to live in. */
+  const addSteps = (steps: Step[], spot: Spot) => {
+    if (!steps.length || !macro) return;
+    const host = "block" in spot ? blocks.find((block) => block.id === spot.block) ?? null : null;
+    const scan = steps.some((step) => step.type === "scanWait");
+    if (scan && macro.playMode === "onRelease") return;
+    if (host && takesSteps(host)) {
+      if (scan && !allowsScanWait(host, macro.playMode)) {
+        const next = insertStepBlock(blocks, slotOf(spot), steps);
+        commit(next.blocks, next.pick);
+        return;
+      }
+      commit(
+        blocks.map((block) => (block.id === host.id ? appendSteps(block, steps) : block)),
+        host.id,
+      );
+      return;
+    }
+    const next = insertStepBlock(blocks, slotOf(spot), steps);
+    commit(next.blocks, next.pick);
+  };
+
+  /** One path for every insert: the + menus, the Library clicks, and the drops. */
+  const useItem = (id: string, spot: Spot, ask = false) => {
+    const item = libraryItem(id);
+    if (!item || !macro) return;
+    if (item.kind === "block") {
+      const next = insertTyped(blocks, slotOf(spot), item.block);
+      commit(next.blocks, next.pick);
+      return;
+    }
+    if (item.kind === "step") {
+      if (ask && item.pick) {
+        setLibPick({ id, spot });
+        return;
+      }
+      addSteps(item.create(), spot);
+      return;
+    }
+    if (item.source === "last") {
+      addSteps(macro.recording ? compileRecording(macro.recording) : [], spot);
+      return;
+    }
+    const host = "block" in spot ? blocks.find((block) => block.id === spot.block) ?? null : null;
+    if (host && takesSteps(host)) {
+      openEdit(host.id);
+      return;
+    }
+    const next = insertStepBlock(blocks, slotOf(spot), []);
+    commit(next.blocks, next.pick);
+    setTab("edit");
+  };
+
+  /** Library clicks land in the selected block, or right after it. */
+  const pickItem = (id: string) => {
+    const spot: Spot =
+      selectedBlock && takesSteps(selectedBlock)
+        ? { block: selectedBlock.id }
+        : { at: selectedIndex >= 0 ? selectedIndex + 1 : blocks.length };
+    useItem(id, spot, true);
+  };
+
+  const dropItem = (spot: Spot) => (event: DragEvent) => {
+    const id = event.dataTransfer.getData(LIBRARY_MIME);
+    if (!id) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    setLibOver(null);
+    useItem(id, spot);
+    return true;
+  };
+
+  const overItem = (key: string) => (event: DragEvent) => {
+    if (!fromLib(event)) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    setLibOver(key);
+    return true;
   };
 
   const previewAt = useRef({ id: "", t: 0 });
@@ -170,7 +257,6 @@ export function GraphEditor({
 
   const width = layout.width;
   const height = layout.height;
-  const canRecord = selectedBlock && selectedBlock.type !== "wait" && selectedBlock.type !== "tapHold";
 
   const tabs = (
     <SlideToggle
@@ -205,8 +291,11 @@ export function GraphEditor({
           />
         ) : null}
         <span className="graph-bar-space" />
-        <button type="button" className={macro?.busy ? "is-on" : "ghost"} disabled={!macro} onClick={() => macro && onChange({ ...macro, busy: !macro.busy })}>
-          Skip if running
+        {macro && usesReleaseStop(macro) ? (
+          <ReleaseField compact label="Macro on release" value={macro.releaseStop} onChange={(releaseStop) => onChange({ ...macro, releaseStop: releaseStop ?? "nextUp" })} />
+        ) : null}
+        <button type="button" className={macro?.busy ? "is-on" : "ghost"} disabled={!macro} aria-label="Skip if running" onClick={() => macro && onChange({ ...macro, busy: !macro.busy })}>
+          Skip
         </button>
         <button type="button" className="ghost is-danger" disabled={!macro} onClick={() => setWipe("macro")}>
           Delete
@@ -218,7 +307,7 @@ export function GraphEditor({
       {tab === "full" ? (
         <div className="graph-body is-full">
           <div
-            className="graph-canvas"
+            className={`graph-canvas${libOver === "canvas" ? " is-drop" : ""}`}
             onPointerDown={onCanvasDown}
             onPointerMove={onCanvasMove}
             onPointerUp={() => {
@@ -227,6 +316,9 @@ export function GraphEditor({
             onDragStart={(event) => {
               if (!(event.target as HTMLElement).closest(".graph-node")) event.preventDefault();
             }}
+            onDragOver={overItem("canvas")}
+            onDragLeave={() => setLibOver(null)}
+            onDrop={dropItem({ at: blocks.length })}
           >
             <div className="graph-world" style={{ transform: `translate(${pan.x}px, ${pan.y}px)`, width, height }}>
               <svg className="graph-wires" width={width} height={height} aria-hidden="true">
@@ -271,7 +363,7 @@ export function GraphEditor({
                   <button
                     type="button"
                     draggable={movable}
-                    className={`graph-node block-${node.kind}${picked === node.id ? " is-on" : ""}${flowNode === node.id ? " is-preview" : ""}${dragId === node.id ? " is-lift" : ""}`}
+                    className={`graph-node block-${node.kind}${picked === node.id ? " is-on" : ""}${flowNode === node.id ? " is-preview" : ""}${dragId === node.id ? " is-lift" : ""}${libOver === `node:${node.id}` ? " is-drop" : ""}`}
                     style={{ left: node.x, top: node.y, width: GRAPH_NODE_W, height: GRAPH_NODE_H }}
                     onPointerDown={(event) => {
                       event.stopPropagation();
@@ -297,21 +389,23 @@ export function GraphEditor({
                       setDropAt(null);
                     }}
                     onDragOver={(event) => {
+                      if (movable && overItem(`node:${node.id}`)(event)) return;
                       if (!movable || !dragId) return;
                       event.preventDefault();
                       setDropAt(index);
                     }}
-                    onDrop={movable ? dropOn(index) : undefined}
+                    onDragLeave={() => setLibOver(null)}
+                    onDrop={(event) => {
+                      if (!movable) return;
+                      if (dropItem({ block: node.id })(event)) return;
+                      dropOn(index)(event);
+                    }}
                   >
                     <strong>
-                      {node.kind === "heldPath" ? (
+                      {node.kind === "heldPath" || !item ? (
                         <>Held past {node.underMs} ms</>
                       ) : (
-                        <BlockLead
-                          type={node.kind as Block["type"]}
-                          trigger={trigger}
-                          beforeMs={item?.type === "ifShort" ? item.underMs : undefined}
-                        />
+                        <BlockLead block={item} trigger={trigger} />
                       )}
                     </strong>
                     {node.hint ? <em>{node.hint}</em> : null}
@@ -339,7 +433,7 @@ export function GraphEditor({
                 <button
                   key={`slot-${slot.index}`}
                   type="button"
-                  className={`graph-insert${dropAt === slot.index ? " is-hot" : ""}`}
+                  className={`graph-insert${dropAt === slot.index ? " is-hot" : ""}${libOver === `slot:${slot.index}` ? " is-drop" : ""}`}
                   style={{ left: slot.x, top: slot.y }}
                   aria-label={`Insert at step ${slot.index + 1}`}
                   onPointerDown={(event) => event.stopPropagation()}
@@ -348,11 +442,16 @@ export function GraphEditor({
                     setMenu((open) => (open === slot.index ? null : slot.index));
                   }}
                   onDragOver={(event) => {
+                    if (overItem(`slot:${slot.index}`)(event)) return;
                     if (!dragId) return;
                     event.preventDefault();
                     setDropAt(slot.index);
                   }}
-                  onDrop={dropOn(slot.index)}
+                  onDragLeave={() => setLibOver(null)}
+                  onDrop={(event) => {
+                    if (dropItem({ at: slot.index })(event)) return;
+                    dropOn(slot.index)(event);
+                  }}
                 >
                   +
                 </button>
@@ -366,13 +465,31 @@ export function GraphEditor({
                   }}
                   onPointerDown={(event) => event.stopPropagation()}
                 >
-                  {ADD.map((type) => {
-                    const pick = blockPick(type);
+                  {MENU_GROUPS.map((group) => {
+                    const items = LIBRARY.filter(
+                      (item) =>
+                        item.group === group &&
+                        (item.id !== "lastRecording" || !!macro?.recording) &&
+                        (item.id !== "scanWait" || (macro?.playMode !== "onRelease")),
+                    );
+                    if (!items.length) return null;
                     return (
-                      <button key={type} type="button" onClick={() => addAt(menu, type)}>
-                        <strong>{pick.name}</strong>
-                        <span>{pick.blurb}</span>
-                      </button>
+                      <Fragment key={group}>
+                        <p className="ctx-label">{group}</p>
+                        {items.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            title={item.detail}
+                            onClick={() => {
+                              setMenu(null);
+                              useItem(item.id, { at: menu }, true);
+                            }}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </Fragment>
                     );
                   })}
                 </div>
@@ -390,6 +507,7 @@ export function GraphEditor({
               onPick={previewNode}
             />
           ) : null}
+          <Library onPick={pickItem} hasRecording={!!macro?.recording} />
         </div>
       ) : (
         <div className="graph-body is-edit">
@@ -408,12 +526,8 @@ export function GraphEditor({
                 disabled={!!live && picked !== block.id}
                 onClick={() => setPicked(block.id)}
               >
-                <BlockLead
-                  type={block.type}
-                  trigger={trigger}
-                  beforeMs={block.type === "ifShort" ? block.underMs : undefined}
-                />
-                {block.type !== "wait" && block.type !== "tapHold" && block.steps.length ? <em>{block.steps.length}</em> : null}
+                <BlockLead block={block} trigger={trigger} />
+                {takesSteps(block) && block.steps.length ? <em>{block.steps.length}</em> : null}
               </button>
             ))}
           </nav>
@@ -422,11 +536,7 @@ export function GraphEditor({
               <>
                 <header className="graph-edit-head">
                   <h3>
-                    <BlockLead
-                      type={selectedBlock.type}
-                      trigger={trigger}
-                      beforeMs={selectedBlock.type === "ifShort" ? selectedBlock.underMs : undefined}
-                    />
+                    <BlockLead block={selectedBlock} trigger={trigger} />
                   </h3>
                   <div className="graph-edit-row">
                     <button
@@ -452,16 +562,21 @@ export function GraphEditor({
                   onChange={(next) => updateBlock(selectedBlock.id, next)}
                   onCapture={(slot) => setCapture({ slot })}
                 />
-                {canRecord ? (
+                {selectedBlock && takesSteps(selectedBlock) ? (
                   <RecordSurface
                     resetKey={`${macro?.id ?? ""}:${selectedBlock.id}`}
                     steps={selectedBlock.steps}
                     macros={others}
+                    allowScanWait={allowsScanWait(selectedBlock, macro?.playMode)}
                     onLive={setLive}
                     onSteps={(steps) => updateBlock(selectedBlock.id, { ...selectedBlock, steps })}
                     onCapture={(recording) => {
                       const extra = compileRecording(recording);
-                      updateBlock(selectedBlock.id, { ...selectedBlock, steps: [...selectedBlock.steps, ...extra] });
+                      commit(
+                        blocks.map((block) => (block.id === selectedBlock.id ? appendSteps(block, extra) : block)),
+                        selectedBlock.id,
+                        { recording },
+                      );
                     }}
                     onClear={() => updateBlock(selectedBlock.id, { ...selectedBlock, steps: [] })}
                   />
@@ -469,6 +584,7 @@ export function GraphEditor({
               </>
             ) : null}
           </div>
+          <Library onPick={pickItem} hasRecording={!!macro?.recording} />
         </div>
       )}
       {capture && macro ? (
@@ -491,7 +607,7 @@ export function GraphEditor({
               setCapture(null);
               return;
             }
-            if (selectedBlock.type !== "wait" && selectedBlock.type !== "tapHold" && capture.slot === "step") {
+            if (takesSteps(selectedBlock) && capture.slot === "step") {
               const kind = pickedKey.kind === "key" ? "key" : "mouse";
               updateBlock(selectedBlock.id, { ...selectedBlock, steps: [...selectedBlock.steps, ...pressPair(kind, pickedKey.button)] });
             }
@@ -500,6 +616,17 @@ export function GraphEditor({
             if (selectedBlock.type === "tapHold" && capture.slot === "watch" && !selectedBlock.watch.includes(pickedKey.button))
               updateBlock(selectedBlock.id, { ...selectedBlock, watch: [...selectedBlock.watch, pickedKey.button] });
             setCapture(null);
+          }}
+        />
+      ) : null}
+      {libPick ? (
+        <Capture
+          title={libraryItem(libPick.id)?.label ?? ""}
+          onCancel={() => setLibPick(null)}
+          onPick={(pickedKey) => {
+            const kind = pickedKey.kind === "key" ? "key" : "mouse";
+            addSteps(librarySteps(matchInput(libPick.id, kind), pickedKey.button), libPick.spot);
+            setLibPick(null);
           }}
         />
       ) : null}

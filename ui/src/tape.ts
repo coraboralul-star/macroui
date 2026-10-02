@@ -47,7 +47,7 @@ export function segment(steps: Step[]): TapeNode[] {
         action: step.action,
         holdMs: step.holdMs,
       });
-    } else if (step.type === "wait") nodes.push({ type: "wait", index, ms: step.ms });
+    } else if (step.type === "wait" || step.type === "scanWait") nodes.push({ type: "wait", index, ms: step.ms });
     else if (step.type === "move") nodes.push({ type: "move", index, x: step.x, y: step.y });
     else if (step.type === "goto") nodes.push({ type: "goto", index, x: step.x, y: step.y, ms: step.ms ?? 15, where: normalizeGotoWhere(step.where) });
     else if (step.type === "run") nodes.push({ type: "run", index, macroId: step.macroId });

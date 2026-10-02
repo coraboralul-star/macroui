@@ -59,7 +59,7 @@ function same(a: InputRef, b: InputRef) {
 function stepCues(steps: Step[]): Cue[] {
   const cues: Cue[] = [];
   for (const step of steps) {
-    if (step.type === "wait") {
+    if (step.type === "wait" || step.type === "scanWait") {
       cues.push({ type: "wait", ...span(waitMs(step.ms), realMs(step.ms)) });
       continue;
     }

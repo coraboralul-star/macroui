@@ -442,6 +442,22 @@ button.stop {
   border-radius: 4px;
 }
 
+.field-menu.is-portal {
+  position: fixed;
+  z-index: 80;
+  top: auto;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 6px 10px;
+  scrollbar-gutter: stable;
+}
+
 .field-menu button {
   width: 100%;
   text-align: left;
@@ -608,7 +624,7 @@ button.stop {
 .fine .grow { flex: 1; min-width: 180px; }
 .fine .grow input { width: 100%; }
 .sheet .check, .fine .check { padding: 0; font-size: 0.82rem; }
-.editor-head { position: relative; }
+.editor-head { position: relative; flex: none; }
 .editor-head::after {
   content: "";
   position: absolute;
@@ -1026,10 +1042,12 @@ footer .top-actions {
   position: fixed;
   z-index: 45;
   width: 260px;
+  max-height: calc(100vh - 24px);
   padding: 10px;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  overflow: visible;
   background: #1a1714;
   border: 1px solid #4a4034;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
@@ -1180,6 +1198,12 @@ footer .top-actions {
   font-weight: 650;
   color: #fff;
 }
+.confirm-note {
+  color: #c8c8c8;
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
 .capture-card p {
   margin: 0;
   font-family: "Outfit", "Segoe UI", sans-serif;
@@ -1216,7 +1240,7 @@ footer .top-actions {
   border: 0;
 }
 .ctx button:hover { background: #4a4034; }
-.editor.timeline { height: 100%; }
+.editor.timeline { height: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .editor.timeline .deck,
 .editor.timeline .tape-editor { flex: 1; min-height: 0; }
 .tape-editor { display: flex; flex-direction: column; min-height: 180px; }
@@ -3128,10 +3152,66 @@ button.ghost.is-danger:hover:not(:disabled) {
 .brief-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex: none;
+  flex-wrap: nowrap;
+  gap: 12px;
+  min-height: 32px;
+}
+
+.brief-id {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.brief-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 
-.brief-head .name { flex: 1; }
+.brief-head .rel-field.is-bar {
+  margin-left: 0;
+}
+
+.brief-head .name {
+  flex: 1 1 auto;
+  min-width: 6rem;
+  height: 32px;
+  margin: 0;
+  padding: 0 4px;
+  line-height: 32px;
+  font-size: 1rem;
+}
+
+.studio.is-page .brief-head button,
+.studio.is-page .brief-head .studio-new,
+.studio.is-page .brief-head .studio-new.is-primary,
+.studio.is-page .editor-head > button {
+  margin: 0;
+  flex: none;
+  align-self: center;
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  padding: 0 12px;
+  line-height: 30px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  box-sizing: border-box;
+  box-shadow: none;
+}
+
+.brief > .rel-field {
+  max-width: 16rem;
+}
 
 .brief-head.is-simple {
   justify-content: flex-end;
@@ -3265,8 +3345,11 @@ button.ghost.is-danger:hover:not(:disabled) {
 .graph-bar {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 8px;
+  min-height: 52px;
   padding: 0 14px;
+  overflow: visible;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
@@ -3588,6 +3671,29 @@ button.ghost.is-danger:hover:not(:disabled) {
   width: 4.2rem;
 }
 
+.repress-lock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.repress-lock .field-select {
+  width: 8.2rem;
+}
+
+.repress-lock label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.repress-lock input:not([type="checkbox"]) {
+  width: 4.2rem;
+}
+
 .hint-wrap {
   position: relative;
   display: inline-flex;
@@ -3669,6 +3775,15 @@ button.ghost.is-danger:hover:not(:disabled) {
   font-size: 0.6rem;
 }
 
+.ev small input {
+  width: 2.6rem;
+  min-width: 0;
+  padding: 0 2px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+}
+
 .ev-act {
   box-sizing: border-box;
   width: 3.5rem;
@@ -3722,6 +3837,10 @@ button.ghost.is-danger:hover:not(:disabled) {
   min-width: 0;
   padding: 0.08rem 0.2rem;
   font-size: 0.68rem;
+}
+
+input.ev-delay {
+  width: 3.6rem;
 }
 
 .ev-plus {
@@ -5005,6 +5124,10 @@ button.ghost.is-danger:hover:not(:disabled) {
   width: auto;
 }
 
+.block-fields .rel-field {
+  min-width: 11rem;
+}
+
 .mute-row {
   position: relative;
   display: flex;
@@ -5532,7 +5655,7 @@ button.ghost.is-danger:hover:not(:disabled) {
   border-right: 1px solid var(--line);
 }
 
-.graph-edit-list button {
+.graph-edit-list > button {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -5546,13 +5669,13 @@ button.ghost.is-danger:hover:not(:disabled) {
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.28);
 }
 
-.graph-edit-list button em {
+.graph-edit-list > button em {
   color: #9a9a9a;
   font-style: normal;
   font-size: 0.72rem;
 }
 
-.graph-edit-list button.is-on {
+.graph-edit-list > button.is-on {
   border-color: var(--accent);
   box-shadow: var(--glow);
 }
@@ -5610,6 +5733,44 @@ button.ghost.is-danger:hover:not(:disabled) {
   color: #fff;
 }
 
+.block-fields input[type="checkbox"],
+.graph-edit .block-fields input[type="checkbox"],
+.graph-inspect .block-fields input[type="checkbox"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  max-width: 16px;
+  margin: 0;
+  padding: 0;
+  flex: none;
+  cursor: pointer;
+  border: 1px solid #5a5a5a;
+  border-radius: 4px;
+  background: #1c1c20;
+  box-shadow: none;
+  display: grid;
+  place-items: center;
+}
+
+.block-fields input[type="checkbox"]:checked,
+.graph-edit .block-fields input[type="checkbox"]:checked,
+.graph-inspect .block-fields input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.block-fields input[type="checkbox"]:checked::after,
+.graph-edit .block-fields input[type="checkbox"]:checked::after,
+.graph-inspect .block-fields input[type="checkbox"]:checked::after {
+  content: "";
+  width: 8px;
+  height: 4px;
+  border-left: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+  transform: rotate(-45deg) translate(0, -1px);
+}
+
 .graph-side-actions {
   padding: 0 16px 16px;
 }
@@ -5651,7 +5812,7 @@ button.ghost.is-danger:hover:not(:disabled) {
   width: auto;
 }
 
-.graph-edit-list button.graph-assign {
+.graph-edit-list > button.graph-assign {
   flex-direction: row;
   margin-bottom: 6px;
 }
@@ -5681,6 +5842,93 @@ button.ghost.is-danger:hover:not(:disabled) {
 .graph-assign span {
   font-size: 0.78rem;
   font-weight: 650;
+}
+
+.graph-release {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 0 8px;
+}
+
+.rel-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: none;
+  min-width: 0;
+}
+
+.rel-field .field-select,
+.rel-field .field-select-btn {
+  width: 100%;
+}
+
+.rel-field .ctx-label {
+  margin: 0;
+}
+
+.rel-field.is-bar {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+}
+
+.rel-field.is-bar > span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rel-field.is-bar .field-select {
+  width: 9.4rem;
+}
+
+.rel-field.is-bar .field-select-btn {
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  padding: 0 10px;
+}
+
+.brief-head > button,
+.brief-head .brief-actions > button,
+.brief-head .studio-new,
+.brief-head .studio-new.is-primary,
+.editor-head > button,
+.graph-bar > button {
+  flex: none;
+  align-self: center;
+  margin: 0;
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  padding: 0 12px;
+  line-height: 30px;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.rel-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.rel-pick button {
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.graph-bar .rel-pick,
+.graph-bar .rel-field {
+  flex: none;
 }
 
 .graph-flow.is-dock {
@@ -5718,7 +5966,7 @@ button.ghost.is-danger:hover:not(:disabled) {
   min-height: 0;
 }
 
-.graph-edit-list button em {
+.graph-edit-list > button em {
   margin-left: auto;
 }
 
@@ -5760,3 +6008,201 @@ button.ghost.is-danger:hover:not(:disabled) {
 }
 
 .fault button:hover { color: var(--text); }
+
+/* Library. The right-hand catalog of functions that feeds every insert menu. */
+.lib {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+}
+
+.lib-head {
+  flex: none;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.lib-find {
+  width: 100%;
+  min-height: 26px;
+  padding: 4px 8px;
+  background: #1a1a1a;
+  border: 1px solid #2c2c2c;
+  border-radius: 6px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-family: "Outfit", "Segoe UI", sans-serif;
+  font-size: 0.76rem;
+}
+
+.lib-find::placeholder { color: #7a7a7a; }
+.lib-find:focus { border-color: var(--accent); outline: none; }
+
+.lib-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+  scrollbar-color: #3a3a42 #161616;
+}
+
+.lib-group { display: flex; flex-direction: column; }
+.lib-group + .lib-group { margin-top: 2px; }
+
+.lib-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 0;
+  padding: 5px 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: #8a8a8a;
+  font-family: "Outfit", "Segoe UI", sans-serif;
+  font-size: 0.62rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+.lib-group-head:hover { color: var(--text); }
+
+.lib-group-head i {
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+}
+
+.lib-group.is-open .lib-group-head i { transform: rotate(90deg); }
+
+.lib-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 4px;
+}
+
+.lib-item {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  padding: 5px 8px;
+  background: #1a1a1a;
+  border: 1px solid #2c2c2c;
+  border-radius: 6px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font-family: "Outfit", "Segoe UI", sans-serif;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: grab;
+}
+
+.lib-item.is-block { border-left: 2px solid var(--accent-dim); }
+.lib-item:hover:not(:disabled) { border-color: var(--accent); }
+.lib-item:active:not(:disabled) { cursor: grabbing; }
+.lib-item:disabled { opacity: 0.38; cursor: default; }
+
+.lib-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding-bottom: 4px;
+}
+
+.lib-chip {
+  min-height: 22px;
+  padding: 0 7px;
+  background: var(--key);
+  border: 1px solid #2c2c2c;
+  border-radius: 5px;
+  box-shadow: none;
+  color: #c8c8c8;
+  font-family: "Outfit", "Segoe UI", sans-serif;
+  font-size: 0.7rem;
+  font-weight: 650;
+  cursor: grab;
+}
+
+.lib-chip:hover { border-color: var(--accent); color: #fff; }
+.lib-chip:active { cursor: grabbing; }
+
+.lib-empty {
+  margin: 8px 6px;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.graph-body.is-full {
+  grid-template-columns: minmax(0, 1fr) 208px;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.graph-body.is-full > .graph-canvas { grid-column: 1; grid-row: 1; }
+.graph-body.is-full > .kb-dock { grid-column: 1; grid-row: 2; }
+.graph-body.is-full > .lib { grid-column: 2; grid-row: 1 / -1; }
+.graph-body.is-edit { grid-template-columns: 220px minmax(0, 1fr) 208px; }
+
+.advanced {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 208px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px 0;
+  overflow: hidden;
+}
+
+.advanced > .adv-head { grid-column: 1 / -1; }
+.advanced > .adv-canvas { grid-column: 1; min-height: 0; overflow: auto; }
+.advanced > .lib { grid-column: 2; grid-row: 2; }
+
+/* The insert menus carry the whole catalog now, so they run at Library density. */
+.graph-add-menu,
+.adv-menu {
+  max-height: min(560px, 74vh);
+}
+
+.graph-add-menu button,
+.adv-menu button {
+  min-height: 0;
+  padding: 5px 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+/* Drop targets while a library function is in the air. */
+.graph-canvas.is-drop { box-shadow: inset 0 0 0 2px var(--accent); }
+
+.graph-node.is-drop {
+  border-color: var(--accent);
+  box-shadow: var(--glow);
+}
+
+.graph-insert.is-drop {
+  border-color: var(--accent);
+  box-shadow: var(--glow);
+  transform: scale(1.12);
+}
+
+/* Block titles read as one statement, with the keyword carrying the accent. */
+.block-lead {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.block-lead > i {
+  color: var(--accent);
+  font-style: normal;
+  font-weight: 700;
+}
