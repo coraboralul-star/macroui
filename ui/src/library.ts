@@ -40,6 +40,7 @@ export const LIBRARY: LibraryItem[] = [
   { id: "runMacro", group: "Repeat & Run", label: "Run Macro", detail: "Start another macro", kind: "step", create: () => [blankStep("run")] },
   { id: "whileHeld", group: "Blocks", label: "While Held", detail: "Loops while the trigger is down", kind: "block", block: "whileHeld" },
   { id: "ifReleasedEarly", group: "Blocks", label: "If Released Early", detail: "Short tap path", kind: "block", block: "ifShort" },
+  { id: "swapAfter", group: "Blocks", label: "Swap After", detail: "Switches to this loop if you keep holding past a time", kind: "block", block: "swapAfter" },
   { id: "afterRelease", group: "Blocks", label: "After Release", detail: "Runs once you let go", kind: "block", block: "then" },
   { id: "repeatBlock", group: "Blocks", label: "Repeat Block", detail: "Runs a set number of times", kind: "block", block: "repeat" },
   { id: "waitBlock", group: "Blocks", label: "Wait Block", detail: "Pause before the next block", kind: "block", block: "wait" },

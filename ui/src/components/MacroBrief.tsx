@@ -97,6 +97,9 @@ function BlockBody({ block }: { block: Block }) {
   if (block.type === "ifShort") {
     return <SendBody steps={block.steps} after={`${block.minCycles} times`} />;
   }
+  if (block.type === "swapAfter") {
+    return <SendBody steps={block.steps} after={`until you let go`} />;
+  }
   if (block.type === "then") {
     return <SendBody steps={block.steps} after={block.forMs ? `for ${block.forMs} ms` : undefined} />;
   }

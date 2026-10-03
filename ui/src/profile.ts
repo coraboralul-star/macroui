@@ -69,6 +69,7 @@ export type Trigger = { kind: TriggerKind; button: string };
 export type Block =
   | { id: string; type: "whileHeld"; steps: Step[]; mute: string[]; releaseStop?: ReleaseStop }
   | { id: string; type: "ifShort"; underMs: number; minCycles: number; steps: Step[] }
+  | { id: string; type: "swapAfter"; afterMs: number; steps: Step[]; mute: string[]; releaseStop?: ReleaseStop }
   | { id: string; type: "then"; forMs: number; steps: Step[] }
   | { id: string; type: "repeat"; count: number; steps: Step[]; releaseStop?: ReleaseStop }
   | { id: string; type: "wait"; ms: number }
@@ -449,6 +450,7 @@ function normalizeBlocks(value: unknown): Block[] {
       steps?: Step[];
       underMs?: number;
       minCycles?: number;
+      afterMs?: number;
       forMs?: number;
       count?: number;
       ms?: number;
@@ -473,6 +475,10 @@ function normalizeBlocks(value: unknown): Block[] {
       const under = Number(raw.underMs);
       const cycles = Number(raw.minCycles);
       return [{ id, type: "ifShort", underMs: Number.isFinite(under) && under >= 0 ? Math.round(under) : 150, minCycles: Number.isFinite(cycles) && cycles >= 0 ? Math.round(cycles) : 3, steps }];
+    }
+    if (raw.type === "swapAfter") {
+      const after = Number(raw.afterMs);
+      return [{ id, type: "swapAfter", afterMs: Number.isFinite(after) && after >= 0 ? Math.round(after) : 150, steps, mute: muteIds(raw.mute), ...(releaseStop ? { releaseStop } : {}) }];
     }
     if (raw.type === "then") {
       const forMs = Number(raw.forMs);

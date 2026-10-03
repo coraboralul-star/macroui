@@ -20,6 +20,13 @@ export function BlockLead({ block, trigger }: { block: Block | "trigger"; trigge
       </span>
     );
   }
+  if (block.type === "swapAfter") {
+    return (
+      <span className="block-lead">
+        <i>If</i> {face} held past {block.afterMs} ms
+      </span>
+    );
+  }
   if (block.type === "then") {
     return (
       <span className="block-lead">

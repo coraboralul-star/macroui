@@ -26,8 +26,6 @@ ListLines(false)
 KeyHistory(0)
 InstallKeybdHook()
 InstallPhysical()
-DllCall("Winmm.dll\timeBeginPeriod", "UInt", 1)
-ProcessSetPriority("AboveNormal")
 OnExit(OnEngineExit)
 Engine.LoadDisk()
 Engine.OpenPipe()
@@ -45,7 +43,8 @@ OnEngineExit(*) {
         DllCall("UnhookWindowsHookEx", "Ptr", Engine.hKeyHook)
     if Engine.hMouseHook
         DllCall("UnhookWindowsHookEx", "Ptr", Engine.hMouseHook)
-    DllCall("Winmm.dll\timeEndPeriod", "UInt", 1)
+    if Engine.periodOn
+        DllCall("Winmm.dll\timeEndPeriod", "UInt", 1)
     if Engine.hTimer
         DllCall("CloseHandle", "Ptr", Engine.hTimer)
     if Engine.hPipe
@@ -273,21 +272,35 @@ SideKey(vk, scan, flags) {
 
 CompileBlocks(blocks) {
     steps := []
-    for block in blocks {
-        if !(block is Map)
+    if !(blocks is Array)
+        return steps
+    n := blocks.Length
+    i := 1
+    while (i <= n) {
+        block := blocks[i]
+        if !(block is Map) {
+            i++
             continue
+        }
         kind := String(Field(block, "type", ""))
         child := Field(block, "steps", [])
         if !(child is Array)
             child := []
+        swapMs := NextSwapMs(blocks, i)
         if (kind = "whileHeld") {
             mute := Field(block, "mute", [])
             if !(mute is Array)
                 mute := []
-            steps.Push(Map("type", "holdLoop", "steps", child, "mute", mute, "releaseStop", BlockReleaseStop(block)))
+            steps.Push(Map("type", "holdLoop", "steps", child, "mute", mute, "releaseStop", BlockReleaseStop(block), "swapAfterMs", swapMs))
         }
         else if (kind = "ifShort")
             steps.Push(Map("type", "ifShort", "underMs", AsNum(Field(block, "underMs", 150), 150), "minCycles", AsNum(Field(block, "minCycles", 3), 3), "steps", child))
+        else if (kind = "swapAfter") {
+            mute := Field(block, "mute", [])
+            if !(mute is Array)
+                mute := []
+            steps.Push(Map("type", "swapLoop", "afterMs", AsNum(Field(block, "afterMs", 150), 150), "steps", child, "mute", mute, "releaseStop", BlockReleaseStop(block), "swapAfterMs", swapMs))
+        }
         else if (kind = "then")
             steps.Push(Map("type", "burst", "forMs", AsNum(Field(block, "forMs", 0), 0), "steps", child))
         else if (kind = "repeat")
@@ -316,16 +329,31 @@ CompileBlocks(blocks) {
             }
             steps.Push(Map("type", "scanWait", "ms", AsNum(Field(block, "holdMs", 200), 200)))
         }
+        i++
     }
     return steps
+}
+
+NextSwapMs(blocks, i) {
+    if (i >= blocks.Length)
+        return 0
+    nxt := blocks[i + 1]
+    if !(nxt is Map)
+        return 0
+    if (String(Field(nxt, "type", "")) != "swapAfter")
+        return 0
+    return AsNum(Field(nxt, "afterMs", 150), 150)
 }
 
 HasHoldLoop(steps) {
     if !(steps is Array)
         return false
     for step in steps {
-        if (step is Map && String(Field(step, "type", "")) = "holdLoop")
-            return true
+        if (step is Map) {
+            kind := String(Field(step, "type", ""))
+            if (kind = "holdLoop" || kind = "swapLoop")
+                return true
+        }
     }
     return false
 }
@@ -387,6 +415,7 @@ class Runner {
             this.trigger := NormKey(Field(trig, "button", ""))
         this.cycles := 0
         this.heldMs := 0
+        this.tookShort := false
         this.startedAt := -1
         repeats := 1
         if (mode = "repeat")
@@ -538,8 +567,16 @@ class Runner {
                         continue
                     }
                     if (this.trigger != "" && Engine.KeyDown(this.trigger)) {
+                        swapAt := frame.HasProp("swapAfterMs") ? AsNum(frame.swapAfterMs, 0) : 0
+                        if (swapAt > 0 && this.heldMs >= swapAt) {
+                            this.ReleaseFrameMute(frame)
+                            if this.done
+                                return
+                            this.stack.Pop()
+                            continue
+                        }
                         if (steps.Length = 0) {
-                            this.waitUntil := now + 1
+                            this.ArmWait(now,1)
                             return
                         }
                         frame.index := 1
@@ -586,13 +623,17 @@ class Runner {
                 return
         }
         if (this.waitUntil = 0)
-            this.waitUntil := now + 1
+            this.ArmWait(now,1)
     }
 
     Exec(step, now) {
         if !(step is Map)
             return ""
         kind := String(Field(step, "type", ""))
+        ; A short-tap branch is exclusive of later Run-once / hold / wait
+        ; blocks. After-release (burst) still runs after both paths.
+        if (this.tookShort && this.stack.Length = 1 && kind != "burst" && kind != "ifShort")
+            return ""
         if (kind = "wait" || kind = "scanWait") {
             if (kind = "scanWait") {
                 if (this.trigger != "" && !Engine.FingerDown(this.trigger)) {
@@ -603,8 +644,7 @@ class Runner {
             } else
                 this.scanWait := false
             ms := AsNum(Field(step, "ms", 0), 0) / this.speed
-            this.waitUntil := now + Max(1, Round(ms))
-            return "wait"
+            return this.ArmWait(now,ms)
         }
         if (kind = "key" || kind = "mouse") {
             key := NormKey(kind = "key" ? Field(step, "key", "") : Field(step, "button", ""))
@@ -630,8 +670,7 @@ class Runner {
                 ; A down and up in the same tick would never be sent. Hold it for one tick.
                 if just {
                     this.pulses[key] := now + 1
-                    this.waitUntil := now + 1
-                    return "wait"
+                    return this.ArmWait(now,1)
                 }
                 if (this.stopping && this.StopMode() = "nextUp") {
                     this.MarkDone()
@@ -672,10 +711,8 @@ class Runner {
             this.gotoX := sx
             this.gotoY := sy
             Engine.RememberMouse(sx, sy)
-            if (ms > 0) {
-                this.waitUntil := now + Max(1, Round(ms))
-                return "wait"
-            }
+            if (ms > 0)
+                return this.ArmWait(now,ms)
             return ""
         }
         if (kind = "repeat") {
@@ -717,7 +754,7 @@ class Runner {
                 this.holds[key] := true
             if (this.trigger != "" && this.trigger != key)
                 this.holds[this.trigger] := true
-            this.waitUntil := now + 5
+            this.ArmWait(now,5)
             return "wait"
         }
         if (kind = "holdLoop") {
@@ -725,32 +762,35 @@ class Runner {
                 return ""
             if (this.trigger != "" && Engine.physDown.Has(this.trigger) && !Engine.KeyDown(this.trigger))
                 return ""
-            child := Field(step, "steps", [])
-            if !(child is Array)
-                child := []
-            mute := Field(step, "mute", [])
-            if !(mute is Array)
-                mute := []
-            clean := []
-            for item in mute {
-                name := String(item)
-                if (name != "" && name != this.id)
-                    clean.Push(name)
+            this.PushHoldFrame(step)
+            return ""
+        }
+        if (kind = "swapLoop") {
+            if this.stopping
+                return ""
+            if (this.trigger != "" && Engine.physDown.Has(this.trigger) && !Engine.KeyDown(this.trigger))
+                return ""
+            after := AsNum(Field(step, "afterMs", 150), 150)
+            still := this.trigger != "" && Engine.KeyDown(this.trigger)
+            if !still
+                return ""
+            if (this.heldMs < after) {
+                this.ArmWait(now,1)
+                return "again"
             }
-            frame := {steps: child, index: 1, repeatsLeft: 1, holdLoop: true, mute: clean, muteOn: false, releaseStop: String(Field(step, "releaseStop", ""))}
-            this.stack.Push(frame)
-            this.ArmMute(frame)
+            this.PushHoldFrame(step)
             return ""
         }
         if (kind = "ifShort") {
             under := AsNum(Field(step, "underMs", 150), 150)
             still := this.trigger != "" && Engine.KeyDown(this.trigger)
             if (still && this.heldMs < under) {
-                this.waitUntil := now + 1
+                this.ArmWait(now,1)
                 return "again"
             }
             if (this.heldMs >= under)
                 return ""
+            this.tookShort := true
             left := Floor(AsNum(Field(step, "minCycles", 0), 0)) - this.cycles
             if (left < 1)
                 return ""
@@ -780,6 +820,29 @@ class Runner {
         return ""
     }
 
+    PushHoldFrame(step) {
+        child := Field(step, "steps", [])
+        if !(child is Array)
+            child := []
+        mute := Field(step, "mute", [])
+        if !(mute is Array)
+            mute := []
+        clean := []
+        for item in mute {
+            name := String(item)
+            if (name != "" && name != this.id)
+                clean.Push(name)
+        }
+        frame := {steps: child, index: 1, repeatsLeft: 1, holdLoop: true, mute: clean, muteOn: false, releaseStop: String(Field(step, "releaseStop", "")), swapAfterMs: AsNum(Field(step, "swapAfterMs", 0), 0)}
+        this.stack.Push(frame)
+        this.ArmMute(frame)
+    }
+
+    ArmWait(now, ms) {
+        this.waitUntil := now + Max(1, Round(ms))
+        return "wait"
+    }
+
     DropHold(key) {
         if (key = "")
             return
@@ -787,6 +850,23 @@ class Runner {
             this.holds.Delete(key)
         if this.pulses.Has(key)
             this.pulses.Delete(key)
+    }
+
+    HoldShouldSwap(now) {
+        if this.stack.Length = 0
+            return false
+        frame := this.stack[-1]
+        if !(frame is Object)
+            return false
+        if !(frame.HasProp("holdLoop") && frame.holdLoop)
+            return false
+        swapAt := frame.HasProp("swapAfterMs") ? AsNum(frame.swapAfterMs, 0) : 0
+        if (swapAt <= 0)
+            return false
+        if (this.startedAt < 0)
+            return false
+        this.heldMs := now - this.startedAt
+        return this.trigger != "" && Engine.KeyDown(this.trigger) && this.heldMs >= swapAt
     }
 
     HoldShouldStop() {
@@ -823,7 +903,7 @@ class Runner {
             if (this.trigger != key)
                 this.DropHold(this.trigger)
             frame.edgePhase := "gap"
-            this.waitUntil := now + Max(1, Round(frame.edgeGap / this.speed))
+            this.ArmWait(now,frame.edgeGap / this.speed)
             return
         }
         if (frame.edgePhase = "gap") {
@@ -846,11 +926,11 @@ class Runner {
             frame.edgePrev[name] := isDown
         }
         if (frame.edgePhase = "arm") {
-            this.waitUntil := now + Max(1, Round(frame.edgeArm / this.speed))
+            this.ArmWait(now,frame.edgeArm / this.speed)
             return
         }
         this.RepeatHold(frame, now)
-        this.waitUntil := now + 5
+        this.ArmWait(now,5)
     }
 
     AcceptWatch(frame, name, now) {
@@ -935,16 +1015,25 @@ class Engine {
     static hTimer := 0
     static swallowKnown := false
     static swallowOn := true
+    static frontExe := ""
+    static frontKnown := false
+    static focusCache := Map()
+    static hooksDirty := true
+    static hookFold := Map()
+    static lastSig := ""
+    static periodOn := false
+    static delayMs := -1
+    static repeatMs := -1
+    static macroTapHold := Map()
+    static macroHoldRel := Map()
 
     static Loop() {
         while true {
-            Critical("On")
             this.busy := true
             try this.Tick()
             catch as err
                 this.Log(err.Message)
             this.busy := false
-            Critical("Off")
             this.Pace()
         }
     }
@@ -957,9 +1046,6 @@ class Engine {
         folded := StrLower(name)
         if (folded != name)
             this.physDown[folded] := down
-        for key, _ in this.hooks
-            if (StrLower(key) = folded)
-                this.physDown[key] := down
     }
 
     static BuildVkMap() {
@@ -1037,10 +1123,9 @@ class Engine {
         if this.hooks.Has(name)
             return true
         folded := StrLower(String(name))
-        for key, _ in this.hooks
-            if (StrLower(key) = folded)
-                return true
-        return false
+        if this.hookFold.Has(folded)
+            return true
+        return this.hooks.Has(folded)
     }
 
     static ReadMouse(which, info) {
@@ -1087,10 +1172,19 @@ class Engine {
         return (counter - this.qpcOrigin) * 1000 / this.qpcFreq
     }
 
-    ; Block without spinning, then the last 2 ms are a short spin so the deadline is not late.
-    static HrtWait(ms) {
-        if (ms < 0.3)
+    ; Block without spinning. Always pump queued input so low-level hooks
+    ; cannot sit unprocessed and then fire in a burst. wakeOnInput returns
+    ; as soon as a key/button message arrives. Mouse-move is ignored so
+    ; aiming does not keep this thread awake.
+    static Pump() {
+        Sleep(0)
+    }
+
+    static HrtWait(ms, wakeOnInput := false) {
+        if (ms < 0.3) {
+            this.Pump()
             return
+        }
         if !this.hTimer
             this.hTimer := DllCall("CreateWaitableTimerExW", "Ptr", 0, "Ptr", 0, "UInt", 2, "UInt", 0x1F0003, "Ptr")
         if !this.hTimer {
@@ -1100,16 +1194,22 @@ class Engine {
         handles := Buffer(A_PtrSize, 0)
         NumPut("Ptr", this.hTimer, handles)
         deadline := this.Now() + ms
+        ; QS_ALLINPUT minus QS_MOUSEMOVE.
+        wake := 0x04FD
         loop {
             remain := deadline - this.Now()
-            if (remain < 0.3)
+            if (remain < 0.3) {
+                this.Pump()
                 return
+            }
             due := -Max(1, Round(remain * 10000))
             DllCall("SetWaitableTimer", "Ptr", this.hTimer, "Int64*", &due, "Int", 0, "Ptr", 0, "Ptr", 0, "Int", 0)
-            result := DllCall("MsgWaitForMultipleObjects", "UInt", 1, "Ptr", handles.Ptr, "Int", 0, "UInt", Max(1, Round(remain) + 2), "UInt", 0x04FF, "UInt")
-            if (result = 1)
-                Sleep(0)
-            else
+            result := DllCall("MsgWaitForMultipleObjects", "UInt", 1, "Ptr", handles.Ptr, "Int", 0, "UInt", Max(1, Round(remain) + 2), "UInt", wake, "UInt")
+            this.Pump()
+            if (result = 1) {
+                if wakeOnInput
+                    return
+            } else
                 return
         }
     }
@@ -1120,7 +1220,7 @@ class Engine {
             if r.done
                 continue
             if (r.waitUntil = 0 || r.waitUntil <= now)
-                return now + 1
+                return now
             if (r.waitUntil < soon)
                 soon := r.waitUntil
             for k, at in r.pulses
@@ -1128,59 +1228,69 @@ class Engine {
                     soon := at
         }
         if this.pending.Length
-            return now + 1
+            return now
         return soon
     }
 
+    static NeedFineClock() {
+        if this.pending.Length
+            return true
+        for r in this.runners {
+            if !r.done
+                return true
+        }
+        return false
+    }
+
+    static SyncPeriod() {
+        want := this.NeedFineClock()
+        if (want = this.periodOn)
+            return
+        if want
+            DllCall("Winmm.dll\timeBeginPeriod", "UInt", 1)
+        else
+            DllCall("Winmm.dll\timeEndPeriod", "UInt", 1)
+        this.periodOn := want
+    }
+
     static Pace() {
+        this.SyncPeriod()
         if (!this.armed && this.runners.Length = 0 && this.pending.Length = 0) {
-            Sleep(10)
+            this.HrtWait(16)
             return
         }
         if (this.runners.Length = 0 && this.pending.Length = 0) {
-            Sleep(4)
-            return
-        }
-        ; While held and toggle have to see the real key-up. A blocking wait
-        ; stalls the keyboard hook, so those modes only sleep 1 ms at a time.
-        if this.WatchingHold() {
-            soon := this.Soonest(this.Now())
-            remain := soon - this.Now()
-            if (remain > 1.5) {
-                this.HrtWait(Min(1, remain - 0.5))
-                Sleep(0)
-                return
-            }
-            while (this.Now() < soon)
-                Sleep(0)
+            this.HrtWait(8, true)
             return
         }
         soon := this.Soonest(this.Now())
         remain := soon - this.Now()
-        if (remain > 2) {
-            slice := remain - 2
-            if (slice > 5)
-                slice := 5
-            this.HrtWait(slice)
-            Sleep(0)
-            return
-        }
-        while (this.Now() < soon)
-            Sleep(0)
+        ; Never busy-spin. An overdue wait still has to pump hooks, or Windows
+        ; queues them and they all fire at once after the stall.
+        if (remain < 1)
+            remain := 1
+        if (remain > 8)
+            remain := 8
+        this.HrtWait(remain, true)
     }
 
     static Tick() {
+        this.frontKnown := false
+        this.focusCache := Map()
         now := this.Now()
         this.sendNow := Map()
         this.PollPipe()
         this.PollPanic()
-        this.ReapOrphans()
         this.SyncSwallow()
-        this.SyncHooks()
+        if this.hooksDirty {
+            this.SyncHooks()
+            this.hooksDirty := false
+        }
         if this.armed
             this.PollTriggers()
         this.RemoveDone()
         this.FlushPending()
+        now := this.Now()
         for r in this.runners
             r.Advance(now)
         this.FlushPending()
@@ -1200,7 +1310,11 @@ class Engine {
         if !(this.profile is Map)
             this.profile := Map()
         this.SeedTriggers()
+        this.ReapOrphans()
+        this.hooksDirty := true
         this.SyncHooks()
+        this.hooksDirty := false
+        this.winAt := -100000
         this.Broadcast(true)
     }
 
@@ -1208,10 +1322,13 @@ class Engine {
         this.armed := on
         if !on
             this.StopAll()
+        this.hooksDirty := true
         this.SyncHooks()
+        this.hooksDirty := false
         this.SeedTriggers()
         this.RemoveDone()
         this.Publish(this.Now())
+        this.winAt := -100000
         this.Broadcast(true)
     }
 
@@ -1564,10 +1681,13 @@ class Engine {
             exe := String(Field(this.profile, "focusExe", ""))
         if (exe = "")
             return true
+        key := StrLower(exe)
+        if this.focusCache.Has(key)
+            return this.focusCache[key]
         active := this.ActiveExe()
-        if (active = "")
-            return false
-        return this.FocusMatch(exe, active)
+        ok := (active != "" && this.FocusMatch(exe, active))
+        this.focusCache[key] := ok
+        return ok
     }
 
     static ExeStem(name) {
@@ -1591,16 +1711,20 @@ class Engine {
     }
 
     static ActiveExe() {
+        if this.frontKnown
+            return this.frontExe
         hwnd := DllCall("GetForegroundWindow", "Ptr")
-        if !hwnd
-            return ""
         exe := ""
-        try exe := WinGetProcessName(hwnd)
-        catch
-            exe := ""
-        if (exe != "")
-            return exe
-        return this.ExeFromHwnd(hwnd)
+        if hwnd {
+            try exe := WinGetProcessName(hwnd)
+            catch
+                exe := ""
+            if (exe = "")
+                exe := this.ExeFromHwnd(hwnd)
+        }
+        this.frontExe := exe
+        this.frontKnown := true
+        return exe
     }
 
     static ExeFromHwnd(hwnd) {
@@ -1644,22 +1768,23 @@ class Engine {
             this.ClearHookBindings()
         this.swallowOn := want
         this.swallowKnown := true
+        this.hooksDirty := true
     }
 
     static WatchingHold() {
         for r in this.runners {
             if r.done
                 continue
-        if (r.mode = "whileHeld" || r.mode = "toggle")
-            return true
-        for frame in r.stack {
-            if (frame.HasProp("holdLoop") && frame.holdLoop)
-                return true
-            if (frame.HasProp("edgeHold") && frame.edgeHold)
+            if (r.mode = "whileHeld" || r.mode = "toggle")
                 return true
             if (r.HasProp("scanWait") && r.scanWait)
                 return true
-        }
+            for frame in r.stack {
+                if (frame.HasProp("holdLoop") && frame.holdLoop)
+                    return true
+                if (frame.HasProp("edgeHold") && frame.edgeHold)
+                    return true
+            }
         }
         return false
     }
@@ -1719,6 +1844,8 @@ class Engine {
 
     static SeedTriggers() {
         this.prevDown := Map()
+        this.macroTapHold := Map()
+        this.macroHoldRel := Map()
         macros := Field(this.profile, "macros", [])
         if !(macros is Array)
             return
@@ -1729,6 +1856,10 @@ class Engine {
             trig := Field(macro, "trigger", Map())
             button := (trig is Map) ? String(Field(trig, "button", "")) : ""
             this.prevDown[id] := this.KeyDown(button)
+            if (id != "") {
+                this.macroTapHold[id] := this.ScanTapHold(macro)
+                this.macroHoldRel[id] := this.ScanHoldsOnRelease(macro)
+            }
         }
     }
 
@@ -1805,6 +1936,13 @@ class Engine {
     }
 
     static HasTapHold(macro) {
+        id := String(Field(macro, "id", ""))
+        if (id != "" && this.macroTapHold.Has(id))
+            return this.macroTapHold[id]
+        return this.ScanTapHold(macro)
+    }
+
+    static ScanTapHold(macro) {
         blocks := Field(macro, "blocks", [])
         if !(blocks is Array)
             return false
@@ -1815,18 +1953,35 @@ class Engine {
     }
 
     static HoldsOnRelease(macro) {
-        mode := String(Field(macro, "playMode", "once"))
-        if (mode = "whileHeld" || mode = "toggle")
-            return true
+        id := String(Field(macro, "id", ""))
+        if (id != "" && this.macroHoldRel.Has(id))
+            return this.macroHoldRel[id]
+        return this.ScanHoldsOnRelease(macro)
+    }
+
+    static ScanHoldsOnRelease(macro) {
         blocks := Field(macro, "blocks", [])
-        if !(blocks is Array)
-            return false
-        for block in blocks {
-            kind := String(Field(block, "type", ""))
-            if (kind = "whileHeld" || kind = "tapHold")
-                return true
+        hasHold := false
+        hasTap := false
+        if (blocks is Array) {
+            for block in blocks {
+                if !(block is Map)
+                    continue
+                kind := String(Field(block, "type", ""))
+                if (kind = "whileHeld" || kind = "swapAfter")
+                    hasHold := true
+                else if (kind = "tapHold")
+                    hasTap := true
+            }
         }
-        return false
+        ; A While-held block already exits when the trigger comes up. Asking the
+        ; whole runner to stop would skip Run-once / After-release blocks after it.
+        if hasHold
+            return false
+        if hasTap
+            return true
+        mode := String(Field(macro, "playMode", "once"))
+        return (mode = "whileHeld" || mode = "toggle")
     }
 
     static TriggerAction(mode, down, was, running) {
@@ -1902,29 +2057,38 @@ class Engine {
         }
         if added
             this.RaisePhysicalHook()
+        this.hookFold := Map()
+        for key, _ in this.hooks
+            this.hookFold[StrLower(key)] := true
         this.SyncMouseHook()
     }
 
     static KeyDelayMs() {
         if this.dry
             return 400
+        if (this.delayMs >= 0)
+            return this.delayMs
         delay := 1
         DllCall("SystemParametersInfoW", "UInt", 0x16, "UInt", 0, "UInt*", &delay, "UInt", 0)
         if (delay < 0 || delay > 3)
             delay := 1
-        return 250 * (delay + 1)
+        this.delayMs := 250 * (delay + 1)
+        return this.delayMs
     }
 
     static KeyRepeatMs() {
         if this.dry
             return 33
+        if (this.repeatMs >= 0)
+            return this.repeatMs
         speed := 31
         DllCall("SystemParametersInfoW", "UInt", 0x0A, "UInt", 0, "UInt*", &speed, "UInt", 0)
         if (speed < 0)
             speed := 0
         if (speed > 31)
             speed := 31
-        return Max(16, Round(1000 / (2.5 + speed * (27.5 / 31))))
+        this.repeatMs := Max(16, Round(1000 / (2.5 + speed * (27.5 / 31))))
+        return this.repeatMs
     }
 
     static Desired(now) {
@@ -2203,6 +2367,8 @@ class Engine {
             if this.physDown.Has(key)
                 this.physDown.Delete(key)
         }
+        this.hookFold := Map()
+        this.hooksDirty := true
     }
 
     static ClicksSwapped() {
@@ -2235,9 +2401,24 @@ class Engine {
         this.applied := Map()
     }
 
+    static StateSig() {
+        sig := this.armed ? "1" : "0"
+        sig .= "|" this.ActiveExe()
+        for r in this.runners {
+            if r.done
+                continue
+            sig .= "|" r.id
+        }
+        for k, _ in this.applied
+            sig .= ">" k
+        return sig
+    }
+
     static StateJson() {
         running := ""
         for index, r in this.runners {
+            if r.done
+                continue
             if (running != "")
                 running .= ","
             running .= '{"id":' JSON.Quote(r.id) ',"name":' JSON.Quote(r.name) "}"
@@ -2254,7 +2435,17 @@ class Engine {
 
     static WindowListJson() {
         now := this.Now()
-        if (now - this.winAt < 2000 && this.winJson != "")
+        busy := false
+        for r in this.runners {
+            if !r.done {
+                busy := true
+                break
+            }
+        }
+        ttl := busy ? 30000 : 5000
+        if (this.winJson != "" && now - this.winAt < ttl)
+            return this.winJson
+        if (busy && this.winJson != "")
             return this.winJson
         this.winAt := now
         seen := Map()
@@ -2294,9 +2485,13 @@ class Engine {
     }
 
     static Broadcast(force := false) {
-        json := this.StateJson()
-        if (!force && json = this.lastState)
+        if (!force && !this.pipeOn)
             return
+        sig := this.StateSig()
+        if (!force && sig = this.lastSig)
+            return
+        this.lastSig := sig
+        json := this.StateJson()
         this.lastState := json
         this.SendRaw(json)
     }
@@ -2340,6 +2535,7 @@ class Engine {
             return
         this.pipeOn := false
         this.lastState := ""
+        this.lastSig := ""
         if this.hPipe
             DllCall("DisconnectNamedPipe", "Ptr", this.hPipe)
     }
@@ -2387,8 +2583,12 @@ class Engine {
         StrPut(json, buf, "UTF-8")
         written := 0
         ok := DllCall("WriteFile", "Ptr", this.hPipe, "Ptr", buf, "UInt", size - 1, "UInt*", &written, "Ptr", 0)
-        if !ok
+        if !ok {
+            err := A_LastError
+            if (err = 232)
+                return
             this.DropClient()
+        }
     }
 
     static Handle(text) {
@@ -2405,7 +2605,11 @@ class Engine {
             if (incoming is Map) {
                 this.profile := incoming
                 this.SeedTriggers()
+                this.ReapOrphans()
+                this.hooksDirty := true
                 this.SyncHooks()
+                this.hooksDirty := false
+                this.winAt := -100000
                 this.Broadcast(true)
             }
             this.SendRaw('{"v":1,"type":"ack","for":"profile","ok":true}')
@@ -2420,7 +2624,9 @@ class Engine {
                 this.ClearHookBindings()
                 this.outputMode := mode
                 this.mouseAtOk := false
+                this.hooksDirty := true
                 this.SyncHooks()
+                this.hooksDirty := false
             }
             return
         }
@@ -3169,6 +3375,81 @@ RunChecks(fails) {
 
     fails := Check(!Engine.HoldsOnRelease(drain), "play once without a hold loop does not use on-release", fails)
     fails := Check(Engine.HoldsOnRelease(J("{'playMode':'whileHeld','blocks':[]}")), "while held playback uses on-release", fails)
+    fails := Check(!Engine.HoldsOnRelease(J("{'playMode':'once','advanced':true,'blocks':[{'type':'whileHeld','mute':[],'steps':[]},{'type':'steps','steps':[]}]}")), "a while-held graph does not stop the runner on release", fails)
+    shotgun := J("{'id':'shotgun','name':'Slot','enabled':true,'advanced':true,'playMode':'once','trigger':{'kind':'key','button':'LWin'},'steps':[],'blocks':[{'type':'whileHeld','mute':[],'steps':[{'type':'key','action':'down','key':'['},{'type':'wait','ms':10},{'type':'key','action':'up','key':'['},{'type':'wait','ms':10}]},{'type':'ifShort','underMs':150,'minCycles':6,'steps':[{'type':'key','action':'down','key':'['},{'type':'wait','ms':10},{'type':'key','action':'up','key':'['},{'type':'wait','ms':10}]},{'type':'steps','steps':[{'type':'repeat','count':4,'steps':[{'type':'key','action':'down','key':'a'},{'type':'wait','ms':10},{'type':'key','action':'up','key':'a'},{'type':'wait','ms':10}]}]}]}")
+    Engine.hooks["LWin"] := true
+    Engine.profile := Map("macros", [shotgun])
+    Engine.prevDown := Map()
+    Engine.NotePhysical("LWin", true)
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    slot := Engine.runners[1]
+    slot.Advance(0)
+    slot.Advance(10)
+    slot.Advance(160)
+    Engine.NotePhysical("LWin", false)
+    Engine.PollTriggers()
+    Engine.RemoveDone()
+    fails := Check(Engine.HasRunner("shotgun"), "long hold still runs after release", fails)
+    slot.Advance(170)
+    slot.Advance(180)
+    fails := Check(Engine.Desired(180).Has("a") && !Engine.Desired(180).Has("["), "long hold then release runs the after-hold keys", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.NotePhysical("LWin", true)
+    Engine.prevDown["shotgun"] := false
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    tapSlot := Engine.runners[1]
+    tapSlot.Advance(0)
+    tapSlot.Advance(10)
+    Engine.NotePhysical("LWin", false)
+    Engine.PollTriggers()
+    Engine.RemoveDone()
+    tapSlot.Advance(40)
+    fails := Check(Engine.Desired(40).Has("[") && !Engine.Desired(40).Has("a"), "a quick tap still sends the short path", fails)
+    tapSlot.Advance(200)
+    fails := Check(!Engine.Desired(200).Has("a"), "a quick tap skips the after-hold keys", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.hooks.Delete("LWin")
+    if Engine.physDown.Has("LWin")
+        Engine.physDown.Delete("LWin")
+    Engine.profile := Map()
+    swapMac := J("{'id':'swap-a','name':'Swap','enabled':true,'advanced':true,'playMode':'once','trigger':{'kind':'key','button':'b'},'steps':[],'blocks':[{'type':'whileHeld','mute':[],'steps':[{'type':'key','action':'down','key':'a'},{'type':'wait','ms':10},{'type':'key','action':'up','key':'a'},{'type':'wait','ms':10}]},{'type':'swapAfter','afterMs':40,'mute':[],'steps':[{'type':'key','action':'down','key':'x'},{'type':'wait','ms':10},{'type':'key','action':'up','key':'x'},{'type':'wait','ms':10}]}]}")
+    Engine.hooks["b"] := true
+    Engine.profile := Map("macros", [swapMac])
+    Engine.prevDown := Map()
+    Engine.NotePhysical("b", true)
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    swapTap := Engine.runners[1]
+    swapTap.Advance(0)
+    fails := Check(Engine.Desired(0).Has("a") && !Engine.Desired(0).Has("x"), "swap after starts on the first loop", fails)
+    Engine.NotePhysical("b", false)
+    Engine.PollTriggers()
+    Engine.RemoveDone()
+    swapTap.Advance(20)
+    fails := Check(!Engine.Desired(20).Has("x"), "a quick tap never reaches the swap loop", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.NotePhysical("b", true)
+    Engine.prevDown["swap-a"] := false
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    swapHold := Engine.runners[1]
+    swapHold.Advance(0)
+    swapHold.Advance(10)
+    swapHold.Advance(20)
+    swapHold.Advance(40)
+    swapHold.Advance(50)
+    fails := Check(Engine.Desired(50).Has("x") && !Engine.Desired(50).Has("a"), "holding past the time swaps to the second loop", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.hooks.Delete("b")
+    if Engine.physDown.Has("b")
+        Engine.physDown.Delete("b")
+    Engine.profile := Map()
     onceWait := J("{'id':'once-wait','name':'Once','enabled':true,'advanced':true,'playMode':'once','trigger':{'kind':'key','button':'r'},'steps':[],'blocks':[{'type':'wait','ms':80}]}")
     Engine.profile := Map("macros", [onceWait])
     Engine.hooks["r"] := true

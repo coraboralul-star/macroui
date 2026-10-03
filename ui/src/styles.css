@@ -2162,6 +2162,7 @@ button.ghost:active:not(:disabled) {
 
 .block-whileHeld { border-left-color: #f3e6cf; }
 .block-ifShort { border-left-color: #e07a2f; }
+.block-swapAfter { border-left-color: #3d9a7a; }
 .block-then { border-left-color: #8a7b66; }
 .block-repeat { border-left-color: #cbbfa8; }
 .block-wait { border-left-color: #6b5b4a; }
@@ -2773,6 +2774,7 @@ button.ghost.is-danger:hover:not(:disabled) {
 .block-whileHeld { border-left-color: var(--text); }
 .block-ifShort,
 .block-tapHold { border-left-color: var(--accent); }
+.block-swapAfter { border-left-color: #3d9a7a; }
 .block-repeat { border-left-color: var(--muted); }
 
 .page-tabs {
@@ -3863,6 +3865,8 @@ input.ev-delay {
 .block-ifShort .block-fields,
 .block-tapHold .block-actions,
 .block-tapHold .block-fields { --chip-line: #c45200; }
+.block-swapAfter .block-actions,
+.block-swapAfter .block-fields { --chip-line: #2e7a60; }
 .block-then .block-actions,
 .block-then .block-fields { --chip-line: #5a5a64; }
 .block-repeat .block-actions,
@@ -4268,6 +4272,7 @@ input.ev-delay {
 .graph-node.block-trigger,
 .graph-node.block-whileHeld,
 .graph-node.block-ifShort,
+.graph-node.block-swapAfter,
 .graph-node.block-then,
 .graph-node.block-repeat,
 .graph-node.block-wait,
@@ -4522,6 +4527,7 @@ input.ev-delay {
 .graph-node.block-trigger.is-on,
 .graph-node.block-whileHeld.is-on,
 .graph-node.block-ifShort.is-on,
+.graph-node.block-swapAfter.is-on,
 .graph-node.block-then.is-on,
 .graph-node.block-repeat.is-on,
 .graph-node.block-wait.is-on,

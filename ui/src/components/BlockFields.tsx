@@ -130,6 +130,18 @@ export function BlockFields({
       </span>
     );
   }
+  if (block.type === "swapAfter") {
+    return (
+      <span className="block-fields mute-fields">
+        <label>
+          Held past
+          <NumberField ariaLabel="Held past ms" min={0} value={block.afterMs} onChange={(afterMs) => onChange({ ...block, afterMs })} />
+        </label>
+        <MutePick id={block.id} mute={block.mute} macros={macros} onChange={(mute) => onChange({ ...block, mute })} />
+        <BlockRelease block={block} onChange={onChange} />
+      </span>
+    );
+  }
   if (block.type === "then") {
     return (
       <span className="block-fields">
@@ -251,7 +263,7 @@ function BlockRelease({
   block,
   onChange,
 }: {
-  block: Extract<Block, { type: "whileHeld" | "steps" | "repeat" }>;
+  block: Extract<Block, { type: "whileHeld" | "swapAfter" | "steps" | "repeat" }>;
   onChange: (block: Block) => void;
 }) {
   return (

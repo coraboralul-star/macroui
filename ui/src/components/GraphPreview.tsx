@@ -105,6 +105,10 @@ function blockCues(block: Block, mode: "simple" | "real", splitMs?: number): Cue
       ...(block.steps.length ? loop(block.steps, times) : []),
     ];
   }
+  if (block.type === "swapAfter") {
+    const body = block.steps.length ? loop(block.steps, 3) : [];
+    return [{ type: "trigger", down: true, trig: "held", ...span(520, 160) }, ...body, { type: "trigger", down: false, trig: "released", ...span(420, 120) }];
+  }
   if (block.type === "then") {
     const once = stepCues(block.steps);
     if (!once.length) return [{ type: "wait", ...span(waitMs(block.forMs || 400), realMs(block.forMs || 400)) }];
@@ -232,7 +236,9 @@ export function GraphPreview({
   const beats = useMemo(() => {
     if (!scene) return [];
     const after = block ? blocks[blocks.findIndex((item) => item.id === block.id) + 1] : undefined;
-    const splitMs = block?.type === "whileHeld" && after?.type === "ifShort" ? after.underMs : undefined;
+    const splitMs = block?.type === "whileHeld" && (after?.type === "ifShort" || after?.type === "swapAfter")
+      ? after.type === "ifShort" ? after.underMs : after.afterMs
+      : undefined;
     const cues = scene.kind === "heldPath" ? heldPathCues() : block ? blockCues(block, speed, splitMs) : [];
     return applyTrigger(cues, speed);
   }, [block, blocks, scene, speed]);

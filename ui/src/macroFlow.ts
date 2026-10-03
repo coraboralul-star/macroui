@@ -20,7 +20,7 @@ export function playModeLabel(mode: PlayMode): string {
 /** Editor nearest-up / play-full. Not the keyboard Playback "On release" mode. */
 export function usesReleaseStop(macro: Macro): boolean {
   if (macro.playMode === "whileHeld" || macro.playMode === "toggle") return true;
-  return shownBlocks(macro).some((block) => block.type === "whileHeld" || block.type === "tapHold");
+  return shownBlocks(macro).some((block) => block.type === "whileHeld" || block.type === "swapAfter" || block.type === "tapHold");
 }
 
 /** Basic editor only shows On release for a single-block hold macro. */
@@ -29,7 +29,7 @@ export function showBriefRelease(macro: Macro): boolean {
 }
 
 export function blockCanReleaseStop(block: Block): boolean {
-  return block.type === "whileHeld" || block.type === "steps" || block.type === "repeat";
+  return block.type === "whileHeld" || block.type === "swapAfter" || block.type === "steps" || block.type === "repeat";
 }
 
 export function triggerInspect(trigger: string, mode: PlayMode, coerced: boolean): string {
@@ -108,6 +108,7 @@ export function nodeHint(block: Block): string {
   const count = block.steps.length;
   const body = count ? `${count} step${count === 1 ? "" : "s"}` : "No steps";
   if (block.type === "ifShort") return `${body} · ${block.minCycles}×`;
+  if (block.type === "swapAfter") return `${body} · past ${block.afterMs} ms`;
   if (block.type === "then" && block.forMs) return `${body} · ${block.forMs} ms`;
   return body;
 }
@@ -116,6 +117,7 @@ export function blockMeta(block: Block): string {
   if (block.type === "wait") return `${block.ms} ms`;
   if (block.type === "tapHold") return `after ${block.gapMs} ms`;
   if (block.type === "ifShort") return `${block.minCycles} times`;
+  if (block.type === "swapAfter") return `past ${block.afterMs} ms`;
   if (block.type === "then") return block.forMs ? `for ${block.forMs} ms` : "";
   if (block.type === "repeat") return block.count === 0 ? "Until it stops" : `${block.count}×`;
   const count = block.steps.length;
@@ -126,6 +128,7 @@ export function blockHint(block: Block): string {
   if (block.type === "wait") return `${block.ms} ms`;
   if (block.type === "tapHold") return repressLine(block);
   if (block.type === "ifShort") return `released before ${block.underMs} ms · keep going ${block.minCycles}×`;
+  if (block.type === "swapAfter") return `held past ${block.afterMs} ms`;
   if (block.type === "then") return block.forMs ? `runs ${block.forMs} ms after release` : "runs after release";
   if (block.type === "repeat") return block.count === 0 ? "until it stops" : `${block.count}×`;
   return phrase(block.steps);
@@ -133,6 +136,7 @@ export function blockHint(block: Block): string {
 
 export function linkLabel(from: Block | null, to: Block): string {
   if (to.type === "ifShort") return "if released before";
+  if (to.type === "swapAfter") return "if held past";
   if (to.type === "then") return "after release";
   if (from?.type === "repeat") return "again";
   return "then";
@@ -153,6 +157,9 @@ function sourceLine(source: Block | null, key: string): string {
   if (source.type === "ifShort") {
     return `If you release ${key} before ${source.underMs} ms, it sends ${actsNoun(source)} ${source.minCycles} times.`;
   }
+  if (source.type === "swapAfter") {
+    return `If you keep holding ${key} past ${source.afterMs} ms, this loop takes over and repeatedly sends ${actsNoun(source)}.`;
+  }
   if (source.type === "then") {
     return source.forMs
       ? `After you release ${key}, it sends ${actsNoun(source)} for ${source.forMs} ms.`
@@ -170,8 +177,9 @@ function sourceLine(source: Block | null, key: string): string {
 }
 
 function hopLine(source: Block | null, target: Block, key: string): string {
-  const fromName = !source ? "the start" : source.type === "whileHeld" ? "the While-held section" : source.type === "ifShort" ? "the early-release block" : source.type === "then" ? "the After-release block" : source.type === "steps" ? "the Do-once block" : source.type === "repeat" ? "the Repeat block" : source.type === "wait" ? "the Wait block" : "this block";
+  const fromName = !source ? "the start" : source.type === "whileHeld" ? "the While-held section" : source.type === "ifShort" ? "the early-release block" : source.type === "swapAfter" ? "the Swap-after loop" : source.type === "then" ? "the After-release block" : source.type === "steps" ? "the Do-once block" : source.type === "repeat" ? "the Repeat block" : source.type === "wait" ? "the Wait block" : "this block";
   if (target.type === "ifShort") return `If you release ${key} early, it switches to the early-release actions.`;
+  if (target.type === "swapAfter") return `If you keep holding ${key} past ${target.afterMs} ms, it swaps to this loop and repeatedly sends ${actsNoun(target)}.`;
   if (target.type === "then") {
     const dur = target.forMs ? ` for ${target.forMs} ms` : "";
     return source?.type === "whileHeld"
@@ -259,6 +267,9 @@ export function splitExplain(blocks: Block[], trigger: string): string {
 
 export function setupNote(block: Block, prev: Block | null, next: Block | null, trigger: string): string {
   const key = trigger || "the bind";
+  if (block.type === "whileHeld" && next?.type === "swapAfter") {
+    return `This loop runs first. Keep holding ${key} past ${next.afterMs} ms and Swap after takes over. Let go sooner and that next loop is skipped.`;
+  }
   if (block.type === "whileHeld" && next?.type === "ifShort") {
     return `Let go of ${key} before ${next.underMs} ms and it takes the top path. Hold past that and this loop just waits, then continues.`;
   }
@@ -267,6 +278,10 @@ export function setupNote(block: Block, prev: Block | null, next: Block | null, 
     return `This is the let-go-early path. You get it because Quick tap sits right after the hold loop.`;
   }
   if (block.type === "ifShort") return "Put this right after a hold loop to split early-tap vs held-too-long.";
+  if (block.type === "swapAfter" && prev?.type === "whileHeld") {
+    return `Keep holding ${key} past ${block.afterMs} ms and this loop replaces the one before it. Let go sooner and this block is skipped.`;
+  }
+  if (block.type === "swapAfter") return `This loop only starts if ${key} stays down past ${block.afterMs} ms. Put it after a hold loop to swap from that loop into this one.`;
   if (block.type === "then") return `This runs after ${key} is already up. Hold length does not matter here.`;
   if (block.type === "repeat") return block.count === 0 ? "This repeats until it stops. It is not tied to holding the bind." : `This repeats ${block.count} times on its own count.`;
   if (block.type === "tapHold") return repressLine(block);
@@ -325,7 +340,8 @@ export function graphLayout(blocks: Block[]): {
         labels.push(forkLabel(holdNode, heldNode, `${prev.id}-lab-held`, "Keep holding", 0.52, -10, 8));
       }
       if (next) {
-        links.push({ from: block.id, to: next.id, fork: "early" });
+        if (next.type === "then")
+          links.push({ from: block.id, to: next.id, fork: "early" });
         links.push({ from: `${prev.id}-held`, to: next.id, fork: "held" });
       }
       col += 1;
@@ -341,6 +357,12 @@ export function graphLayout(blocks: Block[]): {
       kind: block.type,
     });
     if (prev && !afterFork) links.push({ from: prev.id, to: block.id });
+    if (block.type === "swapAfter" && prev?.type === "whileHeld") {
+      const holdNode = nodes.find((node) => node.id === prev.id);
+      const swapNode = nodes[nodes.length - 1];
+      if (holdNode && swapNode)
+        labels.push(forkLabel(holdNode, swapNode, `${block.id}-lab-swap`, `Held past ${block.afterMs} ms`, 0.5, -24, -18));
+    }
     col += 1;
   }
 
@@ -384,6 +406,7 @@ function sceneTitle(block: Block, key: string): string {
   const bind = !key || key === "the trigger" ? "" : key;
   if (block.type === "whileHeld") return bind ? `While ${bind} held` : "While held";
   if (block.type === "ifShort") return bind ? `If ${bind} released before ${block.underMs} ms` : `If released before ${block.underMs} ms`;
+  if (block.type === "swapAfter") return bind ? `If ${bind} held past ${block.afterMs} ms` : `If held past ${block.afterMs} ms`;
   if (block.type === "then") {
     const tail = block.forMs ? `, for ${block.forMs} ms` : "";
     return bind ? `After ${bind} release${tail}` : `After release${tail}`;
@@ -404,7 +427,9 @@ function sceneCopy(block: Block, prev: Block | null, next: Block | null, key: st
   if (block.type === "whileHeld") {
     return {
       why: `This is the hold loop. It exists so ${acts} only fire while ${key} is down.`,
-      affect: next?.type === "ifShort"
+      affect: next?.type === "swapAfter"
+        ? `Keep holding past ${next.afterMs} ms and the next block takes over this loop. Let go sooner and that swap is skipped.${vacant}`
+        : next?.type === "ifShort"
         ? `A long hold stays here. A tap shorter than ${next.underMs} ms leaves this loop and uses the next block instead.${vacant}`
         : `When ${key} comes up this loop stops, which is what lets the next block run.${vacant}`,
     };
@@ -414,7 +439,17 @@ function sceneCopy(block: Block, prev: Block | null, next: Block | null, key: st
       why: prev?.type === "whileHeld"
         ? `This is the short-tap path. The hold loop cannot do this - that loop only runs while ${key} is still down.`
         : `This block only exists for a tap that lets go of ${key} before ${block.underMs} ms.`,
-      affect: `Release ${key} before ${block.underMs} ms and it sends ${acts} ${block.minCycles} times. Hold longer and this block is skipped.${vacant}`,
+      affect: next && next.type !== "then"
+        ? `Release ${key} before ${block.underMs} ms and it sends ${acts} ${block.minCycles} times. That path stops there. Hold longer and this block is skipped, then the next block can run.${vacant}`
+        : `Release ${key} before ${block.underMs} ms and it sends ${acts} ${block.minCycles} times. Hold longer and this block is skipped.${vacant}`,
+    };
+  }
+  if (block.type === "swapAfter") {
+    return {
+      why: prev?.type === "whileHeld"
+        ? `This is the held-longer loop. After ${block.afterMs} ms it replaces the hold loop above while ${key} is still down.`
+        : `This loop only starts if you keep ${key} down past ${block.afterMs} ms.`,
+      affect: `Keep holding past ${block.afterMs} ms and it repeatedly sends ${acts} until you let go. Let go sooner and this block is skipped.${vacant}`,
     };
   }
   if (block.type === "then") {
@@ -444,6 +479,12 @@ function sceneCopy(block: Block, prev: Block | null, next: Block | null, key: st
     return {
       why: "This watches other keys and only represses after that gap - it is not a hold loop.",
       affect: `${repressLine(block)}.`,
+    };
+  }
+  if (prev?.type === "ifShort") {
+    return {
+      why: `This is the long-hold path. A tap that lets go before the time above skips this block.`,
+      affect: `It sends ${acts} after you held long enough that the early-release block did not run.${vacant}`,
     };
   }
   return {
