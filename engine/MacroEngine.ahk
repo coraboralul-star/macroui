@@ -449,6 +449,22 @@ class Runner {
             this.MarkDone()
     }
 
+    NoteHoldRelease() {
+        if (this.trigger = "" || Engine.KeyDown(this.trigger))
+            return
+        if (this.StopMode() != "nextUp")
+            return
+        i := this.stack.Length
+        while (i >= 1) {
+            frame := this.stack[i]
+            i--
+            if !(frame is Object)
+                continue
+            if (frame.HasProp("holdLoop") && frame.holdLoop)
+                frame.drain := true
+        }
+    }
+
     StopMode() {
         i := this.stack.Length
         while (i >= 1) {
@@ -523,6 +539,7 @@ class Runner {
         this.pressedNow := Map()
         if this.done
             return
+        this.NoteHoldRelease()
         for k, releaseAt in this.pulses.Clone()
             if (releaseAt <= now && this.pulses.Has(k))
                 this.pulses.Delete(k)
@@ -614,6 +631,10 @@ class Runner {
             }
             step := steps[frame.index]
             frame.index++
+            if (frame.HasProp("drain") && frame.drain && this.sawUp) {
+                frame.index := steps.Length + 1
+                continue
+            }
             result := this.Exec(step, now)
             if (result = "again") {
                 frame.index--
@@ -652,6 +673,9 @@ class Runner {
                 return ""
             action := String(Field(step, "action", "tap"))
             if (action = "down") {
+                top := this.stack.Length > 0 ? this.stack[-1] : ""
+                if (top is Object && top.HasProp("drain") && top.drain)
+                    return ""
                 this.holds[key] := true
                 this.pressedNow[key] := true
                 this.sawUp := false
@@ -667,15 +691,21 @@ class Runner {
                 if this.pressedNow.Has(key)
                     this.pressedNow.Delete(key)
                 this.sawUp := true
+                top := this.stack.Length > 0 ? this.stack[-1] : ""
+                cut := (top is Object && top.HasProp("drain") && top.drain)
                 ; A down and up in the same tick would never be sent. Hold it for one tick.
                 if just {
                     this.pulses[key] := now + 1
+                    if cut
+                        top.index := top.steps.Length + 1
                     return this.ArmWait(now,1)
                 }
                 if (this.stopping && this.StopMode() = "nextUp") {
                     this.MarkDone()
                     return "wait"
                 }
+                if cut
+                    top.index := top.steps.Length + 1
             } else {
                 hold := AsNum(Field(step, "holdMs", 1), 1) / this.speed
                 this.pulses[key] := now + Max(1, Round(hold))
@@ -3392,8 +3422,7 @@ RunChecks(fails) {
     Engine.RemoveDone()
     fails := Check(Engine.HasRunner("shotgun"), "long hold still runs after release", fails)
     slot.Advance(170)
-    slot.Advance(180)
-    fails := Check(Engine.Desired(180).Has("a") && !Engine.Desired(180).Has("["), "long hold then release runs the after-hold keys", fails)
+    fails := Check(Engine.Desired(170).Has("a") && !Engine.Desired(170).Has("["), "long hold then release runs the after-hold keys", fails)
     Engine.StopAll()
     Engine.RemoveDone()
     Engine.NotePhysical("LWin", true)
@@ -3499,6 +3528,49 @@ RunChecks(fails) {
     fails := Check(Engine.Desired(60).Has("k"), "block play full still presses k", fails)
     Engine.StopAll()
     Engine.RemoveDone()
+
+    near := J("{'id':'hold-near','name':'Near','enabled':true,'advanced':true,'releaseStop':'nextUp','playMode':'once','trigger':{'kind':'key','button':'r'},'steps':[],'blocks':[{'type':'whileHeld','mute':[],'steps':[{'type':'key','action':'down','key':'b'},{'type':'wait','ms':50},{'type':'key','action':'up','key':'b'},{'type':'wait','ms':10},{'type':'key','action':'down','key':'k'},{'type':'wait','ms':50},{'type':'key','action':'up','key':'k'}]}]}")
+    Engine.hooks["r"] := true
+    Engine.NotePhysical("r", true)
+    Engine.StartRunner(near)
+    Engine.FlushPending()
+    holdNear := Engine.runners[1]
+    holdNear.Advance(0)
+    fails := Check(Engine.Desired(0).Has("b"), "nearest up hold starts with b down", fails)
+    Engine.NotePhysical("r", false)
+    holdNear.Advance(50)
+    fails := Check(!Engine.Desired(50).Has("k") && holdNear.done, "nearest up stops a while-held sequence at the up", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+
+    fullHold := J("{'id':'hold-full','name':'FullHold','enabled':true,'advanced':true,'releaseStop':'finish','playMode':'once','trigger':{'kind':'key','button':'r'},'steps':[],'blocks':[{'type':'whileHeld','mute':[],'steps':[{'type':'key','action':'down','key':'b'},{'type':'wait','ms':50},{'type':'key','action':'up','key':'b'},{'type':'wait','ms':10},{'type':'key','action':'down','key':'k'},{'type':'wait','ms':50},{'type':'key','action':'up','key':'k'}]}]}")
+    Engine.NotePhysical("r", true)
+    Engine.StartRunner(fullHold)
+    Engine.FlushPending()
+    holdFull := Engine.runners[1]
+    holdFull.Advance(0)
+    Engine.NotePhysical("r", false)
+    holdFull.Advance(50)
+    fails := Check(!holdFull.done, "play full keeps going after release", fails)
+    holdFull.Advance(60)
+    fails := Check(Engine.Desired(60).Has("k"), "play full finishes the while-held sequence", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+
+    blockNear := J("{'id':'block-near','name':'BlockNear','enabled':true,'advanced':true,'releaseStop':'finish','playMode':'once','trigger':{'kind':'key','button':'r'},'steps':[],'blocks':[{'type':'whileHeld','releaseStop':'nextUp','mute':[],'steps':[{'type':'key','action':'down','key':'b'},{'type':'wait','ms':50},{'type':'key','action':'up','key':'b'},{'type':'wait','ms':10},{'type':'key','action':'down','key':'k'},{'type':'wait','ms':50},{'type':'key','action':'up','key':'k'}]}]}")
+    Engine.NotePhysical("r", true)
+    Engine.StartRunner(blockNear)
+    Engine.FlushPending()
+    blockCut := Engine.runners[1]
+    blockCut.Advance(0)
+    Engine.NotePhysical("r", false)
+    blockCut.Advance(50)
+    fails := Check(!Engine.Desired(50).Has("k") && blockCut.done, "block nearest up overrides macro play full", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.hooks.Delete("r")
+    if Engine.physDown.Has("r")
+        Engine.physDown.Delete("r")
 
     holdGate := J("{'id':'scan-hold','name':'Hold','enabled':true,'advanced':true,'playMode':'once','trigger':{'kind':'key','button':'b'},'steps':[],'blocks':[{'type':'steps','steps':[{'type':'key','action':'down','key':'o'},{'type':'wait','ms':10},{'type':'key','action':'up','key':'o'},{'type':'scanWait','ms':80}]},{'type':'steps','steps':[{'type':'key','action':'down','key':'x'},{'type':'wait','ms':10}]}]}")
     Engine.hooks["b"] := true

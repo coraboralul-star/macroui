@@ -6212,3 +6212,114 @@ input.ev-delay {
   font-style: normal;
   font-weight: 700;
 }
+
+.app {
+  padding: 0 0 14px;
+  gap: 10px;
+  grid-template-rows: 48px minmax(0, 1fr);
+}
+
+.body,
+.app > .settings {
+  margin: 0 14px;
+}
+
+.top {
+  height: 48px;
+  min-height: 48px;
+  margin: 0;
+  padding: 0 0 0 14px;
+  gap: 12px;
+  border-width: 0 0 1px;
+  border-radius: 0;
+  cursor: grab;
+  overflow: visible;
+}
+
+.top:active { cursor: grabbing; }
+
+.graph-root {
+  top: 48px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+
+.graph-bar { cursor: grab; }
+.graph-bar:active { cursor: grabbing; }
+
+.chrome {
+  height: 48px;
+  align-self: stretch;
+  gap: 0;
+}
+
+.chrome button {
+  width: 46px;
+  height: 48px;
+  border-radius: 0;
+  border-color: transparent;
+}
+
+.chrome button svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chrome .close:hover { background: #c42b1c; color: #fff; }
+
+.lib-quick {
+  padding: 8px 8px 4px;
+}
+
+.graph-wires { pointer-events: none; }
+
+.graph-wire {
+  fill: none;
+  stroke: #8d8d8d;
+  stroke-width: 2.5;
+  pointer-events: stroke;
+  cursor: grab;
+}
+
+.graph-wire.is-early { stroke: #d7a15a; }
+.graph-wire.is-held { stroke: #8d8d8d; }
+.graph-wire.is-split { stroke: #9a7a58; }
+.graph-wire.is-drag { stroke: var(--accent); stroke-dasharray: 5 4; pointer-events: none; }
+
+.graph-split {
+  position: absolute;
+  z-index: 4;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid #3a3a3a;
+  background: #161616;
+  color: #c8c8c8;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.graph-split:hover { border-color: var(--accent); color: #fff; }
+
+.kb-scene {
+  margin: 0;
+  color: #ececec;
+  font-size: 0.78rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.graph-bar .gear-menu {
+  top: calc(100% + 6px);
+  bottom: auto;
+  right: 0;
+  left: auto;
+}

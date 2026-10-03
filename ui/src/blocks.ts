@@ -1,4 +1,4 @@
-import { newId, type Block, type PlayMode, type Step } from "./profile";
+import { basicSteps, MIN_REPEAT_MS, mouseSteps, newId, type Block, type Macro, type PlayMode, type Step } from "./profile";
 
 export function createBlock(type: Block["type"]): Block {
   const id = newId();
@@ -39,37 +39,76 @@ export function shiftBlock(blocks: Block[], id: string, dir: -1 | 1): Block[] {
 export function insertTyped(blocks: Block[], index: number, type: Block["type"]): { blocks: Block[]; pick: string } {
   const next = blocks.slice();
   const at = Math.max(0, Math.min(index, next.length));
-  if (type === "whileHeld") {
-    const hold = createBlock("whileHeld");
-    next.splice(at, 0, hold);
-    const after = next[at + 1]?.type;
-    if (after !== "ifShort" && after !== "swapAfter") next.splice(at + 1, 0, createBlock("ifShort"));
-    return { blocks: next, pick: hold.id };
-  }
-  if (type === "ifShort") {
-    const tap = createBlock("ifShort");
-    if (next[at - 1]?.type !== "whileHeld") {
-      const hold = createBlock("whileHeld");
-      next.splice(at, 0, hold, tap);
-      return { blocks: next, pick: tap.id };
-    }
-    next.splice(at, 0, tap);
-    return { blocks: next, pick: tap.id };
-  }
-  if (type === "swapAfter") {
-    const swap = createBlock("swapAfter");
-    const prev = next[at - 1]?.type;
-    if (prev === "whileHeld" || prev === "swapAfter") {
-      next.splice(at, 0, swap);
-      return { blocks: next, pick: swap.id };
-    }
-    const hold = createBlock("whileHeld");
-    next.splice(at, 0, hold, swap);
-    return { blocks: next, pick: swap.id };
-  }
   const item = createBlock(type);
   next.splice(at, 0, item);
   return { blocks: next, pick: item.id };
+}
+
+const BRANCH_TYPES = new Set<Block["type"]>(["ifShort", "swapAfter", "then"]);
+
+export function isBranchBlock(block: Block): boolean {
+  return BRANCH_TYPES.has(block.type);
+}
+
+/** Drop a grabbed wire on a node: that node becomes the next block after the source. */
+export function moveBlockAfter(blocks: Block[], id: string, afterId: string): Block[] {
+  if (!id || id === afterId) return blocks;
+  const moving = blocks.find((block) => block.id === id);
+  if (!moving) return blocks;
+  const rest = blocks.filter((block) => block.id !== id);
+  const at = rest.findIndex((block) => block.id === afterId);
+  if (at < 0) return blocks;
+  rest.splice(at + 1, 0, moving);
+  return rest;
+}
+
+/** Add another condition beside this block. It does not insert a companion. */
+export function splitFrom(blocks: Block[], id: string): { blocks: Block[]; pick: string } {
+  const index = blocks.findIndex((block) => block.id === id);
+  if (index < 0) return { blocks, pick: id };
+  let trunk = index;
+  while (trunk > 0 && isBranchBlock(blocks[trunk])) trunk -= 1;
+  let at = trunk + 1;
+  while (at < blocks.length && isBranchBlock(blocks[at])) at += 1;
+  return insertTyped(blocks, at, "ifShort");
+}
+
+function triggerSteps(macro: Macro): Step[] {
+  const button = macro.trigger.button;
+  if (!button) return [];
+  const ms = macro.gapMs ?? MIN_REPEAT_MS;
+  return macro.trigger.kind === "key" ? basicSteps(button, ms) : mouseSteps(button, ms);
+}
+
+/** Playback choices install the block that actually performs them. Toggle and On release stay playback modes. */
+export function applyPlayback(macro: Macro, mode: PlayMode): Macro {
+  if (mode === "whileHeld") return withPlaybackBlock(macro, "whileHeld", mode);
+  if (mode === "repeat") return withPlaybackBlock(macro, "repeat", mode);
+  if (mode === "once") return withPlaybackBlock(macro, "steps", mode);
+  return { ...macro, playMode: mode };
+}
+
+function withPlaybackBlock(macro: Macro, type: "whileHeld" | "repeat" | "steps", mode: PlayMode): Macro {
+  const blocks = macro.blocks ?? [];
+  if (blocks.some((block) => block.type === type))
+    return { ...macro, playMode: mode, advanced: true, basic: false };
+  const steps = macro.steps.length ? macro.steps : triggerSteps(macro);
+  const created = createBlock(type);
+  const block: Block =
+    created.type === "repeat"
+      ? { ...created, steps, count: Math.max(1, macro.repeatCount || 1) }
+      : created.type === "whileHeld" || created.type === "steps"
+        ? { ...created, steps }
+        : created;
+  return {
+    ...macro,
+    playMode: mode,
+    advanced: true,
+    basic: false,
+    blocks: [block, ...blocks],
+    steps: [],
+    releaseStop: macro.releaseStop === "finish" ? "finish" : "nextUp",
+  };
 }
 
 /** Steps need a block to live in, so a loose step dropped on the canvas gets a Run Once. */

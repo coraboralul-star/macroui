@@ -48,6 +48,7 @@ export function KeyMenu({
   const root = useRef<HTMLDivElement>(null);
   const mode = macro?.playMode ?? "once";
   const timed = mode === "repeat" || mode === "whileHeld" || mode === "toggle";
+  const showPlay = !!macro && !macro.advanced;
   const [pos, setPos] = useState({ left: 8, top: 8 });
 
   useLayoutEffect(() => {
@@ -121,6 +122,7 @@ export function KeyMenu({
               ]}
               onChange={onAssign}
             />
+            {showPlay ? (
             <FieldSelect
               label="Playback"
               ariaLabel="Playback"
@@ -128,7 +130,8 @@ export function KeyMenu({
               options={PLAY}
               onChange={(value) => onPlay(value as PlayMode)}
             />
-            {mode === "repeat" ? (
+            ) : null}
+            {showPlay && mode === "repeat" ? (
               <label className="menu-delay">
                 Times
                 <NumberField
@@ -139,7 +142,7 @@ export function KeyMenu({
                 />
               </label>
             ) : null}
-            {timed && (!macro || macro.basic) ? (
+            {showPlay && timed && macro?.basic ? (
               <label className="menu-delay">
                 Repeat
                 <span className="menu-ms">

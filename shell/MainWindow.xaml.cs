@@ -131,6 +131,23 @@ public partial class MainWindow : Window
         return IntPtr.Zero;
     }
 
+    [DllImport("user32.dll")]
+    static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    void DragWindow()
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            ReleaseCapture();
+            SendMessage(hwnd, 0xA1, (IntPtr)2, IntPtr.Zero);
+        }
+        catch { /* mouse already up */ }
+    }
+
     void OnPageMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         JsonNode? node;
@@ -142,7 +159,7 @@ public partial class MainWindow : Window
             switch (node?["action"]?.ToString())
             {
                 case "drag":
-                    try { DragMove(); } catch { /* mouse already up */ }
+                    DragWindow();
                     break;
                 case "minimize":
                     WindowState = WindowState.Minimized;

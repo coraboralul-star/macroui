@@ -12,6 +12,7 @@ import { FieldSelect } from "./components/FieldSelect";
 import { SettingsPage, type SettingPane } from "./components/SettingsPage";
 import { keyLabel } from "./keyboard";
 import { pressLabel } from "./recording";
+import { applyPlayback } from "./blocks";
 import {
   applyGap,
   basicSteps,
@@ -286,23 +287,25 @@ export function App() {
           <div className="top-end">
             <p className={`status${pipe && engine.armed ? " is-live" : ""}`}>{status}</p>
           </div>
-          {shell ? (
-            <div className="chrome">
-              <button type="button" aria-label="Minimize" onClick={() => post({ type: "window", action: "minimize" })}>
-                –
-              </button>
-              <button
-                type="button"
-                aria-label={maximized ? "Windowed" : "Full screen"}
-                onClick={() => post({ type: "window", action: "maximize" })}
-              >
-                {maximized ? "❐" : "□"}
-              </button>
-              <button type="button" aria-label="Close" className="close" onClick={() => post({ type: "window", action: "close" })}>
-                ×
-              </button>
-            </div>
-          ) : null}
+          <div className="chrome">
+            <button type="button" aria-label="Minimize" onClick={() => post({ type: "window", action: "minimize" })}>
+              <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6.2h10" /></svg>
+            </button>
+            <button
+              type="button"
+              aria-label={maximized ? "Restore" : "Maximize"}
+              onClick={() => post({ type: "window", action: "maximize" })}
+            >
+              {maximized ? (
+                <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.2 1.6h7.2v7.2M1.6 3.4h7.2v7.2H1.6z" /></svg>
+              ) : (
+                <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="1.6" y="1.6" width="8.8" height="8.8" /></svg>
+              )}
+            </button>
+            <button type="button" aria-label="Close" className="close" onClick={() => post({ type: "window", action: "close" })}>
+              <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2l8 8M10 2L2 10" /></svg>
+            </button>
+          </div>
         </header>
         {page === "keyboard" ? (
         <div className="body">
@@ -495,12 +498,13 @@ export function App() {
             macros={profile.macros}
             onClose={closeMenu}
             onNew={() => {
-              const created = menuMacro ?? freshTrigger(menu.kind, menu.code);
-              saveMacro(created);
+              const created = menuMacro ?? freshTrigger(menu.kind, menu.code, { advanced: true });
+              saveMacro({ ...created, advanced: true });
               openAdvanced();
             }}
             onEdit={() => {
               if (!menuMacro) return;
+              saveMacro({ ...menuMacro, advanced: true });
               setSelected(menuMacro.id);
               openAdvanced();
             }}
@@ -510,26 +514,8 @@ export function App() {
             }}
             onAssign={(macroId) => assignMacro(menu.kind, menu.code, macroId)}
             onPlay={(mode: PlayMode) => {
-              bindTrigger(menu.kind, menu.code, (current) => {
-                if (!current) {
-                  const basic = mode !== "once";
-                  const steps = basic
-                    ? menu.kind === "key"
-                      ? basicSteps(menu.code, MIN_REPEAT_MS)
-                      : mouseSteps(menu.code, MIN_REPEAT_MS)
-                    : [];
-                  return freshTrigger(menu.kind, menu.code, {
-                    playMode: mode,
-                    basic,
-                    repeatCount: mode === "repeat" ? 2 : 1,
-                    steps,
-                  });
-                }
-                if (!current.steps.length && mode !== "once" && mode !== "onRelease") {
-                  return applyGap({ ...current, playMode: mode, basic: true }, current.gapMs ?? MIN_REPEAT_MS);
-                }
-                return { ...current, playMode: mode };
-              });
+              if (!menuMacro || menuMacro.advanced) return;
+              saveMacro(applyPlayback(menuMacro, mode));
             }}
             onGap={(ms) => {
               bindTrigger(menu.kind, menu.code, (current) => {

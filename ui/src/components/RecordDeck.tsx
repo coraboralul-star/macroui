@@ -7,6 +7,71 @@ import { compileRecording, type Recording } from "../recording";
 
 type DelayMode = "recorded" | "fixed" | "none" | "custom";
 
+export type { DelayMode };
+
+export function DelayGear({
+  mode,
+  fixedMs,
+  canRecord,
+  disabled,
+  resetKey,
+  onMode,
+  onFixed,
+}: {
+  mode: DelayMode;
+  fixedMs: number;
+  canRecord: boolean;
+  disabled?: boolean;
+  resetKey?: string;
+  onMode: (mode: DelayMode) => void;
+  onFixed: (ms: number) => void;
+}) {
+  const [gear, setGear] = useState(false);
+
+  useEffect(() => {
+    setGear(false);
+  }, [resetKey]);
+
+  useEffect(() => {
+    if (!gear) return;
+    const close = () => setGear(false);
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [gear]);
+
+  return (
+    <div className="gear-wrap" onPointerDown={(event) => event.stopPropagation()}>
+      <button type="button" className="rec-gear" aria-label="Delay options" aria-expanded={gear} disabled={disabled} onClick={() => setGear((open) => !open)}>
+        <GearIcon />
+      </button>
+      {gear ? (
+        <div className="gear-menu" role="menu">
+          <button type="button" role="menuitemradio" aria-checked={mode === "recorded"} disabled={!canRecord} onClick={() => onMode("recorded")}>
+            As recorded
+          </button>
+          <button type="button" role="menuitemradio" aria-checked={mode === "fixed"} onClick={() => onMode("fixed")}>
+            Fixed delay
+          </button>
+          {mode === "fixed" ? (
+            <label className="gear-ms">
+              ms
+              <NumberField ariaLabel="Fixed delay" min={0} value={fixedMs} onChange={onFixed} />
+            </label>
+          ) : null}
+          <button type="button" role="menuitemradio" aria-checked={mode === "none"} onClick={() => onMode("none")}>
+            No delay
+          </button>
+          {mode === "custom" ? (
+            <button type="button" role="menuitemradio" aria-checked disabled>
+              Custom
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function RecordDeck({
   macro,
   macros,
@@ -18,20 +83,11 @@ export function RecordDeck({
 }) {
   const [delayMode, setDelayMode] = useState<DelayMode>(modeOf(macro.recording));
   const [fixedMs, setFixedMs] = useState(macro.recording?.holdMs && macro.recording.holdMs > 1 ? macro.recording.holdMs : 20);
-  const [gear, setGear] = useState(false);
 
   useEffect(() => {
     setDelayMode(modeOf(macro.recording));
     setFixedMs(macro.recording?.holdMs && macro.recording.holdMs > 1 ? macro.recording.holdMs : 20);
-    setGear(false);
   }, [macro.id]);
-
-  useEffect(() => {
-    if (!gear) return;
-    const close = () => setGear(false);
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [gear]);
 
   const setMode = (mode: DelayMode) => {
     setDelayMode(mode);
@@ -71,48 +127,22 @@ export function RecordDeck({
         onChange({ ...macro, steps: [], recording: null });
       }}
       extras={
-        <div className="gear-wrap" onPointerDown={(event) => event.stopPropagation()}>
-          <button type="button" className="rec-gear" aria-label="Delay options" aria-expanded={gear} onClick={() => setGear((open) => !open)}>
-            <GearIcon />
-          </button>
-          {gear ? (
-            <div className="gear-menu" role="menu">
-              <button type="button" role="menuitemradio" aria-checked={delayMode === "recorded"} disabled={!macro.recording} onClick={() => setMode("recorded")}>
-                As recorded
-              </button>
-              <button type="button" role="menuitemradio" aria-checked={delayMode === "fixed"} onClick={() => setMode("fixed")}>
-                Fixed delay
-              </button>
-              {delayMode === "fixed" ? (
-                <label className="gear-ms">
-                  ms
-                  <NumberField
-                    ariaLabel="Fixed delay"
-                    min={0}
-                    value={fixedMs}
-                    onChange={(ms) => {
-                      setFixedMs(ms);
-                      setDelayMode("fixed");
-                      onChange({
-                        ...macro,
-                        steps: applyDelayMode(macro.steps, "fixed", Math.max(1, ms)),
-                        recording: macro.recording ? { ...macro.recording, timing: "custom", holdMs: Math.max(1, ms), intervalMs: Math.max(1, ms) } : macro.recording,
-                      });
-                    }}
-                  />
-                </label>
-              ) : null}
-              <button type="button" role="menuitemradio" aria-checked={delayMode === "none"} onClick={() => setMode("none")}>
-                No delay
-              </button>
-              {delayMode === "custom" ? (
-                <button type="button" role="menuitemradio" aria-checked disabled>
-                  Custom
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        <DelayGear
+          mode={delayMode}
+          fixedMs={fixedMs}
+          canRecord={!!macro.recording}
+          resetKey={macro.id}
+          onMode={setMode}
+          onFixed={(ms) => {
+            setFixedMs(ms);
+            setDelayMode("fixed");
+            onChange({
+              ...macro,
+              steps: applyDelayMode(macro.steps, "fixed", Math.max(1, ms)),
+              recording: macro.recording ? { ...macro.recording, timing: "custom", holdMs: Math.max(1, ms), intervalMs: Math.max(1, ms) } : macro.recording,
+            });
+          }}
+        />
       }
     />
     </div>
@@ -130,7 +160,7 @@ function GearIcon() {
   );
 }
 
-function modeOf(recording: Recording | null): DelayMode {
+export function modeOf(recording: Recording | null): DelayMode {
   if (!recording || recording.timing === "played") return "recorded";
   if (recording.intervalMs === 0 && recording.holdMs <= 1) return "none";
   if (recording.holdMs === recording.intervalMs) return "fixed";

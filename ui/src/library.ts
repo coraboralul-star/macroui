@@ -6,10 +6,13 @@ export const LIBRARY_MIME = "application/x-macro-fn";
 
 export type LibraryGroup = "Keyboard" | "Mouse" | "Timing" | "Repeat & Run" | "Blocks" | "Recording";
 
-export const LIBRARY_GROUPS: LibraryGroup[] = ["Keyboard", "Mouse", "Timing", "Repeat & Run", "Blocks", "Recording"];
+/** Full View sidebar and the block insert menu. Keys and mouse stay on the quick chips and in the step timeline. */
+export const LIBRARY_GROUPS: LibraryGroup[] = ["Blocks", "Timing", "Repeat & Run"];
 
-/** A + between blocks is asking for a block first, so that group leads there. */
-export const MENU_GROUPS: LibraryGroup[] = ["Blocks", "Keyboard", "Mouse", "Timing", "Repeat & Run", "Recording"];
+export const MENU_GROUPS: LibraryGroup[] = ["Blocks", "Timing", "Repeat & Run"];
+
+/** Step timelines still insert keys and mouse buttons. Those groups are not in the Full View sidebar. */
+export const LANE_GROUPS: LibraryGroup[] = ["Keyboard", "Mouse", "Timing", "Repeat & Run"];
 
 type Common = {
   id: string;

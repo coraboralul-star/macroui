@@ -70,6 +70,10 @@ function stepCues(steps: Step[]): Cue[] {
       else cues.push({ type: "pair", input, ...span(tapMs(step.holdMs ?? 18), realMs((step.holdMs ?? 18) + 16, 56)) });
       continue;
     }
+    if (step.type === "move" || step.type === "goto" || step.type === "run") {
+      cues.push({ type: "wait", ...span(480, 220) });
+      continue;
+    }
     if (step.type === "repeat") {
       const times = step.count === 0 ? 3 : Math.min(step.count, 4);
       const once = stepCues(step.steps);
@@ -240,7 +244,7 @@ export function GraphPreview({
       ? after.type === "ifShort" ? after.underMs : after.afterMs
       : undefined;
     const cues = scene.kind === "heldPath" ? heldPathCues() : block ? blockCues(block, speed, splitMs) : [];
-    return applyTrigger(cues, speed);
+    return applyTrigger(cues.length ? cues : [{ type: "wait", ...span(520, 220) }], speed);
   }, [block, blocks, scene, speed]);
 
   const total = beats.length ? beats[beats.length - 1].at + beats[beats.length - 1].ms : 1;
@@ -314,6 +318,7 @@ export function GraphPreview({
     let frameId = 0;
     let last = performance.now();
     let time = 0;
+    let timer = 0;
     const tick = (now: number) => {
       if (cancelled) return;
       time = Math.min(total, time + (now - last));
@@ -323,14 +328,16 @@ export function GraphPreview({
       else {
         setElapsed(total);
         setDone(true);
+        if (index < scenes.length - 1) timer = window.setTimeout(() => setIndex((value) => value + 1), 220);
       }
     };
     frameId = requestAnimationFrame(tick);
     return () => {
       cancelled = true;
       cancelAnimationFrame(frameId);
+      window.clearTimeout(timer);
     };
-  }, [index, playMode, run, total, scene?.id, scene?.kind]);
+  }, [index, playMode, run, total, scene?.id, scene?.kind, scenes.length]);
 
   const nextId = index < scenes.length - 1 ? scenes[index + 1]?.nodeId : "";
   const hotIds = new Set(cluster.hot.map(spotId));
@@ -391,6 +398,7 @@ export function GraphPreview({
         </div>
       ) : null}
       <div className="kb-controls">
+        {scene ? <p className="kb-scene">{scene.title}</p> : null}
         <SlideToggle
           label="Preview speed"
           value={speed}
@@ -401,7 +409,7 @@ export function GraphPreview({
           onChange={(id) => setSpeed(id === "real" ? "real" : "simple")}
         />
         <div className="kb-actions">
-          <button type="button" className="ghost" onClick={() => setRun((value) => value + 1)}>
+          <button type="button" className="ghost" onClick={() => { setIndex(0); setRun((value) => value + 1); }}>
             Replay
           </button>
           <button type="button" className="is-primary" disabled={!nextId} onClick={() => nextId && onPick?.(nextId)}>

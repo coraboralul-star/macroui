@@ -230,25 +230,17 @@ export type GraphPlace = {
   underMs?: number;
 };
 
-export type GraphLink = { from: string; to: string; fork?: "early" | "held" };
+export type GraphLink = { from: string; to: string; fork?: "early" | "held" | "split"; side?: boolean };
 
 export type GraphSlot = { index: number; x: number; y: number };
 
 export type GraphLabel = { id: string; text: string; x: number; y: number };
 
-function forkLabel(from: GraphPlace, to: GraphPlace, id: string, text: string, t = 0.5, dx = 0, dy = 0): GraphLabel {
-  const x1 = from.x + GRAPH_NODE_W;
-  const y1 = from.y + GRAPH_NODE_H / 2;
-  const x2 = to.x;
-  const y2 = to.y + GRAPH_NODE_H / 2;
-  const mid = (x1 + x2) / 2;
-  const a = 1 - t;
-  return {
-    id,
-    text,
-    x: a * a * a * x1 + 3 * a * a * t * mid + 3 * a * t * t * mid + t * t * t * x2 + dx,
-    y: a * a * a * y1 + 3 * a * a * t * y1 + 3 * a * t * t * y2 + t * t * t * y2 + dy,
-  };
+function branchText(block: Block): string {
+  if (block.type === "ifShort") return `Let go before ${block.underMs} ms`;
+  if (block.type === "swapAfter") return `Held past ${block.afterMs} ms`;
+  if (block.type === "then") return "After release";
+  return "Then";
 }
 
 export function splitExplain(blocks: Block[], trigger: string): string {
@@ -260,9 +252,9 @@ export function splitExplain(blocks: Block[], trigger: string): string {
   }
   const hold = blocks.some((block) => block.type === "whileHeld");
   const tap = blocks.some((block) => block.type === "ifShort");
-  if (hold && !tap) return "This hold loop has no let-go-early path yet. Add Quick tap right after it and the split appears - early tap on top, keep holding on the bottom.";
-  if (tap && !hold) return "Quick tap only splits if it sits right after a hold loop. Add Hold loop before it and the fork is created for you.";
-  return "Hold loop and Quick tap sit next to each other. Add either one and the split is created for you - let go early vs keep holding.";
+  if (hold && !tap) return "This hold loop has no let-go-early path yet. Add If Released Early after it, or use Split, and the side path is the early tap.";
+  if (tap && !hold) return "If Released Early splits when it sits right after a hold loop.";
+  return "A hold loop followed by If Released Early forks let-go-early from keep holding. Split adds another condition.";
 }
 
 export function setupNote(block: Block, prev: Block | null, next: Block | null, trigger: string): string {
@@ -289,6 +281,10 @@ export function setupNote(block: Block, prev: Block | null, next: Block | null, 
   return "This block runs once, then hands off. Record keys in Edit.";
 }
 
+const BRANCH = new Set<Block["type"]>(["ifShort", "swapAfter", "then"]);
+const ROW = GRAPH_NODE_H + 36;
+const COL = GRAPH_NODE_W + 52;
+
 export function graphLayout(blocks: Block[]): {
   nodes: GraphPlace[];
   links: GraphLink[];
@@ -299,94 +295,77 @@ export function graphLayout(blocks: Block[]): {
   addX: number;
   addY: number;
 } {
-  const split = blocks.some((block, index) => block.type === "ifShort" && blocks[index - 1]?.type === "whileHeld");
-  const mid = split ? 196 : 64;
-  const rise = 148;
-  const xOf = (col: number) => GRAPH_ORIGIN_X + col * (GRAPH_NODE_W + GRAPH_NODE_GAP);
+  const originX = 36;
+  const originY = 28;
   const nodes: GraphPlace[] = [];
   const links: GraphLink[] = [];
   const labels: GraphLabel[] = [];
-  let col = 0;
+  let row = 0;
+  let i = 0;
+  let prev: GraphPlace | null = null;
 
-  for (let i = 0; i < blocks.length; i++) {
+  while (i < blocks.length) {
     const block = blocks[i];
-    const prev = i > 0 ? blocks[i - 1] ?? null : null;
-    const next = blocks[i + 1] ?? null;
-    const fork = block.type === "ifShort" && prev?.type === "whileHeld";
-
-    if (fork && prev) {
-      nodes.push({
-        id: block.id,
-        hint: nodeHint(block),
-        x: xOf(col),
-        y: mid - rise,
-        kind: block.type,
-      });
-      nodes.push({
-        id: `${prev.id}-held`,
-        hint: "Wait for release",
-        x: xOf(col),
-        y: mid + rise,
-        kind: "heldPath",
-        underMs: block.underMs,
-      });
-      links.push({ from: prev.id, to: block.id, fork: "early" });
-      links.push({ from: prev.id, to: `${prev.id}-held`, fork: "held" });
-      const holdNode = nodes.find((node) => node.id === prev.id);
-      const earlyNode = nodes[nodes.length - 2];
-      const heldNode = nodes[nodes.length - 1];
-      if (holdNode && earlyNode && heldNode) {
-        labels.push(forkLabel(holdNode, earlyNode, `${block.id}-lab-early`, `Let go before ${block.underMs} ms`, 0.46, -78, -16));
-        labels.push(forkLabel(holdNode, heldNode, `${prev.id}-lab-held`, "Keep holding", 0.52, -10, 8));
-      }
-      if (next) {
-        if (next.type === "then")
-          links.push({ from: block.id, to: next.id, fork: "early" });
-        links.push({ from: `${prev.id}-held`, to: next.id, fork: "held" });
-      }
-      col += 1;
-      continue;
-    }
-
-    const afterFork = prev?.type === "ifShort" && blocks[i - 2]?.type === "whileHeld";
-    nodes.push({
+    const trunk: GraphPlace = {
       id: block.id,
       hint: nodeHint(block),
-      x: xOf(col),
-      y: mid,
+      x: originX,
+      y: originY + row * ROW,
       kind: block.type,
-    });
-    if (prev && !afterFork) links.push({ from: prev.id, to: block.id });
-    if (block.type === "swapAfter" && prev?.type === "whileHeld") {
-      const holdNode = nodes.find((node) => node.id === prev.id);
-      const swapNode = nodes[nodes.length - 1];
-      if (holdNode && swapNode)
-        labels.push(forkLabel(holdNode, swapNode, `${block.id}-lab-swap`, `Held past ${block.afterMs} ms`, 0.5, -24, -18));
+    };
+    nodes.push(trunk);
+    if (prev) links.push({ from: prev.id, to: trunk.id });
+    i += 1;
+    const branches: Block[] = [];
+    while (i < blocks.length && BRANCH.has(blocks[i].type)) {
+      branches.push(blocks[i]);
+      i += 1;
     }
-    col += 1;
+    branches.forEach((branch, index) => {
+      const node: GraphPlace = {
+        id: branch.id,
+        hint: nodeHint(branch),
+        x: originX + COL,
+        y: trunk.y + index * ROW,
+        kind: branch.type,
+        underMs: branch.type === "ifShort" ? branch.underMs : undefined,
+      };
+      nodes.push(node);
+      const fork = branch.type === "ifShort" ? "early" : branch.type === "swapAfter" ? "held" : "split";
+      links.push({ from: trunk.id, to: branch.id, side: true, fork });
+      labels.push({
+        id: `${branch.id}-lab`,
+        text: branchText(branch),
+        x: trunk.x + GRAPH_NODE_W + 14,
+        y: (trunk.y + node.y) / 2 + 18,
+      });
+    });
+    if (trunk.kind === "whileHeld" && branches.length) {
+      labels.push({
+        id: `${trunk.id}-hold`,
+        text: "Keep holding",
+        x: trunk.x + 14,
+        y: trunk.y + GRAPH_NODE_H + 6,
+      });
+    }
+    row += Math.max(1, branches.length);
+    prev = trunk;
   }
 
-  const maxX = nodes.reduce((value, node) => Math.max(value, node.x), 0);
-  const maxY = nodes.reduce((value, node) => Math.max(value, node.y), mid);
-  const addX = (nodes.length ? maxX : GRAPH_ORIGIN_X - GRAPH_NODE_W - GRAPH_NODE_GAP) + GRAPH_NODE_W + GRAPH_NODE_GAP;
-  const addY = mid + GRAPH_NODE_H / 2 - 18;
-  const pinY = (node: GraphPlace) => node.y + GRAPH_NODE_H / 2 - 18;
-  const real = (id: string) => nodes.find((node) => node.id === id);
+  const maxX = nodes.reduce((value, node) => Math.max(value, node.x), originX);
+  const maxY = nodes.reduce((value, node) => Math.max(value, node.y), originY);
+  const addX = originX + GRAPH_NODE_W / 2 - 18;
+  const addY = (nodes.length ? maxY : originY) + GRAPH_NODE_H + 18;
+  const byId = new Map(nodes.map((node) => [node.id, node]));
   const slots: GraphSlot[] = [];
-  if (!blocks.length) {
-    slots.push({ index: 0, x: addX, y: addY });
-  } else {
-    const first = real(blocks[0].id);
-    if (first) slots.push({ index: 0, x: first.x - GRAPH_NODE_GAP / 2 - 18, y: pinY(first) });
-    for (let i = 0; i < blocks.length - 1; i++) {
-      const from = real(blocks[i].id);
-      const to = real(blocks[i + 1].id);
-      if (!from || !to) continue;
-      slots.push({
-        index: i + 1,
-        x: (from.x + GRAPH_NODE_W + to.x) / 2 - 18,
-        y: (pinY(from) + pinY(to)) / 2,
-      });
+  if (!blocks.length) slots.push({ index: 0, x: addX, y: originY });
+  else {
+    const first = byId.get(blocks[0].id);
+    if (first) slots.push({ index: 0, x: first.x + GRAPH_NODE_W / 2 - 18, y: Math.max(8, first.y - 26) });
+    for (let index = 0; index < blocks.length - 1; index++) {
+      const to = byId.get(blocks[index + 1].id);
+      if (!to) continue;
+      slots.push({ index: index + 1, x: to.x + GRAPH_NODE_W / 2 - 18, y: to.y - 26 });
     }
     slots.push({ index: blocks.length, x: addX, y: addY });
   }
@@ -395,8 +374,8 @@ export function graphLayout(blocks: Block[]): {
     links,
     slots,
     labels,
-    width: Math.max((nodes.length ? maxX : GRAPH_ORIGIN_X) + GRAPH_NODE_W + GRAPH_NODE_GAP + 80, 720),
-    height: Math.max(maxY + GRAPH_NODE_H + 56, mid + GRAPH_NODE_H + 56),
+    width: Math.max(maxX + GRAPH_NODE_W + 72, 420),
+    height: Math.max(maxY + GRAPH_NODE_H + 88, 360),
     addX,
     addY,
   };
@@ -510,17 +489,6 @@ export function previewScenes(trigger: string, blocks: Block[]): PreviewScene[] 
       affect: copy.affect,
       kind: block.type,
     });
-    if (block.type === "ifShort" && prev?.type === "whileHeld") {
-      scenes.push({
-        id: `${prev.id}-held`,
-        nodeId: `${prev.id}-held`,
-        title: `Held past ${block.underMs} ms`,
-        why: `This is the other way out of the hold loop. You kept ${key} down past ${block.underMs} ms.`,
-        affect: `The hold loop just waits until ${key} comes up. The short-tap path is skipped, then the next block can run.`,
-        kind: "heldPath",
-        underMs: block.underMs,
-      });
-    }
   });
   return scenes;
 }

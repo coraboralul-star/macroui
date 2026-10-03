@@ -1,6 +1,6 @@
 import { useEffect, useState, type DragEvent as ReactDragEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
-import { LIBRARY, LIBRARY_GROUPS, LIBRARY_MIME, libraryItem, librarySteps, matchInput } from "../library";
+import { LIBRARY, LANE_GROUPS, LIBRARY_MIME, libraryItem, librarySteps, matchInput } from "../library";
 import type { Macro, Step } from "../profile";
 import { Capture, type Captured } from "./Capture";
 import { FieldSelect } from "./FieldSelect";
@@ -88,7 +88,7 @@ export function EventLane({
 
   const insertMenu = (index: number): MenuLine[] => {
     const lines: MenuLine[] = [];
-    for (const group of LIBRARY_GROUPS) {
+    for (const group of LANE_GROUPS) {
       const items = LIBRARY.filter(
         (item) =>
           item.group === group &&

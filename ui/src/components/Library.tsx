@@ -12,11 +12,11 @@ export function Library({
   const [shut, setShut] = useState<Partial<Record<LibraryGroup, boolean>>>({});
   const term = find.trim().toLowerCase();
   const hit = (label: string) => !term || label.toLowerCase().includes(term);
+  const chips = QUICK_KEYS.filter((chip) => hit(chip.label));
   const groups = LIBRARY_GROUPS.map((group) => ({
     group,
     items: LIBRARY.filter((item) => item.group === group && hit(item.label)),
-    chips: term ? [] : QUICK_KEYS.filter((chip) => chip.group === group),
-  })).filter((entry) => entry.items.length || entry.chips.length);
+  })).filter((entry) => entry.items.length);
 
   const start = (event: DragEvent, id: string) => {
     event.dataTransfer.setData(LIBRARY_MIME, id);
@@ -38,7 +38,24 @@ export function Library({
         />
       </div>
       <div className="lib-body">
-        {groups.map(({ group, items, chips }) => {
+        {chips.length ? (
+          <div className="lib-chips lib-quick">
+            {chips.map((chip) => (
+              <button
+                key={chip.id}
+                type="button"
+                className="lib-chip"
+                title={`${chip.label} down then up`}
+                draggable
+                onDragStart={(event) => start(event, chip.id)}
+                onClick={() => onPick(chip.id)}
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {groups.map(({ group, items }) => {
           const open = !shut[group] || !!term;
           return (
             <section key={group} className={`lib-group${open ? " is-open" : ""}`}>
@@ -53,23 +70,6 @@ export function Library({
               </button>
               {open ? (
                 <div className="lib-list">
-                  {chips.length ? (
-                    <div className="lib-chips">
-                      {chips.map((chip) => (
-                        <button
-                          key={chip.id}
-                          type="button"
-                          className="lib-chip"
-                          title={`${chip.label} down then up`}
-                          draggable
-                          onDragStart={(event) => start(event, chip.id)}
-                          onClick={() => onPick(chip.id)}
-                        >
-                          {chip.label}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
                   {items.map((item) => {
                     const off = item.kind === "record" && item.source === "last" && !hasRecording;
                     return (
@@ -92,7 +92,7 @@ export function Library({
             </section>
           );
         })}
-        {groups.length ? null : <p className="lib-empty">No match</p>}
+        {groups.length || chips.length ? null : <p className="lib-empty">No match</p>}
       </div>
     </aside>
   );

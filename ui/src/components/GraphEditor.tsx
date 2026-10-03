@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent } from "react";
-import { appendSteps, cloneBlock, insertStepBlock, insertTyped, reorderBlocks, takesSteps, allowsScanWait } from "../blocks";
-import { pressPair } from "../eventLane";
+import { post } from "../bridge";
+import { appendSteps, cloneBlock, insertStepBlock, insertTyped, moveBlockAfter, reorderBlocks, splitFrom, takesSteps, allowsScanWait } from "../blocks";
+import { pressPair, applyDelayMode } from "../eventLane";
 import { LIBRARY, LIBRARY_MIME, MENU_GROUPS, libraryItem, librarySteps, matchInput } from "../library";
 import { compileRecording, type RecEvent } from "../recording";
 import { effectivePlayMode, GRAPH_NODE_H, GRAPH_NODE_W, graphLayout, place, shownBlocks, usesReleaseStop } from "../macroFlow";
@@ -13,6 +14,7 @@ import { GraphPreview } from "./GraphPreview";
 import { KeyFace } from "./KeyFace";
 import { Library } from "./Library";
 import { RecordSurface } from "./RecordSurface";
+import { DelayGear, modeOf, type DelayMode } from "./RecordDeck";
 import { ReleaseField } from "./ReleaseField";
 import { SlideToggle } from "./SlideToggle";
 
@@ -50,7 +52,13 @@ export function GraphEditor({
   const [wipe, setWipe] = useState<"macro" | "block" | null>(null);
   const [libOver, setLibOver] = useState<string | null>(null);
   const [libPick, setLibPick] = useState<{ id: string; spot: Spot } | null>(null);
+  const [delayMode, setDelayMode] = useState<DelayMode>("recorded");
+  const [fixedMs, setFixedMs] = useState(20);
+  const [wire, setWire] = useState<{ from: string; x: number; y: number; over: string | null } | null>(null);
   const panDrag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const worldRef = useRef<HTMLDivElement>(null);
+  const wireRef = useRef(wire);
+  wireRef.current = wire;
 
   useEffect(() => {
     setPicked(blocks[0]?.id ?? "");
@@ -65,6 +73,12 @@ export function GraphEditor({
     if (picked && (picked.endsWith("-held") || blocks.some((block) => block.id === picked))) return;
     setPicked(blocks[0]?.id ?? "");
   }, [blocks, picked]);
+
+  useEffect(() => {
+    setDelayMode(modeOf(macro?.recording ?? null));
+    const hold = macro?.recording?.holdMs;
+    setFixedMs(hold && hold > 1 ? hold : 20);
+  }, [macro?.id, macro?.recording]);
 
   useEffect(() => {
     if (menu == null) return;
@@ -90,10 +104,69 @@ export function GraphEditor({
     if (pick) setPicked(pick);
   };
 
+  const worldPoint = (event: { clientX: number; clientY: number }) => {
+    const rect = worldRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+  const blocksRef = useRef(blocks);
+  const commitRef = useRef(commit);
+  blocksRef.current = blocks;
+  commitRef.current = commit;
+
+  useEffect(() => {
+    if (!wire) return;
+    const move = (event: globalThis.PointerEvent) => {
+      const point = worldPoint(event);
+      const hit = document.elementFromPoint(event.clientX, event.clientY);
+      const node = hit instanceof Element ? hit.closest("[data-node]") : null;
+      const over = node instanceof HTMLElement ? node.dataset.node ?? null : null;
+      setWire((current) => (current ? { ...current, x: point.x, y: point.y, over: over && over !== current.from ? over : null } : current));
+    };
+    const up = () => {
+      const current = wireRef.current;
+      setWire(null);
+      if (!current?.over) return;
+      commitRef.current(moveBlockAfter(blocksRef.current, current.over, current.from), current.over);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+  }, [wire?.from]);
+
   const selectedBlock = blocks.find((block) => block.id === picked) ?? null;
   const selectedIndex = selectedBlock ? blocks.findIndex((block) => block.id === selectedBlock.id) : -1;
 
   const updateBlock = (id: string, next: Block) => commit(blocks.map((item) => (item.id === id ? next : item)));
+
+  const applyDelay = (mode: DelayMode, ms = fixedMs) => {
+    if (!macro || !selectedBlock || !takesSteps(selectedBlock)) return;
+    setDelayMode(mode);
+    if (mode === "recorded") {
+      if (!macro.recording) return;
+      const recording = { ...macro.recording, timing: "played" as const };
+      commit(
+        blocks.map((block) => (block.id === selectedBlock.id && takesSteps(block) ? { ...block, steps: compileRecording(recording) } : block)),
+        selectedBlock.id,
+        { recording },
+      );
+      return;
+    }
+    if (mode === "custom") return;
+    const amount = mode === "none" ? 0 : Math.max(0, ms);
+    const steps = applyDelayMode(selectedBlock.steps, mode, amount);
+    const recording = macro.recording
+      ? { ...macro.recording, timing: "custom" as const, holdMs: mode === "none" ? 1 : Math.max(1, amount), intervalMs: mode === "fixed" ? Math.max(1, amount) : 0 }
+      : macro.recording;
+    commit(
+      blocks.map((block) => (block.id === selectedBlock.id && takesSteps(block) ? { ...block, steps } : block)),
+      selectedBlock.id,
+      { recording },
+    );
+  };
 
   const dropBlock = () => {
     if (!selectedBlock) return;
@@ -244,7 +317,7 @@ export function GraphEditor({
     if (target.closest("input, textarea")) return;
     window.getSelection()?.removeAllRanges();
     event.preventDefault();
-    if (target.closest(".graph-node, .graph-node-x, .graph-flow, .graph-add, .graph-add-menu, .graph-insert")) return;
+    if (target.closest(".graph-node, .graph-node-x, .graph-flow, .graph-add, .graph-add-menu, .graph-insert, .graph-wire, .graph-split")) return;
     panDrag.current = { x: pan.x, y: pan.y, px: event.clientX, py: event.clientY };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -279,7 +352,14 @@ export function GraphEditor({
 
   return (
     <div className="graph-root" role="dialog" aria-label="Advanced">
-      <header className="graph-bar">
+      <header
+        className="graph-bar"
+        onMouseDown={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest("button, input, a, select, textarea, .rel-field, .gear-wrap, .slide-toggle")) return;
+          post({ type: "window", action: "drag" });
+        }}
+      >
         {tabs}
         {tab === "full" && macro ? (
           <input
@@ -291,6 +371,18 @@ export function GraphEditor({
           />
         ) : null}
         <span className="graph-bar-space" />
+        <DelayGear
+          mode={delayMode}
+          fixedMs={fixedMs}
+          canRecord={!!macro?.recording}
+          disabled={!selectedBlock || !takesSteps(selectedBlock)}
+          resetKey={`${macro?.id ?? ""}:${selectedBlock?.id ?? ""}`}
+          onMode={applyDelay}
+          onFixed={(ms) => {
+            setFixedMs(ms);
+            applyDelay("fixed", ms);
+          }}
+        />
         {macro && usesReleaseStop(macro) ? (
           <ReleaseField compact label="Macro on release" value={macro.releaseStop} onChange={(releaseStop) => onChange({ ...macro, releaseStop: releaseStop ?? "nextUp" })} />
         ) : null}
@@ -320,7 +412,7 @@ export function GraphEditor({
             onDragLeave={() => setLibOver(null)}
             onDrop={dropItem({ at: blocks.length })}
           >
-            <div className="graph-world" style={{ transform: `translate(${pan.x}px, ${pan.y}px)`, width, height }}>
+            <div className="graph-world" ref={worldRef} style={{ transform: `translate(${pan.x}px, ${pan.y}px)`, width, height }}>
               <svg className="graph-wires" width={width} height={height} aria-hidden="true">
                 <defs>
                   <marker id="graph-arrow" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto">
@@ -331,23 +423,29 @@ export function GraphEditor({
                   const from = layout.nodes.find((node) => node.id === link.from);
                   const to = layout.nodes.find((node) => node.id === link.to);
                   if (!from || !to) return null;
-                  const x1 = from.x + GRAPH_NODE_W;
-                  const y1 = from.y + GRAPH_NODE_H / 2;
-                  const x2 = to.x;
-                  const y2 = to.y + GRAPH_NODE_H / 2;
-                  const mid = (x1 + x2) / 2;
+                  const drawn = wirePath(from, to, link.side);
                   return (
                     <path
                       key={`${link.from}-${link.to}-${link.fork ?? "main"}`}
-                      className={link.fork ? `is-${link.fork}` : undefined}
-                      d={`M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`}
-                      fill="none"
-                      stroke="#8d8d8d"
-                      strokeWidth="2"
+                      className={`graph-wire${link.fork ? ` is-${link.fork}` : ""}`}
+                      d={drawn.d}
                       markerEnd="url(#graph-arrow)"
+                      onPointerDown={(event) => {
+                        if (event.button !== 0) return;
+                        event.stopPropagation();
+                        event.preventDefault();
+                        const point = worldPoint(event);
+                        setWire({ from: link.from, x: point.x, y: point.y, over: null });
+                      }}
                     />
                   );
                 })}
+                {wire ? (
+                  <path
+                    className="graph-wire is-drag"
+                    d={dragWire(layout.nodes.find((node) => node.id === wire.from), wire.x, wire.y)}
+                  />
+                ) : null}
               </svg>
               {layout.labels.map((label) => (
                 <span key={label.id} className="graph-fork-label" style={{ left: label.x, top: label.y }}>
@@ -363,8 +461,9 @@ export function GraphEditor({
                   <button
                     type="button"
                     draggable={movable}
-                    className={`graph-node block-${node.kind}${picked === node.id ? " is-on" : ""}${flowNode === node.id ? " is-preview" : ""}${dragId === node.id ? " is-lift" : ""}${libOver === `node:${node.id}` ? " is-drop" : ""}`}
+                    className={`graph-node block-${node.kind}${picked === node.id ? " is-on" : ""}${flowNode === node.id ? " is-preview" : ""}${dragId === node.id ? " is-lift" : ""}${libOver === `node:${node.id}` || wire?.over === node.id ? " is-drop" : ""}`}
                     style={{ left: node.x, top: node.y, width: GRAPH_NODE_W, height: GRAPH_NODE_H }}
+                    data-node={movable ? node.id : undefined}
                     onPointerDown={(event) => {
                       event.stopPropagation();
                       if (event.button === 0) previewNode(node.id);
@@ -410,6 +509,22 @@ export function GraphEditor({
                     </strong>
                     {node.hint ? <em>{node.hint}</em> : null}
                   </button>
+                  {movable ? (
+                    <button
+                      type="button"
+                      className="graph-split"
+                      aria-label="Split connector"
+                      style={{ left: node.x + GRAPH_NODE_W - 8, top: node.y + GRAPH_NODE_H - 10 }}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        const next = splitFrom(blocks, node.id);
+                        commit(next.blocks, next.pick);
+                      }}
+                    >
+                      Split
+                    </button>
+                  ) : null}
                   {movable ? (
                     <button
                       type="button"
@@ -569,7 +684,10 @@ export function GraphEditor({
                     macros={others}
                     allowScanWait={allowsScanWait(selectedBlock, macro?.playMode)}
                     onLive={setLive}
-                    onSteps={(steps) => updateBlock(selectedBlock.id, { ...selectedBlock, steps })}
+                    onSteps={(steps) => {
+                      setDelayMode("custom");
+                      updateBlock(selectedBlock.id, { ...selectedBlock, steps });
+                    }}
                     onCapture={(recording) => {
                       const extra = compileRecording(recording);
                       commit(
@@ -644,4 +762,28 @@ export function GraphEditor({
       ) : null}
     </div>
   );
+}
+
+function wirePath(from: { x: number; y: number }, to: { x: number; y: number }, side?: boolean) {
+  if (side) {
+    const x1 = from.x + GRAPH_NODE_W;
+    const y1 = from.y + GRAPH_NODE_H / 2;
+    const x2 = to.x;
+    const y2 = to.y + GRAPH_NODE_H / 2;
+    const mid = (x1 + x2) / 2;
+    return { d: `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}` };
+  }
+  const x1 = from.x + GRAPH_NODE_W / 2;
+  const y1 = from.y + GRAPH_NODE_H;
+  const x2 = to.x + GRAPH_NODE_W / 2;
+  const y2 = to.y;
+  const mid = (y1 + y2) / 2;
+  return { d: `M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}` };
+}
+
+function dragWire(from: { x: number; y: number } | undefined, x: number, y: number) {
+  if (!from) return "";
+  const x1 = from.x + GRAPH_NODE_W / 2;
+  const y1 = from.y + GRAPH_NODE_H;
+  return `M ${x1} ${y1} L ${x} ${y}`;
 }
