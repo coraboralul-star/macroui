@@ -330,6 +330,24 @@ export function GraphEditor({
 
   const width = layout.width;
   const height = layout.height;
+  const activeId = flowNode || picked;
+  const wireSlots = new Map<string, { index: number; count: number }>();
+  const byFrom = new Map<string, typeof layout.links>();
+  for (const link of layout.links) {
+    const list = byFrom.get(link.from) ?? [];
+    list.push(link);
+    byFrom.set(link.from, list);
+  }
+  for (const list of byFrom.values()) {
+    const ordered = [...list].sort((a, b) => {
+      const ax = layout.nodes.find((node) => node.id === a.to)?.x ?? 0;
+      const bx = layout.nodes.find((node) => node.id === b.to)?.x ?? 0;
+      return ax - bx;
+    });
+    ordered.forEach((link, index) => {
+      wireSlots.set(wireKey(link), { index, count: ordered.length });
+    });
+  }
 
   const tabs = (
     <SlideToggle
@@ -414,30 +432,31 @@ export function GraphEditor({
           >
             <div className="graph-world" ref={worldRef} style={{ transform: `translate(${pan.x}px, ${pan.y}px)`, width, height }}>
               <svg className="graph-wires" width={width} height={height} aria-hidden="true">
-                <defs>
-                  <marker id="graph-arrow" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto">
-                    <polygon points="0 0, 12 5, 0 10" fill="#9a9a9a" />
-                  </marker>
-                </defs>
                 {layout.links.map((link) => {
                   const from = layout.nodes.find((node) => node.id === link.from);
                   const to = layout.nodes.find((node) => node.id === link.to);
                   if (!from || !to) return null;
-                  const drawn = wirePath(from, to, link.side);
+                  const slot = wireSlots.get(wireKey(link)) ?? { index: 0, count: 1 };
+                  const drawn = wirePath(from, to, slot.index, slot.count, layout.nodes);
+                  const hot = link.to === activeId || (!link.fork && link.from === activeId);
+                  const tone = hot ? " is-hot" : "";
                   return (
-                    <path
-                      key={`${link.from}-${link.to}-${link.fork ?? "main"}`}
-                      className={`graph-wire${link.fork ? ` is-${link.fork}` : ""}`}
-                      d={drawn.d}
-                      markerEnd="url(#graph-arrow)"
-                      onPointerDown={(event) => {
-                        if (event.button !== 0) return;
-                        event.stopPropagation();
-                        event.preventDefault();
-                        const point = worldPoint(event);
-                        setWire({ from: link.from, x: point.x, y: point.y, over: null });
-                      }}
-                    />
+                    <g key={`${link.from}-${link.to}-${link.fork ?? "main"}`}>
+                      <path
+                        className="graph-wire graph-wire-hit"
+                        d={drawn.d}
+                        onPointerDown={(event) => {
+                          if (event.button !== 0) return;
+                          event.stopPropagation();
+                          event.preventDefault();
+                          const point = worldPoint(event);
+                          setWire({ from: link.from, x: point.x, y: point.y, over: null });
+                        }}
+                      />
+                      <path className={`graph-wire${tone}${link.fork ? ` is-${link.fork}` : ""}`} d={drawn.d} />
+                      <circle className={`graph-port${tone}`} cx={drawn.x1} cy={drawn.y1} r="3.25" />
+                      <circle className={`graph-port${tone}`} cx={drawn.x2} cy={drawn.y2} r="3.25" />
+                    </g>
                   );
                 })}
                 {wire ? (
@@ -447,11 +466,37 @@ export function GraphEditor({
                   />
                 ) : null}
               </svg>
-              {layout.labels.map((label) => (
-                <span key={label.id} className="graph-fork-label" style={{ left: label.x, top: label.y }}>
-                  {label.text}
-                </span>
-              ))}
+              {layout.labels.map((label) => {
+                const hold = label.id.endsWith("-hold");
+                const link = hold
+                  ? layout.links.find((item) => item.from === label.id.slice(0, -5) && !item.fork)
+                  : layout.links.find((item) => label.id === `${item.to}-lab`);
+                let left = label.x;
+                let top = label.y;
+                let tilt = 0;
+                let hot = hold && activeId === label.id.slice(0, -5);
+                if (link) {
+                  const from = layout.nodes.find((node) => node.id === link.from);
+                  const to = layout.nodes.find((node) => node.id === link.to);
+                  if (from && to) {
+                    const slot = wireSlots.get(wireKey(link)) ?? { index: 0, count: 1 };
+                    const drawn = wirePath(from, to, slot.index, slot.count, layout.nodes);
+                    left = drawn.labelX;
+                    top = drawn.labelY;
+                    tilt = drawn.tilt;
+                    hot = link.to === activeId || (!link.fork && link.from === activeId);
+                  }
+                }
+                return (
+                  <span
+                    key={label.id}
+                    className={`graph-fork-label${hot ? " is-hot" : ""}`}
+                    style={{ left, top, transform: `translate(-50%, -50%) rotate(${tilt}deg)` }}
+                  >
+                    {label.text}
+                  </span>
+                );
+              })}
               {layout.nodes.map((node) => {
                 const item = blocks.find((block) => block.id === node.id);
                 const index = blocks.findIndex((block) => block.id === node.id);
@@ -764,26 +809,91 @@ export function GraphEditor({
   );
 }
 
-function wirePath(from: { x: number; y: number }, to: { x: number; y: number }, side?: boolean) {
-  if (side) {
-    const x1 = from.x + GRAPH_NODE_W;
-    const y1 = from.y + GRAPH_NODE_H / 2;
-    const x2 = to.x;
-    const y2 = to.y + GRAPH_NODE_H / 2;
-    const mid = (x1 + x2) / 2;
-    return { d: `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}` };
-  }
-  const x1 = from.x + GRAPH_NODE_W / 2;
+function wireKey(link: { from: string; to: string; fork?: string }) {
+  return `${link.from}\0${link.to}\0${link.fork ?? ""}`;
+}
+
+function wirePath(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  slot = 0,
+  count = 1,
+  nodes: { x: number; y: number }[] = [],
+) {
+  const inset = 28;
+  const span = GRAPH_NODE_W - inset * 2;
+  const x1 = count <= 1 ? from.x + GRAPH_NODE_W / 2 : from.x + inset + (span * slot) / Math.max(1, count - 1);
   const y1 = from.y + GRAPH_NODE_H;
   const x2 = to.x + GRAPH_NODE_W / 2;
   const y2 = to.y;
-  const mid = (y1 + y2) / 2;
-  return { d: `M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}` };
+  const gap = y2 - y1;
+  const blocking = nodes.filter((node) => {
+    if (node === from || node === to) return false;
+    const top = node.y;
+    const bottom = node.y + GRAPH_NODE_H;
+    const left = node.x - 6;
+    const right = node.x + GRAPH_NODE_W + 6;
+    const channelLeft = Math.min(x1, x2) - 16;
+    const channelRight = Math.max(x1, x2) + 16;
+    return bottom > y1 + 20 && top < y2 - 20 && right > channelLeft && left < channelRight;
+  });
+  if (blocking.length && gap > 70) {
+    const right = Math.max(...blocking.map((node) => node.x + GRAPH_NODE_W));
+    const bottom = Math.max(...blocking.map((node) => node.y + GRAPH_NODE_H));
+    const clear = Math.max(right, x1, x2) + 36;
+    const laneY = bottom + 12;
+    const leaveY = y1 + 88;
+    const spot = curvePoint(x1, y1, x1, y1 + 32, clear, y1 + 48, clear, leaveY, 0.62);
+    return {
+      d: `M ${x1} ${y1} C ${x1} ${y1 + 32}, ${clear} ${y1 + 48}, ${clear} ${leaveY} L ${clear} ${laneY} C ${clear} ${y2}, ${x2} ${y2}, ${x2} ${y2}`,
+      x1,
+      y1,
+      x2,
+      y2,
+      labelX: spot.x + 6,
+      labelY: spot.y - 14,
+      tilt: clampTilt(spot.tilt),
+    };
+  }
+  const drop = Math.min(Math.max(8, Math.abs(gap) * 0.42), 72);
+  const sign = gap < 0 ? -1 : 1;
+  const midX = (x1 + x2) / 2;
+  const midY = (y1 + y2) / 2;
+  const lean = Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
+  const toward = from.x + GRAPH_NODE_W / 2 - midX;
+  const shift = Math.abs(toward) < 8 ? -14 : Math.sign(toward) * 16;
+  return {
+    d: `M ${x1} ${y1} C ${x1} ${y1 + sign * drop}, ${x2} ${y2 - sign * drop}, ${x2} ${y2}`,
+    x1,
+    y1,
+    x2,
+    y2,
+    labelX: midX + shift,
+    labelY: midY - 4,
+    tilt: clampTilt(90 - lean),
+  };
+}
+
+function clampTilt(deg: number) {
+  return Math.max(-16, Math.min(16, deg));
+}
+
+function curvePoint(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, t: number) {
+  const u = 1 - t;
+  const x = u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3;
+  const y = u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3;
+  const dx = 3 * u * u * (x1 - x0) + 6 * u * t * (x2 - x1) + 3 * t * t * (x3 - x2);
+  const dy = 3 * u * u * (y1 - y0) + 6 * u * t * (y2 - y1) + 3 * t * t * (y3 - y2);
+  let tilt = Math.atan2(dy, dx) * (180 / Math.PI);
+  if (tilt > 90) tilt -= 180;
+  if (tilt < -90) tilt += 180;
+  return { x, y, tilt };
 }
 
 function dragWire(from: { x: number; y: number } | undefined, x: number, y: number) {
   if (!from) return "";
   const x1 = from.x + GRAPH_NODE_W / 2;
   const y1 = from.y + GRAPH_NODE_H;
-  return `M ${x1} ${y1} L ${x} ${y}`;
+  const drop = Math.max(36, Math.abs(y - y1) * 0.45);
+  return `M ${x1} ${y1} C ${x1} ${y1 + drop}, ${x} ${Math.max(y1, y) - drop}, ${x} ${y}`;
 }

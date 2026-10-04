@@ -283,7 +283,8 @@ export function setupNote(block: Block, prev: Block | null, next: Block | null, 
 
 const BRANCH = new Set<Block["type"]>(["ifShort", "swapAfter", "then"]);
 const ROW = GRAPH_NODE_H + 36;
-const COL = GRAPH_NODE_W + 52;
+const FORK_GAP = 52;
+const FORK_DROP = 200;
 
 export function graphLayout(blocks: Block[]): {
   nodes: GraphPlace[];
@@ -300,7 +301,7 @@ export function graphLayout(blocks: Block[]): {
   const nodes: GraphPlace[] = [];
   const links: GraphLink[] = [];
   const labels: GraphLabel[] = [];
-  let row = 0;
+  let y = originY;
   let i = 0;
   let prev: GraphPlace | null = null;
 
@@ -310,7 +311,7 @@ export function graphLayout(blocks: Block[]): {
       id: block.id,
       hint: nodeHint(block),
       x: originX,
-      y: originY + row * ROW,
+      y,
       kind: block.type,
     };
     nodes.push(trunk);
@@ -321,40 +322,57 @@ export function graphLayout(blocks: Block[]): {
       branches.push(blocks[i]);
       i += 1;
     }
-    branches.forEach((branch, index) => {
-      const node: GraphPlace = {
-        id: branch.id,
-        hint: nodeHint(branch),
-        x: originX + COL,
-        y: trunk.y + index * ROW,
-        kind: branch.type,
-        underMs: branch.type === "ifShort" ? branch.underMs : undefined,
-      };
-      nodes.push(node);
-      const fork = branch.type === "ifShort" ? "early" : branch.type === "swapAfter" ? "held" : "split";
-      links.push({ from: trunk.id, to: branch.id, side: true, fork });
-      labels.push({
-        id: `${branch.id}-lab`,
-        text: branchText(branch),
-        x: trunk.x + GRAPH_NODE_W + 14,
-        y: (trunk.y + node.y) / 2 + 18,
+    if (branches.length) {
+      const branchY = trunk.y + GRAPH_NODE_H + FORK_DROP;
+      const span = branches.length * GRAPH_NODE_W + (branches.length - 1) * FORK_GAP;
+      const startX = trunk.x + (GRAPH_NODE_W - span) / 2;
+      branches.forEach((branch, index) => {
+        const node: GraphPlace = {
+          id: branch.id,
+          hint: nodeHint(branch),
+          x: startX + index * (GRAPH_NODE_W + FORK_GAP),
+          y: branchY,
+          kind: branch.type,
+          underMs: branch.type === "ifShort" ? branch.underMs : undefined,
+        };
+        nodes.push(node);
+        const fork = branch.type === "ifShort" ? "early" : branch.type === "swapAfter" ? "held" : "split";
+        links.push({ from: trunk.id, to: branch.id, side: true, fork });
+        const fromX = trunk.x + GRAPH_NODE_W / 2;
+        const toX = node.x + GRAPH_NODE_W / 2;
+        labels.push({
+          id: `${branch.id}-lab`,
+          text: branchText(branch),
+          x: (fromX + toX) / 2,
+          y: (trunk.y + GRAPH_NODE_H + node.y) / 2,
+        });
       });
-    });
-    if (trunk.kind === "whileHeld" && branches.length) {
-      labels.push({
-        id: `${trunk.id}-hold`,
-        text: "Keep holding",
-        x: trunk.x + 14,
-        y: trunk.y + GRAPH_NODE_H + 6,
-      });
+      if (trunk.kind === "whileHeld") {
+        labels.push({
+          id: `${trunk.id}-hold`,
+          text: "Keep holding",
+          x: trunk.x + 36,
+          y: trunk.y + GRAPH_NODE_H + 22,
+        });
+      }
+      y = branchY + ROW;
+    } else {
+      y += ROW;
     }
-    row += Math.max(1, branches.length);
     prev = trunk;
+  }
+
+  const minX = nodes.reduce((value, node) => Math.min(value, node.x), originX);
+  const shift = Math.max(0, originX - minX);
+  if (shift) {
+    for (const node of nodes) node.x += shift;
+    for (const label of labels) label.x += shift;
   }
 
   const maxX = nodes.reduce((value, node) => Math.max(value, node.x), originX);
   const maxY = nodes.reduce((value, node) => Math.max(value, node.y), originY);
-  const addX = originX + GRAPH_NODE_W / 2 - 18;
+  const spine = nodes[0];
+  const addX = (spine ? spine.x : originX) + GRAPH_NODE_W / 2 - 18;
   const addY = (nodes.length ? maxY : originY) + GRAPH_NODE_H + 18;
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const slots: GraphSlot[] = [];
