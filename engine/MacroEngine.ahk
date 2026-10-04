@@ -396,6 +396,7 @@ class Runner {
         this.waitUntil := 0
         this.scanWait := false
         this.done := false
+        this.paused := false
         this.moveX := 0
         this.moveY := 0
         this.hasGoto := false
@@ -483,6 +484,7 @@ class Runner {
         if this.done
             return
         this.done := true
+        this.paused := false
         frames := []
         if (this.stack is Array) {
             for frame in this.stack
@@ -532,12 +534,22 @@ class Runner {
         Engine.ReleaseOnceLock(frame.pauseOnce)
     }
 
+    Pause() {
+        this.paused := true
+        this.holds := Map()
+        this.pulses := Map()
+        this.echoDown := Map()
+        this.moveX := 0
+        this.moveY := 0
+        this.hasGoto := false
+    }
+
     Advance(now) {
         this.moveX := 0
         this.moveY := 0
         this.hasGoto := false
         this.pressedNow := Map()
-        if this.done
+        if (this.done || this.paused)
             return
         this.NoteHoldRelease()
         for k, releaseAt in this.pulses.Clone()
@@ -1445,6 +1457,31 @@ class Engine {
         this.pending := kept
     }
 
+    static HasPending(id) {
+        for r in this.pending
+            if (r.id = id && !r.done)
+                return true
+        return false
+    }
+
+    static PauseRunner(id) {
+        for r in this.runners
+            if (r.id = id && !r.done)
+                r.Pause()
+        for r in this.pending
+            if (r.id = id && !r.done)
+                r.Pause()
+    }
+
+    static UnpauseRunner(id) {
+        for r in this.runners
+            if (r.id = id && !r.done)
+                r.paused := false
+        for r in this.pending
+            if (r.id = id && !r.done)
+                r.paused := false
+    }
+
     static AskStop(id) {
         for r in this.runners
             if (r.id = id)
@@ -1466,13 +1503,13 @@ class Engine {
                 continue
             slot := this.muted.Has(id) ? this.muted[id] : ""
             if !(slot is Map) {
-                slot := Map("count", 0, "resume", this.HasRunner(id))
+                slot := Map("count", 0, "resume", this.HasRunner(id) || this.HasPending(id))
                 this.muted[id] := slot
             }
             count := Integer(slot["count"]) + 1
             slot["count"] := count
             if (count = 1)
-                this.StopRunner(id)
+                this.PauseRunner(id)
         }
     }
 
@@ -1493,12 +1530,38 @@ class Engine {
             }
             resume := slot["resume"]
             this.muted.Delete(id)
-            if resume {
+            this.UnpauseRunner(id)
+            if (this.HasRunner(id) || this.HasPending(id))
+                continue
+            if (resume || this.HoldReplay(id)) {
                 macro := this.FindMacro(id)
                 if (macro is Map)
                     this.StartRunner(macro)
             }
         }
+    }
+
+    ; A hold macro whose key is still down should start when the mute lifts,
+    ; even if it was not running at the moment the mute began.
+    static HoldReplay(id) {
+        macro := this.FindMacro(id)
+        if !(macro is Map)
+            return false
+        trig := Field(macro, "trigger", Map())
+        button := (trig is Map) ? String(Field(trig, "button", "")) : ""
+        if !this.KeyDown(button)
+            return false
+        blocks := Field(macro, "blocks", [])
+        if (blocks is Array) {
+            for block in blocks {
+                if !(block is Map)
+                    continue
+                kind := String(Field(block, "type", ""))
+                if (kind = "whileHeld" || kind = "swapAfter")
+                    return true
+            }
+        }
+        return String(Field(macro, "playMode", "once")) = "whileHeld"
     }
 
     static IsMuted(id) {
@@ -1916,7 +1979,9 @@ class Engine {
             down := this.KeyDown(button)
             was := this.prevDown.Has(id) ? this.prevDown[id] : false
             this.prevDown[id] := down
-            if !Field(macro, "enabled", true) || this.IsMuted(id) || !this.FocusOk(macro) {
+            if this.IsMuted(id)
+                continue
+            if !Field(macro, "enabled", true) || !this.FocusOk(macro) {
                 this.StopRunner(id)
                 continue
             }
@@ -2124,7 +2189,7 @@ class Engine {
     static Desired(now) {
         want := Map()
         for r in this.runners {
-            if r.done
+            if (r.done || r.paused)
                 continue
             for k, _ in r.holds
                 want[k] := true
@@ -2142,6 +2207,8 @@ class Engine {
         absX := 0
         absY := 0
         for r in this.runners {
+            if (r.done || r.paused)
+                continue
             dx += r.moveX
             dy += r.moveY
             if r.hasGoto {
@@ -2166,7 +2233,7 @@ class Engine {
         ups := []
         extra := Map()
         for r in this.runners {
-            if r.done
+            if (r.done || r.paused)
                 continue
             for k, _ in r.echoDown
                 if (desired.Has(k) && !IsMouseButton(k))
@@ -3077,17 +3144,29 @@ RunChecks(fails) {
         if (r.id = "spam" && !r.done)
             play := r
     play.Advance(0)
-    fails := Check(Engine.IsMuted("hot") && Engine.IsMuted("idle") && !Engine.IsMuted("spam") && !Engine.HasRunner("hot"), "while held mutes the other macros", fails)
+    hotPaused := false
+    for r in Engine.runners
+        if (r.id = "hot" && !r.done && r.paused)
+            hotPaused := true
+    fails := Check(Engine.IsMuted("hot") && Engine.IsMuted("idle") && !Engine.IsMuted("spam") && hotPaused, "while held pauses the other macros", fails)
     Engine.NotePhysical("f", true)
     Engine.prevDown["hot"] := false
     Engine.prevDown["spam"] := true
     Engine.PollTriggers()
     Engine.FlushPending()
-    fails := Check(!Engine.HasRunner("hot"), "muted macro does not start", fails)
+    hotLive := 0
+    for r in Engine.runners
+        if (r.id = "hot" && !r.done && !r.paused)
+            hotLive++
+    fails := Check(hotLive = 0, "muted macro does not start", fails)
     Engine.NotePhysical("b", false)
     play.Advance(200)
     Engine.FlushPending()
-    fails := Check(!Engine.IsMuted("hot") && !Engine.IsMuted("idle") && Engine.HasRunner("hot") && !Engine.HasRunner("idle"), "release restores only the macro that was running", fails)
+    hotOn := false
+    for r in Engine.runners
+        if (r.id = "hot" && !r.done && !r.paused)
+            hotOn := true
+    fails := Check(!Engine.IsMuted("hot") && !Engine.IsMuted("idle") && hotOn && !Engine.HasRunner("idle"), "release restores only the macro that was running", fails)
     Engine.PollTriggers()
     Engine.FlushPending()
     hotCount := 0
@@ -3102,6 +3181,107 @@ RunChecks(fails) {
     Engine.hooks.Delete("f")
     Engine.physDown.Delete("b")
     Engine.physDown.Delete("f")
+    Engine.profile := savedProfile
+
+    Engine.muted := Map()
+    shot := J("{'id':'shot','name':'Shot','enabled':true,'advanced':true,'playMode':'once','trigger':{'kind':'key','button':'v'},'steps':[],'blocks':[{'type':'whileHeld','steps':[{'type':'key','action':'down','key':'x'},{'type':'wait','ms':20}]}]}")
+    wall := J("{'id':'wall','name':'Wall','enabled':true,'advanced':true,'playMode':'once','trigger':{'kind':'key','button':'n'},'steps':[],'blocks':[{'type':'whileHeld','mute':['shot'],'steps':[{'type':'wait','ms':50}]}]}")
+    Engine.profile := Map("macros", [shot, wall])
+    Engine.hooks["v"] := true
+    Engine.hooks["n"] := true
+    Engine.NotePhysical("v", true)
+    Engine.NotePhysical("n", false)
+    Engine.prevDown["shot"] := false
+    Engine.prevDown["wall"] := false
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    shotRun := ""
+    for r in Engine.runners
+        if (r.id = "shot" && !r.done)
+            shotRun := r
+    shotRun.Advance(0)
+    fails := Check(Engine.Desired(0).Has("x") && !shotRun.paused, "shotgun plays while its key is held", fails)
+    Engine.NotePhysical("n", true)
+    Engine.prevDown["wall"] := false
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    wallRun := ""
+    for r in Engine.runners
+        if (r.id = "wall" && !r.done)
+            wallRun := r
+    wallRun.Advance(0)
+    fails := Check(Engine.IsMuted("shot") && shotRun.paused && !Engine.Desired(0).Has("x"), "wall pauses shotgun and drops its keys", fails)
+    Engine.NotePhysical("n", false)
+    wallRun.Advance(80)
+    Engine.FlushPending()
+    fails := Check(!Engine.IsMuted("shot") && !shotRun.paused && !shotRun.done, "releasing wall unpauses shotgun", fails)
+    shotRun.Advance(80)
+    fails := Check(Engine.Desired(80).Has("x"), "shotgun plays again while its key is still held", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.muted := Map()
+    Engine.NotePhysical("v", true)
+    Engine.NotePhysical("n", false)
+    Engine.prevDown["shot"] := false
+    Engine.prevDown["wall"] := false
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    shotRun := ""
+    for r in Engine.runners
+        if (r.id = "shot" && !r.done)
+            shotRun := r
+    shotRun.Advance(1000)
+    Engine.NotePhysical("n", true)
+    Engine.prevDown["wall"] := false
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    wallRun := ""
+    for r in Engine.runners
+        if (r.id = "wall" && !r.done)
+            wallRun := r
+    wallRun.Advance(1000)
+    Engine.NotePhysical("v", false)
+    Engine.NotePhysical("n", false)
+    wallRun.Advance(1100)
+    Engine.FlushPending()
+    shotRun.Advance(1100)
+    fails := Check(shotRun.done && !Engine.Desired(1100).Has("x"), "shotgun stays stopped if its key came up during the pause", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.muted := Map()
+    Engine.NotePhysical("v", false)
+    Engine.NotePhysical("n", true)
+    Engine.prevDown["shot"] := false
+    Engine.prevDown["wall"] := false
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    wallRun := ""
+    for r in Engine.runners
+        if (r.id = "wall" && !r.done)
+            wallRun := r
+    wallRun.Advance(2000)
+    Engine.NotePhysical("v", true)
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    fails := Check(Engine.IsMuted("shot") && !Engine.HasRunner("shot"), "a held key does not start while muted", fails)
+    Engine.NotePhysical("n", false)
+    wallRun.Advance(2100)
+    Engine.FlushPending()
+    shotRun := ""
+    for r in Engine.runners
+        if (r.id = "shot" && !r.done)
+            shotRun := r
+    fails := Check(shotRun != "", "a key that stayed down starts when the mute lifts", fails)
+    if (shotRun != "")
+        shotRun.Advance(2100)
+    fails := Check(Engine.Desired(2100).Has("x"), "that restarted hold sends again", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.muted := Map()
+    Engine.hooks.Delete("v")
+    Engine.hooks.Delete("n")
+    Engine.physDown.Delete("v")
+    Engine.physDown.Delete("n")
     Engine.profile := savedProfile
 
     tap := J("{'id':'tap-z','name':'Tap','enabled':true,'advanced':true,'playMode':'whileHeld','trigger':{'kind':'side','button':'XButton1'},'steps':[],'blocks':[{'type':'tapHold','key':'z','watch':['t'],'armMs':5,'gapMs':80}]}")
@@ -3348,14 +3528,22 @@ RunChecks(fails) {
             wall := r
     wall.Advance(0)
     Engine.RemoveDone()
-    fails := Check(!Engine.HasRunner("spam-t") && Engine.IsMuted("spam-t"), "block mutes a tracked macro", fails)
+    spamPaused := false
+    for r in Engine.runners
+        if (r.id = "spam-t" && !r.done && r.paused)
+            spamPaused := true
+    fails := Check(spamPaused && Engine.IsMuted("spam-t"), "block mutes a tracked macro", fails)
     fails := Check(Engine.HasRunner("other-f") && !Engine.IsMuted("other-f"), "block leaves other macros alone", fails)
     fails := Check(!Engine.PassKey("t"), "block keeps swallowing the tracked key", fails)
     Engine.prevDown["spam-t"] := false
     Engine.NotePhysical("t", true)
     Engine.PollTriggers()
     Engine.FlushPending()
-    fails := Check(!Engine.HasRunner("spam-t"), "block does not let the tracked macro play", fails)
+    spamLive := 0
+    for r in Engine.runners
+        if (r.id = "spam-t" && !r.done && !r.paused)
+            spamLive++
+    fails := Check(spamLive = 0 && Engine.IsMuted("spam-t"), "block does not let the tracked macro play", fails)
     Engine.StopRunner("block-z")
     Engine.RemoveDone()
     Engine.FlushPending()
