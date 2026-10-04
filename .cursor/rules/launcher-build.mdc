@@ -1,0 +1,16 @@
+---
+description: Rebuild the app and update Start MacroUI.bat after changes
+alwaysApply: true
+---
+
+# Launcher build
+
+`Start MacroUI.bat` is how the app is opened. After any change under `ui/`, `shell/`, or `engine/` that the launcher runs, do this before the work is finished:
+
+1. Rebuild what changed.
+   - Editor: `npm run build` in `ui/`, so `ui/dist` matches the source.
+   - Window: `dotnet build shell/MacroShell.csproj -c Debug`.
+2. Keep the `APP` path in `Start MacroUI.bat` pointed at the exe that build just produced: `shell\bin\Debug\<TargetFramework>\MacroShell.exe`. If `TargetFramework` in `shell/MacroShell.csproj` changes, update that path in the same change.
+3. Include `Start MacroUI.bat` and the new `ui/dist` in the commit. Include the rebuilt `MacroShell.exe` when that file is tracked and the build changed it.
+
+The bat loads `ui/dist` through that exe. A source-only change leaves the launcher on the previous build.

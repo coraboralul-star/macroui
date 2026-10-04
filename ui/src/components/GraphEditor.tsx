@@ -389,18 +389,6 @@ export function GraphEditor({
           />
         ) : null}
         <span className="graph-bar-space" />
-        <DelayGear
-          mode={delayMode}
-          fixedMs={fixedMs}
-          canRecord={!!macro?.recording}
-          disabled={!selectedBlock || !takesSteps(selectedBlock)}
-          resetKey={`${macro?.id ?? ""}:${selectedBlock?.id ?? ""}`}
-          onMode={applyDelay}
-          onFixed={(ms) => {
-            setFixedMs(ms);
-            applyDelay("fixed", ms);
-          }}
-        />
         {macro && usesReleaseStop(macro) ? (
           <ReleaseField compact label="Macro on release" value={macro.releaseStop} onChange={(releaseStop) => onChange({ ...macro, releaseStop: releaseStop ?? "nextUp" })} />
         ) : null}
@@ -473,7 +461,6 @@ export function GraphEditor({
                   : layout.links.find((item) => label.id === `${item.to}-lab`);
                 let left = label.x;
                 let top = label.y;
-                let tilt = 0;
                 let hot = hold && activeId === label.id.slice(0, -5);
                 if (link) {
                   const from = layout.nodes.find((node) => node.id === link.from);
@@ -483,7 +470,6 @@ export function GraphEditor({
                     const drawn = wirePath(from, to, slot.index, slot.count, layout.nodes);
                     left = drawn.labelX;
                     top = drawn.labelY;
-                    tilt = drawn.tilt;
                     hot = link.to === activeId || (!link.fork && link.from === activeId);
                   }
                 }
@@ -491,7 +477,7 @@ export function GraphEditor({
                   <span
                     key={label.id}
                     className={`graph-fork-label${hot ? " is-hot" : ""}`}
-                    style={{ left, top, transform: `translate(-50%, -50%) rotate(${tilt}deg)` }}
+                    style={{ left, top }}
                   >
                     {label.text}
                   </span>
@@ -727,6 +713,19 @@ export function GraphEditor({
                     resetKey={`${macro?.id ?? ""}:${selectedBlock.id}`}
                     steps={selectedBlock.steps}
                     macros={others}
+                    extras={
+                      <DelayGear
+                        mode={delayMode}
+                        fixedMs={fixedMs}
+                        canRecord={!!macro?.recording}
+                        resetKey={`${macro?.id ?? ""}:${selectedBlock.id}`}
+                        onMode={applyDelay}
+                        onFixed={(ms) => {
+                          setFixedMs(ms);
+                          applyDelay("fixed", ms);
+                        }}
+                      />
+                    }
                     allowScanWait={allowsScanWait(selectedBlock, macro?.playMode)}
                     onLive={setLive}
                     onSteps={(steps) => {
@@ -852,14 +851,12 @@ function wirePath(
       y2,
       labelX: spot.x + 6,
       labelY: spot.y - 14,
-      tilt: clampTilt(spot.tilt),
     };
   }
   const drop = Math.min(Math.max(8, Math.abs(gap) * 0.42), 72);
   const sign = gap < 0 ? -1 : 1;
   const midX = (x1 + x2) / 2;
   const midY = (y1 + y2) / 2;
-  const lean = Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
   const toward = from.x + GRAPH_NODE_W / 2 - midX;
   const shift = Math.abs(toward) < 8 ? -14 : Math.sign(toward) * 16;
   return {
@@ -870,24 +867,15 @@ function wirePath(
     y2,
     labelX: midX + shift,
     labelY: midY - 4,
-    tilt: clampTilt(90 - lean),
   };
-}
-
-function clampTilt(deg: number) {
-  return Math.max(-16, Math.min(16, deg));
 }
 
 function curvePoint(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, t: number) {
   const u = 1 - t;
-  const x = u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3;
-  const y = u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3;
-  const dx = 3 * u * u * (x1 - x0) + 6 * u * t * (x2 - x1) + 3 * t * t * (x3 - x2);
-  const dy = 3 * u * u * (y1 - y0) + 6 * u * t * (y2 - y1) + 3 * t * t * (y3 - y2);
-  let tilt = Math.atan2(dy, dx) * (180 / Math.PI);
-  if (tilt > 90) tilt -= 180;
-  if (tilt < -90) tilt += 180;
-  return { x, y, tilt };
+  return {
+    x: u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3,
+    y: u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3,
+  };
 }
 
 function dragWire(from: { x: number; y: number } | undefined, x: number, y: number) {

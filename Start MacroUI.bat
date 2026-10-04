@@ -1,11 +1,11 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+rem APP must match the Debug output of shell\MacroShell.csproj.
+rem TargetFramework is net10.0-windows, so the folder is bin\Debug\net10.0-windows.
 set "APP=%~dp0shell\bin\Debug\net10.0-windows\MacroShell.exe"
+set "DIST=%~dp0ui\dist\index.html"
 
-if exist "ui\dist\index.html" if exist "%APP%" goto launch
-
-echo First launch builds the window. This can take a minute.
 where node >nul 2>&1 || (echo Install Node.js, then run this again.& pause & exit /b 1)
 where dotnet >nul 2>&1 || (echo Install .NET, then run this again.& pause & exit /b 1)
 
@@ -17,7 +17,8 @@ if not exist "ui\node_modules\" (
   popd
 )
 
-if not exist "ui\dist\index.html" (
+call :stale "%DIST%" "%~dp0ui\src" "%~dp0ui\index.html"
+if errorlevel 1 (
   echo Building the editor...
   pushd ui
   call npm run build
@@ -25,7 +26,8 @@ if not exist "ui\dist\index.html" (
   popd
 )
 
-if not exist "%APP%" (
+call :stale "%APP%" "%~dp0shell"
+if errorlevel 1 (
   echo Building the window...
   dotnet build "%~dp0shell\MacroShell.csproj" -c Debug --nologo
   if errorlevel 1 (pause & exit /b 1)
@@ -45,5 +47,17 @@ if defined NEED (
     exit /b 1
   )
 )
+if not exist "%APP%" (
+  echo The window build is missing: %APP%
+  pause
+  exit /b 1
+)
 start "" "%APP%"
 exit /b 0
+
+:stale
+set "STALE_OUT=%~1"
+set "STALE_A=%~2"
+set "STALE_B=%~3"
+powershell -NoProfile -Command "$out = Get-Item -LiteralPath $env:STALE_OUT -ErrorAction SilentlyContinue; if (-not $out) { exit 1 }; $roots = @($env:STALE_A, $env:STALE_B) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }; $src = Get-ChildItem -LiteralPath $roots -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '\\(bin|obj|node_modules|dist)\\' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($src -and $src.LastWriteTime -gt $out.LastWriteTime) { exit 1 } else { exit 0 }"
+exit /b %errorlevel%

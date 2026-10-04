@@ -5786,7 +5786,8 @@ input.ev-delay {
   z-index: 2;
   padding: 0;
   background: none;
-  color: #9a9a9a;
+  transform: translate(-50%, -50%);
+  color: #d7dbe3;
   font-size: 0.75rem;
   font-weight: 500;
   letter-spacing: 0;
@@ -5797,7 +5798,7 @@ input.ev-delay {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.92);
 }
 
-.graph-fork-label.is-hot { color: var(--accent); }
+.graph-fork-label.is-hot { color: #ffffff; }
 
 .graph-add-grid button {
   background: #222;
@@ -6426,9 +6427,3 @@ input.ev-delay {
   line-height: 1.35;
 }
 
-.graph-bar .gear-menu {
-  top: calc(100% + 6px);
-  bottom: auto;
-  right: 0;
-  left: auto;
-}
