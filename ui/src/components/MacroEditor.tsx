@@ -7,12 +7,22 @@ export function MacroEditor({
   running,
   onChange,
   onDelete,
+  onOpenGraph,
+  onSave,
+  saveDisabled,
+  saveTitle,
+  issue,
 }: {
   macro: Macro;
   macros: Macro[];
   running: boolean;
   onChange: (macro: Macro) => void;
   onDelete: () => void;
+  onOpenGraph: () => void;
+  onSave: () => void;
+  saveDisabled: boolean;
+  saveTitle: string;
+  issue: string;
 }) {
   return (
     <section className="editor timeline">
@@ -28,7 +38,14 @@ export function MacroEditor({
         <button type="button" className="ghost is-danger" onClick={onDelete}>
           Delete
         </button>
+        <button type="button" className="studio-new is-primary" disabled={saveDisabled} title={saveTitle} onClick={onSave}>
+          Save
+        </button>
+        <button type="button" className="studio-new is-primary" onClick={onOpenGraph}>
+          Advanced
+        </button>
       </div>
+      {issue ? <p className="draft-note is-bad">{issue}</p> : null}
       <RecordDeck
         macro={macro}
         macros={macros.filter((item) => item.id !== macro.id)}

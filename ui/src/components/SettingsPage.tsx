@@ -1,5 +1,7 @@
 import { INPUT_MODES, type InputMode } from "../profile";
 
+export type CloseMode = "tray" | "quit";
+
 export type SettingPane = "general" | "updates" | "interface" | "input";
 
 const PANES: { id: SettingPane; label: string }[] = [
@@ -22,6 +24,8 @@ export function SettingsPage({
   inputMode,
   onInputMode,
   connected,
+  closeMode,
+  onCloseMode,
 }: {
   pane: SettingPane;
   onPane: (pane: SettingPane) => void;
@@ -29,6 +33,8 @@ export function SettingsPage({
   inputMode: InputMode;
   onInputMode: (mode: InputMode) => void;
   connected: boolean;
+  closeMode: CloseMode;
+  onCloseMode: (mode: CloseMode) => void;
 }) {
   return (
     <div className="settings">
@@ -48,8 +54,38 @@ export function SettingsPage({
         {pane === "general" ? (
           <>
             <h2>General</h2>
-            <p className="settings-lead">Playback options for this profile. Engine status is {status.toLowerCase()}.</p>
+            <p className="settings-lead">Window and playback options. Engine status is {status.toLowerCase()}.</p>
             <div className="settings-stack">
+              <div className="settings-block">
+                <div className="settings-row is-static">
+                  <span>
+                    <span className="settings-row-name">When you close</span>
+                    <span className="settings-row-note">Hide keeps macros running. Quit stops them.</span>
+                  </span>
+                </div>
+                <div className="settings-choices is-pair" role="radiogroup" aria-label="When you close">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={closeMode === "tray"}
+                    className={`settings-choice${closeMode === "tray" ? " is-on" : ""}`}
+                    onClick={() => onCloseMode("tray")}
+                  >
+                    <span className="settings-row-name">Hide to the tray</span>
+                    <span className="settings-row-note">The window hides. Macros keep running. Open it again from the tray icon.</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={closeMode === "quit"}
+                    className={`settings-choice${closeMode === "quit" ? " is-on" : ""}`}
+                    onClick={() => onCloseMode("quit")}
+                  >
+                    <span className="settings-row-name">Quit</span>
+                    <span className="settings-row-note">The window closes and macros stop.</span>
+                  </button>
+                </div>
+              </div>
               <div className="settings-block">
                 <div className="settings-row is-static">
                   <span>

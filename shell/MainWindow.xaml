@@ -13,6 +13,7 @@
         ResizeMode="CanResize"
         WindowStartupLocation="CenterScreen"
         Loaded="OnLoaded"
+        Closing="OnWindowClosing"
         Closed="OnClosed"
         StateChanged="OnWindowStateChanged">
     <shell:WindowChrome.WindowChrome>
