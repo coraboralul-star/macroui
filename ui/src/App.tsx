@@ -106,7 +106,7 @@ export function App() {
           <div className="brand">
             <Mark />
             <div>
-              <p className="mark">Vendetta</p>
+              <p className="mark">H&amp;le</p>
               <input
                 className="profile-name"
                 aria-label="Profile name"

@@ -1,16 +1,23 @@
 ---
-description: Rebuild the app and update Start MacroUI.bat after changes
+description: Rebuild the app and republish H&le.exe after changes
 alwaysApply: true
 ---
 
 # Launcher build
 
-`Start MacroUI.bat` is how the app is opened. After any change under `ui/`, `shell/`, or `engine/` that the launcher runs, do this before the work is finished:
+`H&le.exe` in the repo root is how the app is opened. After any change under `ui/`, `shell/`, `engine/`, or `launcher/` that the launcher runs, do this before the work is finished:
 
 1. Rebuild what changed.
    - Editor: `npm run build` in `ui/`, so `ui/dist` matches the source.
    - Window: `dotnet build shell/MacroShell.csproj -c Debug`.
-2. Keep the `APP` path in `Start MacroUI.bat` pointed at the exe that build just produced: `shell\bin\Debug\<TargetFramework>\MacroShell.exe`. If `TargetFramework` in `shell/MacroShell.csproj` changes, update that path in the same change.
-3. Include `Start MacroUI.bat` and the new `ui/dist` in the commit. Include the rebuilt `MacroShell.exe` when that file is tracked and the build changed it.
+2. The launcher starts `shell\bin\Debug\<TargetFramework>\MacroShell.exe`. It reads `<TargetFramework>` from `shell/MacroShell.csproj`.
+3. If `launcher/` changed, republish the root exe from the repo root:
 
-The bat loads `ui/dist` through that exe. A source-only change leaves the launcher on the previous build.
+```
+dotnet publish launcher/Vendetta.csproj -c Release -o launcher/publish
+```
+
+That publish copies `H&le.exe` to the repo root.
+4. Include `H&le.exe` and the new `ui/dist` in the commit. Include the rebuilt `MacroShell.exe` when that file is tracked and the build changed it.
+
+The launcher loads `ui/dist` through the shell exe. A source-only change leaves the app on the previous build.
