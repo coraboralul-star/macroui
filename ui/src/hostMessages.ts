@@ -15,6 +15,7 @@ export function parseEngineState(message: HostMessage): EngineState | null {
     armed: Boolean(message.armed),
     running: Array.isArray(message.running) ? (message.running as EngineState["running"]) : [],
     held: Array.isArray(message.held) ? message.held.filter((key) => typeof key === "string") : [],
+    activeId: typeof message.activeId === "string" ? message.activeId : "",
     front: typeof message.front === "string" ? message.front : "",
   };
 }

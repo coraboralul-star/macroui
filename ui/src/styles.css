@@ -3034,6 +3034,47 @@ button.ghost.is-danger:hover:not(:disabled) {
   gap: 8px;
 }
 
+.settings-choices.is-pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-row + .settings-choices {
+  margin-top: 12px;
+}
+
+.brief > .draft-note,
+.editor > .draft-note {
+  padding: 0 4px;
+}
+
+.studio.is-page .editor > .draft-note {
+  padding: 0 16px 8px;
+}
+
+.rec-bar.is-dock .rec-revert {
+  height: 2.15rem;
+  min-height: 2.15rem;
+}
+
+.draft-note {
+  margin: 0;
+  min-width: 0;
+  color: #a39e96;
+  font-size: 0.75rem;
+  line-height: 1.3;
+}
+
+.draft-note.is-bad {
+  color: #e7a090;
+}
+
+.graph-bar .draft-note {
+  flex: 0 1 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-choice {
   display: flex;
   flex-direction: column;

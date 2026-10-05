@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     readonly bool _dev;
     readonly string _repo;
     readonly string _profilePath;
+    readonly string _shellPath;
     NamedPipeClientStream? _pipe;
     Process? _engine;
     bool _pageReady;
@@ -35,6 +36,10 @@ public partial class MainWindow : Window
     readonly SemaphoreSlim _boardLock = new(1, 1);
     DispatcherTimer? _portDebounce;
     int _inputGen;
+    string _closeMode = "tray";
+    bool _allowClose;
+    System.Windows.Forms.NotifyIcon? _tray;
+    System.Drawing.Icon? _trayIcon;
 
     public MainWindow()
     {
@@ -42,7 +47,9 @@ public partial class MainWindow : Window
         _dev = Environment.GetCommandLineArgs().Contains("--dev");
         _repo = FindRepo();
         _profilePath = Path.Combine(_repo, "profiles", "default.json");
+        _shellPath = Path.Combine(_repo, "profiles", "shell.json");
         Directory.CreateDirectory(Path.GetDirectoryName(_profilePath)!);
+        LoadCloseMode();
         if (!File.Exists(_profilePath))
             File.WriteAllText(_profilePath, """{"version":1,"name":"Default","variables":{},"macros":[]}""", new UTF8Encoding(false));
     }
@@ -82,11 +89,148 @@ public partial class MainWindow : Window
         }
 
         _ = PumpPipe(_cts.Token);
+        StartShowWait();
     }
+
+    void LoadCloseMode()
+    {
+        try
+        {
+            if (!File.Exists(_shellPath)) return;
+            var close = JsonNode.Parse(File.ReadAllText(_shellPath))?["close"]?.ToString();
+            if (close == "tray" || close == "quit")
+                _closeMode = close;
+        }
+        catch { /* keep the tray default */ }
+    }
+
+    void SaveCloseMode()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_shellPath)!);
+            File.WriteAllText(_shellPath, "{\"close\":\"" + _closeMode + "\"}", new UTF8Encoding(false));
+        }
+        catch { /* the page still remembers the choice */ }
+    }
+
+    void StartShowWait()
+    {
+        var signal = App.ShowSignal;
+        if (signal == null) return;
+        Task.Run(() =>
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                bool signaled;
+                try { signaled = signal.WaitOne(400); }
+                catch { break; }
+                if (!signaled || _cts.IsCancellationRequested) continue;
+                Dispatcher.BeginInvoke(ShowFromTray);
+            }
+        });
+    }
+
+    void OnWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (_allowClose || _closeMode != "tray")
+            return;
+        e.Cancel = true;
+        try
+        {
+            HideToTray();
+        }
+        catch
+        {
+            _allowClose = true;
+            Close();
+        }
+    }
+
+    void HideToTray()
+    {
+        EnsureTray();
+        _tray!.Visible = true;
+        ShowInTaskbar = false;
+        Hide();
+    }
+
+    void ShowFromTray()
+    {
+        if (_tray != null)
+            _tray.Visible = false;
+        ShowInTaskbar = true;
+        Show();
+        if (WindowState == WindowState.Minimized)
+            WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    void QuitFromTray()
+    {
+        _allowClose = true;
+        Close();
+    }
+
+    void EnsureTray()
+    {
+        if (_tray != null) return;
+        _trayIcon = LoadTrayIcon();
+        var tray = new System.Windows.Forms.NotifyIcon
+        {
+            Icon = _trayIcon,
+            Text = "Vendetta Macros",
+            Visible = false,
+        };
+        var menu = new System.Windows.Forms.ContextMenuStrip();
+        menu.Items.Add("Show", null, (_, _) => Dispatcher.BeginInvoke(ShowFromTray));
+        menu.Items.Add("Quit", null, (_, _) => Dispatcher.BeginInvoke(QuitFromTray));
+        tray.ContextMenuStrip = menu;
+        tray.DoubleClick += (_, _) => Dispatcher.BeginInvoke(ShowFromTray);
+        _tray = tray;
+    }
+
+    System.Drawing.Icon LoadTrayIcon()
+    {
+        var path = Path.Combine(_repo, "shell", "vendetta.png");
+        try
+        {
+            if (File.Exists(path))
+            {
+                using var bmp = new System.Drawing.Bitmap(path);
+                var handle = bmp.GetHicon();
+                try
+                {
+                    using var tmp = System.Drawing.Icon.FromHandle(handle);
+                    return (System.Drawing.Icon)tmp.Clone();
+                }
+                finally
+                {
+                    DestroyIcon(handle);
+                }
+            }
+        }
+        catch { /* fall through to the default icon */ }
+        return (System.Drawing.Icon)System.Drawing.SystemIcons.Application.Clone();
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    static extern bool DestroyIcon(IntPtr handle);
 
     void OnClosed(object? sender, EventArgs e)
     {
         _closing = true;
+        try
+        {
+            if (_tray != null)
+            {
+                _tray.Visible = false;
+                _tray.Dispose();
+                _tray = null;
+            }
+        }
+        catch { /* icon already gone */ }
+        try { _trayIcon?.Dispose(); } catch { /* icon already gone */ }
         try
         {
             if (_pipe is { IsConnected: true })
@@ -170,6 +314,16 @@ public partial class MainWindow : Window
                 case "close":
                     Close();
                     break;
+            }
+            return;
+        }
+        if (type == "shell")
+        {
+            var close = node?["close"]?.ToString();
+            if (close == "tray" || close == "quit")
+            {
+                _closeMode = close;
+                SaveCloseMode();
             }
             return;
         }

@@ -1023,6 +1023,7 @@ class Engine {
     static applied := Map()
     static prevDown := Map()
     static profile := Map()
+    static liveId := ""
     static outputMode := "software"
     static hidEcho := []
     static mouseAtOk := false
@@ -1322,6 +1323,7 @@ class Engine {
         now := this.Now()
         this.sendNow := Map()
         this.PollPipe()
+        this.ApplyLiveConfig()
         this.PollPanic()
         this.SyncSwallow()
         if this.hooksDirty {
@@ -1341,6 +1343,67 @@ class Engine {
         this.Broadcast(false)
     }
 
+    ; First matching focusExe wins. An empty focusExe is the fallback, preferring activeId.
+    static PickLive(configs, front, prefer) {
+        chosen := ""
+        fallback := ""
+        if !(configs is Array)
+            return ""
+        for cfg in configs {
+            if !(cfg is Map)
+                continue
+            exe := String(Field(cfg, "focusExe", ""))
+            if (exe = "") {
+                if !(fallback is Map)
+                    fallback := cfg
+                else if (String(Field(cfg, "id", "")) = prefer)
+                    fallback := cfg
+                continue
+            }
+            if (front != "" && this.FocusMatch(exe, front)) {
+                chosen := cfg
+                break
+            }
+        }
+        return (chosen is Map) ? chosen : fallback
+    }
+
+    ; Pick the config whose focusExe matches the foreground app.
+    ; An empty focusExe is the fallback. No configs means keep the flat macro list.
+    static ApplyLiveConfig() {
+        configs := Field(this.profile, "configs", "")
+        if !(configs is Array) || (configs.Length = 0) {
+            if (this.liveId != "-") {
+                this.liveId := "-"
+                this.SeedTriggers()
+                this.ReapOrphans()
+                this.hooksDirty := true
+            }
+            return
+        }
+        front := this.ActiveExe()
+        prefer := String(Field(this.profile, "activeId", ""))
+        pick := this.PickLive(configs, front, prefer)
+        id := (pick is Map) ? String(Field(pick, "id", "")) : ""
+        if (id = this.liveId)
+            return
+        this.liveId := id
+        if (pick is Map) {
+            macros := Field(pick, "macros", [])
+            if !(macros is Array)
+                macros := []
+            this.profile["macros"] := macros
+            this.profile["focusExe"] := String(Field(pick, "focusExe", ""))
+            this.profile["activeId"] := id
+        } else {
+            this.profile["macros"] := []
+            this.profile["focusExe"] := ""
+        }
+        this.SeedTriggers()
+        this.ReapOrphans()
+        this.hooksDirty := true
+    }
+
     static LoadDisk() {
         this.profilePath := A_ScriptDir "\..\profiles\default.json"
         if !FileExist(this.profilePath) {
@@ -1351,11 +1414,12 @@ class Engine {
         this.profile := JSON.Parse(text)
         if !(this.profile is Map)
             this.profile := Map()
-        this.SeedTriggers()
-        this.ReapOrphans()
-        this.hooksDirty := true
-        this.SyncHooks()
-        this.hooksDirty := false
+        this.liveId := Chr(1)
+        this.ApplyLiveConfig()
+        if this.hooksDirty {
+            this.SyncHooks()
+            this.hooksDirty := false
+        }
         this.winAt := -100000
         this.Broadcast(true)
     }
@@ -2508,6 +2572,7 @@ class Engine {
         }
         for k, _ in this.applied
             sig .= ">" k
+        sig .= "@" this.liveId
         return sig
     }
 
@@ -2527,7 +2592,8 @@ class Engine {
             held .= JSON.Quote(k)
         }
         armed := this.armed ? "true" : "false"
-        return '{"v":1,"type":"state","armed":' armed ',"running":[' running '],"held":[' held '],"front":' JSON.Quote(this.ActiveExe()) ',"windows":' this.WindowListJson() '}'
+        shown := this.liveId = "-" ? String(Field(this.profile, "activeId", "")) : this.liveId
+        return '{"v":1,"type":"state","armed":' armed ',"running":[' running '],"held":[' held '],"activeId":' JSON.Quote(shown) ',"front":' JSON.Quote(this.ActiveExe()) ',"windows":' this.WindowListJson() '}'
     }
 
     static WindowListJson() {
@@ -2701,11 +2767,12 @@ class Engine {
             incoming := Field(msg, "profile", "")
             if (incoming is Map) {
                 this.profile := incoming
-                this.SeedTriggers()
-                this.ReapOrphans()
-                this.hooksDirty := true
-                this.SyncHooks()
-                this.hooksDirty := false
+                this.liveId := Chr(1)
+                this.ApplyLiveConfig()
+                if this.hooksDirty {
+                    this.SyncHooks()
+                    this.hooksDirty := false
+                }
                 this.winAt := -100000
                 this.Broadcast(true)
             }
@@ -2803,6 +2870,11 @@ RunChecks(fails) {
     Engine.profile := Map()
     fails := Check(Engine.SwallowTriggers(), "no focus restriction swallows", fails)
     fails := Check(HookSpec("a") = "$*a", "software swallows without focus exe", fails)
+    liveConfigs := J("[{'id':'home','focusExe':'','macros':[]},{'id':'game','focusExe':'Game.exe','macros':[]}]")
+    fails := Check(String(Field(Engine.PickLive(liveConfigs, "notepad.exe", "home"), "id", "")) = "home", "foreground miss uses empty focus", fails)
+    fails := Check(String(Field(Engine.PickLive(liveConfigs, "Game.exe", "home"), "id", "")) = "game", "foreground exe picks that config", fails)
+    fails := Check(String(Field(Engine.PickLive(liveConfigs, "Game-Win64-Shipping.exe", "home"), "id", "")) = "game", "shipping exe still matches the stem", fails)
+    fails := Check(Engine.PickLive(J("[{'id':'game','focusExe':'Game.exe','macros':[]}]"), "notepad.exe", "game") = "", "no fallback means nothing runs", fails)
     fails := Check(SendToken("``", "down") = "{```` down}", "send backtick", fails)
     fails := Check(SendToken("q", "up") = "{q up}", "send letter", fails)
     fails := Check(SafeKey("|") = "\", "pipe key is backslash", fails)

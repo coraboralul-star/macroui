@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { post } from "./bridge";
 import { Backdrop } from "./components/Backdrop";
 import { GraphEditor } from "./components/GraphEditor";
@@ -9,7 +9,7 @@ import { ProfileList } from "./components/MacroList";
 import { MacroStudio } from "./components/MacroStudio";
 import { Mark } from "./components/Mark";
 import { FieldSelect } from "./components/FieldSelect";
-import { SettingsPage, type SettingPane } from "./components/SettingsPage";
+import { SettingsPage, type CloseMode, type SettingPane } from "./components/SettingsPage";
 import { keyLabel } from "./keyboard";
 import { pressLabel } from "./recording";
 import { normalizeInputMode } from "./profile";
@@ -19,6 +19,12 @@ import { useProfile } from "./useProfile";
 
 type Page = "keyboard" | "settings";
 type Board = "remap" | "advanced" | "mouse" | "gamepad";
+
+const CLOSE_KEY = "macroui-close";
+
+function readClose(): CloseMode {
+  return localStorage.getItem(CLOSE_KEY) === "quit" ? "quit" : "tray";
+}
 
 const BOARDS: { id: Board; label: string; later?: boolean }[] = [
   { id: "remap", label: "Remap" },
@@ -36,6 +42,12 @@ export function App() {
   const [picked, setPicked] = useState<string | null>(null);
   const [menu, setMenu] = useState<TriggerMenu | null>(null);
   const [graphId, setGraphId] = useState<string | null>(null);
+  const [closeMode, setCloseMode] = useState<CloseMode>(readClose);
+
+  useEffect(() => {
+    localStorage.setItem(CLOSE_KEY, closeMode);
+    post({ type: "shell", close: closeMode });
+  }, [closeMode]);
 
   const openAdvanced = () => {
     setPage("keyboard");
@@ -144,19 +156,13 @@ export function App() {
               <ProfileList
                 configs={profile.configs}
                 selected={profile.activeId}
-                live={host.runningIds.size ? profile.activeId : ""}
+                live={host.pipe ? host.engine.activeId ?? "" : ""}
                 onSelect={actions.profiles.select}
                 onAdd={actions.profiles.add}
                 onDelete={actions.profiles.remove}
               />
               <div className="focus-pick">
-                <span>
-                  <span className="settings-row-name">Only when focused</span>
-                  <span className="settings-row-note">
-                    This profile runs only if that window is in front.
-                    {host.engine.front ? ` Front now - ${host.engine.front.replace(/\.exe$/i, "")}` : ""}
-                  </span>
-                </span>
+                <span className="settings-row-name">Only when focused</span>
                 <FieldSelect
                   ariaLabel="Only when focused"
                   prefer="up"
@@ -270,6 +276,8 @@ export function App() {
             inputMode={inputMode}
             onInputMode={setInputMode}
             connected={inputConnected}
+            closeMode={closeMode}
+            onCloseMode={setCloseMode}
           />
         )}
         {menu ? (

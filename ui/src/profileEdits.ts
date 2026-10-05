@@ -7,8 +7,10 @@ import {
   mouseSteps,
   newId,
   writeActive,
+  type Block,
   type Macro,
   type Profile,
+  type Step,
   type TriggerKind,
 } from "./profile";
 
@@ -122,4 +124,34 @@ export function saveGraphMacro(profile: Profile, next: Macro): Profile {
     return writeActive({ ...profile, macros: merged }, merged);
   }
   return upsertMacro(profile, bound);
+}
+
+function note(issues: string[], text: string) {
+  if (!issues.includes(text)) issues.push(text);
+}
+
+function stepIssues(steps: Step[], issues: string[]) {
+  for (const step of steps) {
+    if (step.type === "key" && !step.key.trim()) note(issues, "A key step has no key.");
+    if (step.type === "mouse" && !step.button.trim()) note(issues, "A mouse step has no button.");
+    if (step.type === "run" && !step.macroId.trim()) note(issues, "A run step needs a macro.");
+    if (step.type === "repeat") stepIssues(step.steps, issues);
+  }
+}
+
+function blockIssues(block: Block, issues: string[]) {
+  if (block.type === "tapHold") {
+    if (!block.key.trim()) note(issues, "A hold block needs a key.");
+    if (!block.watch.length) note(issues, "A hold block needs a watched input.");
+  }
+  if ("steps" in block) stepIssues(block.steps, issues);
+}
+
+/** Why this draft cannot be committed. Empty means Save is allowed. */
+export function macroIssues(macro: Macro): string[] {
+  const issues: string[] = [];
+  if (!macro.name.trim()) note(issues, "Name the macro before saving.");
+  for (const block of macro.blocks ?? []) blockIssues(block, issues);
+  stepIssues(macro.steps, issues);
+  return issues;
 }

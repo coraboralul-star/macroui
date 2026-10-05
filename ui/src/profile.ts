@@ -129,6 +129,8 @@ export type EngineState = {
   armed: boolean;
   running: { id: string; name: string }[];
   held: string[];
+  /** Config the engine is running right now. Empty when none applies. */
+  activeId?: string;
   front?: string;
   windows?: { exe: string; title: string }[];
 };

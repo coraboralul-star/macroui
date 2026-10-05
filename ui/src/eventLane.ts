@@ -173,6 +173,11 @@ export function replaceAct(steps: Step[], index: number, button: string, input: 
   if (!step || (step.type !== "key" && step.type !== "mouse")) return steps;
   const next = steps.slice();
   next[index] = retarget(step, button, input);
+  const mate = partner(steps, index);
+  if (mate != null) {
+    const other = steps[mate];
+    if (other && (other.type === "key" || other.type === "mouse")) next[mate] = retarget(other, button, input);
+  }
   return next;
 }
 

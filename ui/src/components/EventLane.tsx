@@ -15,6 +15,7 @@ export function EventLane({
   onChange,
   empty = "",
   readOnly = false,
+  tweak = false,
   allowScanWait = true,
 }: {
   steps: Step[];
@@ -22,6 +23,8 @@ export function EventLane({
   onChange: (steps: Step[]) => void;
   empty?: string;
   readOnly?: boolean;
+  /** Double-click a wait or a key. No insert buttons. */
+  tweak?: boolean;
   allowScanWait?: boolean;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuLine[] } | null>(null);
@@ -144,6 +147,7 @@ export function EventLane({
           steps={steps}
           macros={macros}
           readOnly={readOnly}
+          tweak={tweak}
           editing={
             editDelay === `${cell.type}-${order}` ||
             (pending != null && cell.type === "delay" && cell.via === "wait" && cell.index === pending)
@@ -225,6 +229,7 @@ function CellView({
   steps,
   macros,
   readOnly,
+  tweak,
   editing,
   targeted,
   onEditDelay,
@@ -244,6 +249,7 @@ function CellView({
   steps: Step[];
   macros: Macro[];
   readOnly: boolean;
+  tweak: boolean;
   editing: boolean;
   targeted: boolean;
   onEditDelay: () => void;
@@ -259,9 +265,9 @@ function CellView({
   onDropAt: (slot: number) => (event: ReactDragEvent) => void;
   allowScanWait: boolean;
 }) {
-  if (readOnly && cell.type === "join") return null;
-  if (readOnly && cell.type === "delay") return <span className="ev-delay">{cell.ms} ms</span>;
-  if (readOnly && cell.type === "act") {
+  if ((readOnly || tweak) && cell.type === "join") return null;
+  if (readOnly && !tweak && cell.type === "delay") return <span className="ev-delay">{cell.ms} ms</span>;
+  if (readOnly && !tweak && cell.type === "act") {
     return (
       <span className="ev ev-act">
         <b>{cell.title}</b>
@@ -310,12 +316,13 @@ function CellView({
         onDragOver={onAllowDrop(cell.index)}
         onDrop={onDropAt(cell.index)}
         onDoubleClick={onEditDelay}
-        onContextMenu={(event) =>
+        onContextMenu={(event) => {
+          if (readOnly) return;
           onMenu(event, [
             { kind: "item", label: "Edit", run: onEditDelay },
             { kind: "item", label: "Delete", run: () => onChange(cell.via === "hold" ? dropHold(steps, cell.index) : deleteAct(steps, cell.index)) },
-          ])
-        }
+          ]);
+        }}
       >
         {cell.ms} ms
       </button>
@@ -347,6 +354,7 @@ function CellView({
           macros={macros}
           empty=""
           readOnly={readOnly}
+          tweak={tweak}
           allowScanWait={allowScanWait}
           onChange={(inner) => onChange(steps.map((step, index) => (index === cell.index && step.type === "repeat" ? { ...step, steps: inner } : step)))}
         />
@@ -474,12 +482,13 @@ function CellView({
       onDragOver={onAllowDrop(cell.index)}
       onDrop={onDropAt(cell.index)}
       onDoubleClick={() => onEditKey(cell.index)}
-      onContextMenu={(event) =>
+      onContextMenu={(event) => {
+        if (readOnly) return;
         onMenu(event, [
           { kind: "item", label: "Edit", run: () => onEditKey(cell.index) },
           { kind: "item", label: "Delete", run: () => onChange(deleteAct(steps, cell.index)) },
-        ])
-      }
+        ]);
+      }}
     >
       <b>{cell.title}</b>
       <small>{cell.subtitle}</small>

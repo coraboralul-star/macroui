@@ -5,6 +5,7 @@ import { pressPair, applyDelayMode } from "../eventLane";
 import { LIBRARY, LIBRARY_MIME, MENU_GROUPS, libraryItem, librarySteps, matchInput } from "../library";
 import { compileRecording, type RecEvent } from "../recording";
 import { effectivePlayMode, GRAPH_NODE_H, GRAPH_NODE_W, graphLayout, place, shownBlocks, usesReleaseStop } from "../macroFlow";
+import { macroIssues } from "../profileEdits";
 import type { Block, Macro, Step } from "../profile";
 import { BlockFields } from "./BlockFields";
 import { BlockLead } from "./BlockLead";
@@ -34,7 +35,10 @@ export function GraphEditor({
   onClose: () => void;
   onDelete: () => void;
 }) {
-  const macro = macros.find((item) => item.id === selected) ?? null;
+  const committed = macros.find((item) => item.id === selected) ?? null;
+  const [draft, setDraft] = useState<Macro | null>(null);
+  const macro = draft && draft.id === committed?.id ? draft : committed;
+  const edit = (next: Macro) => setDraft(next);
   const blocks = macro ? shownBlocks(macro) : [];
   const others = macros.filter((item) => item.id !== macro?.id);
   const trigger = macro ? place(macro) : "";
@@ -50,6 +54,7 @@ export function GraphEditor({
   const [capture, setCapture] = useState<{ slot: "hold" | "watch" | "step" | "bind" } | null>(null);
   const [live, setLive] = useState<RecEvent[] | null>(null);
   const [wipe, setWipe] = useState<"macro" | "block" | null>(null);
+  const [leave, setLeave] = useState(false);
   const [libOver, setLibOver] = useState<string | null>(null);
   const [libPick, setLibPick] = useState<{ id: string; spot: Spot } | null>(null);
   const [delayMode, setDelayMode] = useState<DelayMode>("recorded");
@@ -91,7 +96,7 @@ export function GraphEditor({
 
   const commit = (next: Block[], pick?: string, patch?: Partial<Macro>) => {
     if (!macro) return;
-    onChange({
+    edit({
       ...macro,
       advanced: true,
       basic: false,
@@ -349,6 +354,19 @@ export function GraphEditor({
     });
   }
 
+  const issues = macro ? macroIssues(macro) : [];
+  const dirty = !!draft && !!committed && draft.id === committed.id && JSON.stringify(draft) !== JSON.stringify(committed);
+  const issue = dirty ? issues[0] ?? "" : "";
+  const save = () => {
+    if (!macro || !dirty || issues.length) return;
+    onChange(macro);
+    setDraft(null);
+  };
+  const requestClose = () => {
+    if (dirty) setLeave(true);
+    else onClose();
+  };
+
   const tabs = (
     <SlideToggle
       label="Advanced views"
@@ -385,20 +403,30 @@ export function GraphEditor({
             aria-label="Macro name"
             value={macro.name}
             spellCheck={false}
-            onChange={(event) => onChange({ ...macro, name: event.target.value })}
+            onChange={(event) => edit({ ...macro, name: event.target.value })}
           />
         ) : null}
         <span className="graph-bar-space" />
         {macro && usesReleaseStop(macro) ? (
-          <ReleaseField compact label="Macro on release" value={macro.releaseStop} onChange={(releaseStop) => onChange({ ...macro, releaseStop: releaseStop ?? "nextUp" })} />
+          <ReleaseField compact label="Macro on release" value={macro.releaseStop} onChange={(releaseStop) => edit({ ...macro, releaseStop: releaseStop ?? "nextUp" })} />
         ) : null}
-        <button type="button" className={macro?.busy ? "is-on" : "ghost"} disabled={!macro} aria-label="Skip if running" onClick={() => macro && onChange({ ...macro, busy: !macro.busy })}>
+        <button type="button" className={macro?.busy ? "is-on" : "ghost"} disabled={!macro} aria-label="Skip if running" onClick={() => macro && edit({ ...macro, busy: !macro.busy })}>
           Skip
         </button>
         <button type="button" className="ghost is-danger" disabled={!macro} onClick={() => setWipe("macro")}>
           Delete
         </button>
-        <button type="button" className="ghost" onClick={onClose}>
+        {issue ? <span className="draft-note is-bad" title={issue}>{issue}</span> : dirty ? <span className="draft-note">Unsaved changes</span> : null}
+        <button
+          type="button"
+          className="is-primary"
+          disabled={!macro || !dirty || issues.length > 0}
+          title={issue || (dirty ? "Save this macro" : "No changes to save")}
+          onClick={save}
+        >
+          Save
+        </button>
+        <button type="button" className="ghost" onClick={requestClose}>
           Close
         </button>
       </header>
@@ -755,7 +783,7 @@ export function GraphEditor({
           onCancel={() => setCapture(null)}
           onPick={(pickedKey) => {
             if (capture.slot === "bind") {
-              onChange({
+              edit({
                 ...macro,
                 trigger: {
                   kind: pickedKey.kind === "key" ? "key" : pickedKey.kind === "side" ? "side" : "mouse",
@@ -801,6 +829,18 @@ export function GraphEditor({
             if (wipe === "macro") onDelete();
             else dropBlock();
             setWipe(null);
+          }}
+        />
+      ) : null}
+      {leave ? (
+        <Confirm
+          title="Close without saving?"
+          note="The saved macro stays as it is."
+          action="Close"
+          onCancel={() => setLeave(false)}
+          onConfirm={() => {
+            setLeave(false);
+            onClose();
           }}
         />
       ) : null}

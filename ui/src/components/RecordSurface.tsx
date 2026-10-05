@@ -70,20 +70,9 @@ export function RecordSurface({
           }}
           onClear={onClear}
           clearDisabled={busy || !steps.length}
+          onRevert={() => onSteps(saved)}
+          revertDisabled={busy || !dirty}
         />
-      </div>
-      <div className="rec-commit">
-        <button type="button" className="rec-revert" disabled={busy || !dirty} onClick={() => onSteps(saved)}>
-          Revert
-        </button>
-        <button
-          type="button"
-          className="rec-save"
-          disabled={busy || !dirty}
-          onClick={() => setSaved(steps)}
-        >
-          Save
-        </button>
       </div>
     </div>
   );

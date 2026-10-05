@@ -9,6 +9,8 @@ export function RecordBar({
   clearDisabled,
   extras,
   dock,
+  onRevert,
+  revertDisabled,
 }: {
   onCapture: (recording: Recording) => void;
   onLive?: (events: RecEvent[] | null) => void;
@@ -16,6 +18,8 @@ export function RecordBar({
   clearDisabled?: boolean;
   extras?: ReactNode;
   dock?: boolean;
+  onRevert?: () => void;
+  revertDisabled?: boolean;
 }) {
   const [active, setActive] = useState(false);
   const events = useRef<RecEvent[]>([]);
@@ -117,6 +121,11 @@ export function RecordBar({
         ) : null}
       </div>
       <div className="rec-bar-end">
+        {onRevert ? (
+          <button type="button" className="rec-revert" disabled={revertDisabled} onClick={onRevert}>
+            Revert
+          </button>
+        ) : null}
         <button
           type="button"
           className={`rec-arm${active ? " is-live" : ""}`}

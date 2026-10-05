@@ -16,7 +16,7 @@ import type { EngineState } from "./profile";
 export function useHostStatus() {
   const [shell, setShell] = useState(false);
   const [pipe, setPipe] = useState(false);
-  const [engine, setEngine] = useState<EngineState>({ armed: false, running: [], held: [] });
+  const [engine, setEngine] = useState<EngineState>({ armed: false, running: [], held: [], activeId: "" });
   const [fault, setFault] = useState<string | null>(null);
   const [ports, setPorts] = useState<BoardPort[]>([]);
   const [windows, setWindows] = useState<WindowRow[]>([]);

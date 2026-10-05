@@ -7,14 +7,24 @@ import { ReleaseField } from "./ReleaseField";
 
 export function MacroBrief({
   macro,
+  macros,
   onChange,
   onDelete,
   onOpenGraph,
+  onSave,
+  saveDisabled,
+  saveTitle,
+  issue,
 }: {
   macro: Macro;
+  macros: Macro[];
   onChange: (macro: Macro) => void;
   onDelete: () => void;
   onOpenGraph: () => void;
+  onSave: () => void;
+  saveDisabled: boolean;
+  saveTitle: string;
+  issue: string;
 }) {
   const blocks = shownBlocks(macro);
   const trigger = place(macro);
@@ -36,11 +46,15 @@ export function MacroBrief({
           <button type="button" className="ghost is-danger" onClick={onDelete}>
             Delete
           </button>
+          <button type="button" className="studio-new is-primary" disabled={saveDisabled} title={saveTitle} onClick={onSave}>
+            Save
+          </button>
           <button type="button" className="studio-new is-primary" onClick={onOpenGraph}>
             Advanced
           </button>
         </div>
       </div>
+      {issue ? <p className="draft-note is-bad">{issue}</p> : null}
       <p className="brief-trigger">
         Trigger
         <KeyFace label={trigger || "Trigger"} empty={!trigger} />
@@ -53,7 +67,11 @@ export function MacroBrief({
                 <p className="brief-lead">
                   <BlockLead block={block} trigger={trigger} />
                 </p>
-                <BlockBody block={block} />
+                <BlockBody
+                  block={block}
+                  macros={macros}
+                  onSteps={(steps) => onChange(withBlockSteps(macro, block.id, steps))}
+                />
               </div>
             </li>
           ))}
@@ -65,7 +83,18 @@ export function MacroBrief({
   );
 }
 
-function BlockBody({ block }: { block: Block }) {
+function withBlockSteps(macro: Macro, blockId: string, steps: Step[]): Macro {
+  const blocks = macro.blocks ?? [];
+  if (blocks.some((block) => block.id === blockId)) {
+    return {
+      ...macro,
+      blocks: blocks.map((block) => (block.id === blockId && "steps" in block ? { ...block, steps } : block)),
+    };
+  }
+  return { ...macro, steps };
+}
+
+function BlockBody({ block, macros, onSteps }: { block: Block; macros: Macro[]; onSteps: (steps: Step[]) => void }) {
   if (block.type === "wait") return <p className="brief-meta">{block.ms} ms</p>;
   if (block.type === "tapHold") {
     const key = heldName(block.key) || "Key";
@@ -95,32 +124,32 @@ function BlockBody({ block }: { block: Block }) {
     );
   }
   if (block.type === "ifShort") {
-    return <SendBody steps={block.steps} after={`${block.minCycles} times`} />;
+    return <SendBody steps={block.steps} macros={macros} onChange={onSteps} after={`${block.minCycles} times`} />;
   }
   if (block.type === "swapAfter") {
-    return <SendBody steps={block.steps} after={`until you let go`} />;
+    return <SendBody steps={block.steps} macros={macros} onChange={onSteps} after={`until you let go`} />;
   }
   if (block.type === "then") {
-    return <SendBody steps={block.steps} after={block.forMs ? `for ${block.forMs} ms` : undefined} />;
+    return <SendBody steps={block.steps} macros={macros} onChange={onSteps} after={block.forMs ? `for ${block.forMs} ms` : undefined} />;
   }
   if (block.type === "repeat") {
-    return <SendBody steps={block.steps} after={block.count === 0 ? "until it stops" : `${block.count} times`} />;
+    return <SendBody steps={block.steps} macros={macros} onChange={onSteps} after={block.count === 0 ? "until it stops" : `${block.count} times`} />;
   }
-  if (block.type === "whileHeld" || block.type === "steps") return <SendBody steps={block.steps} />;
+  if (block.type === "whileHeld" || block.type === "steps") return <SendBody steps={block.steps} macros={macros} onChange={onSteps} />;
   return null;
 }
 
-function SendBody({ steps, after }: { steps: Step[]; after?: string }) {
+function SendBody({ steps, macros, onChange, after }: { steps: Step[]; macros: Macro[]; onChange: (steps: Step[]) => void; after?: string }) {
   return (
     <>
       <p className="brief-meta">Send</p>
-      <StepStrip steps={steps} />
+      <StepStrip steps={steps} macros={macros} onChange={onChange} />
       {after ? <p className="brief-meta">{after}</p> : null}
     </>
   );
 }
 
-function StepStrip({ steps }: { steps: Step[] }) {
+function StepStrip({ steps, macros, onChange }: { steps: Step[]; macros: Macro[]; onChange: (steps: Step[]) => void }) {
   if (!steps.length) return <p className="brief-empty">Empty</p>;
-  return <EventLane steps={steps} macros={[]} readOnly empty="" onChange={() => {}} />;
+  return <EventLane steps={steps} macros={macros} readOnly tweak empty="" onChange={onChange} />;
 }
