@@ -35,7 +35,7 @@ $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $args = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     try {
-        $proc = Start-Process -FilePath "powershell.exe" -ArgumentList $args -Verb RunAs -Wait -PassThru
+        $proc = Start-Process -FilePath "powershell.exe" -ArgumentList $args -Verb RunAs -Wait -PassThru -WindowStyle Hidden
     } catch {
         Write-Host "Setup was cancelled."
         exit 1

@@ -28,7 +28,7 @@ public partial class App : System.Windows.Application
             Shutdown();
             return;
         }
-        var window = new MainWindow();
+        var window = new MainWindow(e.Args.Contains("--splash-host"));
         MainWindow = window;
         window.Show();
     }

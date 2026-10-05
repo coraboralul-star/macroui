@@ -4,6 +4,8 @@ obj/
 *.user
 engine/engine.log
 engine/self-test-result.txt
+launcher/bin/
+launcher/publish/
 firmware/build/
 firmware/out/
 profiles/*.json

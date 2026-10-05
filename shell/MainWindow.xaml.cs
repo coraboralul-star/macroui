@@ -26,6 +26,12 @@ public partial class MainWindow : Window
     bool _pageReady;
     bool _launchedEngine;
     bool _closing;
+    readonly bool _hosted;
+    EventWaitHandle? _live;
+    EventWaitHandle? _reveal;
+    EventWaitHandle? _bootFailed;
+    bool _engineLive;
+    int _readyGate;
     string _lastState = "";
     string _portsJson = "";
     string _inputMode = "software";
@@ -41,9 +47,17 @@ public partial class MainWindow : Window
     System.Windows.Forms.NotifyIcon? _tray;
     System.Drawing.Icon? _trayIcon;
 
-    public MainWindow()
+    public MainWindow(bool hosted = false)
     {
         InitializeComponent();
+        _hosted = hosted;
+        if (_hosted)
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = -20000;
+            Top = -20000;
+            ShowActivated = false;
+        }
         _dev = Environment.GetCommandLineArgs().Contains("--dev");
         _repo = FindRepo();
         _profilePath = Path.Combine(_repo, "profiles", "default.json");
@@ -56,6 +70,14 @@ public partial class MainWindow : Window
 
     async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        if (_hosted)
+        {
+            _live = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\Vendetta.Live");
+            _reveal = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\Vendetta.Reveal");
+            _bootFailed = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\Vendetta.BootFailed");
+            PublishBoot();
+        }
+        TryLaunchEngine();
         try
         {
             var folder = Path.Combine(_repo, "shell", ".webview2");
@@ -84,7 +106,10 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Vendetta Macros");
+            if (_hosted)
+                PublishBootFailure(ex.Message.Length > 140 ? "The editor did not load." : ex.Message);
+            else
+                MessageBox.Show(this, ex.Message, "H&le");
             return;
         }
 
@@ -179,7 +204,7 @@ public partial class MainWindow : Window
         var tray = new System.Windows.Forms.NotifyIcon
         {
             Icon = _trayIcon,
-            Text = "Vendetta Macros",
+            Text = "H&le",
             Visible = false,
         };
         var menu = new System.Windows.Forms.ContextMenuStrip();
@@ -264,6 +289,11 @@ public partial class MainWindow : Window
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
+        if (_hosted)
+        {
+            try { ShowWindow(new WindowInteropHelper(this).Handle, 0); }
+            catch { /* the window stays off-screen if the hide call fails */ }
+        }
         if (PresentationSource.FromVisual(this) is HwndSource source)
             source.AddHook(WndProc);
     }
@@ -336,6 +366,7 @@ public partial class MainWindow : Window
             SendWindowState();
             if (_lastState.Length > 0)
                 SendToPage(_lastState);
+            MaybeReady();
             return;
         }
         if (type == "input")
@@ -401,6 +432,8 @@ public partial class MainWindow : Window
                     var kind = MessageType(text);
                     if (kind == "state")
                         _lastState = text;
+                    if (kind == "hello" || kind == "state")
+                        NoteEngine();
                     if (kind == "hid")
                     {
                         WriteHid(text);
@@ -457,7 +490,11 @@ public partial class MainWindow : Window
         var ahk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "AutoHotkey", "v2", "AutoHotkey64.exe");
         var script = Path.Combine(_repo, "engine", "MacroEngine.ahk");
         if (!File.Exists(ahk) || !File.Exists(script))
+        {
+            if (_hosted)
+                PublishBootFailure("The macro system did not start.");
             return;
+        }
         _launchedEngine = true;
         var start = new ProcessStartInfo(ahk)
         {
@@ -573,7 +610,7 @@ public partial class MainWindow : Window
             {
                 CloseBoard();
                 await SetOutput("software");
-                SendToPage(ErrorJson("shell", "no-board", $"no Vendetta {ChipLabel(mode)} board was found"));
+                SendToPage(ErrorJson("shell", "no-board", $"no H&le {ChipLabel(mode)} board was found"));
                 return;
             }
 
@@ -585,9 +622,9 @@ public partial class MainWindow : Window
                 CloseBoard();
                 await SetOutput("software");
                 if (fail == "mismatch")
-                    SendToPage(ErrorJson("shell", "board-mismatch", $"the board on {hit.Port} is not a Vendetta {ChipLabel(mode)}"));
+                    SendToPage(ErrorJson("shell", "board-mismatch", $"the board on {hit.Port} is not an H&le {ChipLabel(mode)}"));
                 else
-                    SendToPage(ErrorJson("shell", "no-board", $"could not open the Vendetta {ChipLabel(mode)} board"));
+                    SendToPage(ErrorJson("shell", "no-board", $"could not open the H&le {ChipLabel(mode)} board"));
                 return;
             }
 
@@ -856,6 +893,75 @@ public partial class MainWindow : Window
         try { return JsonNode.Parse(json)?["type"]?.ToString() ?? ""; }
         catch { return ""; }
     }
+
+    void NoteEngine()
+    {
+        if (Dispatcher.CheckAccess())
+            MarkEngine();
+        else
+            Dispatcher.BeginInvoke(MarkEngine);
+    }
+
+    void MarkEngine()
+    {
+        _engineLive = true;
+        MaybeReady();
+    }
+
+    void MaybeReady()
+    {
+        if (!_hosted)
+            return;
+        if (!_pageReady || !_engineLive)
+        {
+            PublishBoot();
+            return;
+        }
+        if (Interlocked.Exchange(ref _readyGate, 1) != 0)
+            return;
+        Task.Run(() =>
+        {
+            try { _live?.Set(); } catch { /* the launcher is already gone */ }
+            try { _reveal?.WaitOne(4000); } catch { /* show the window anyway */ }
+            Dispatcher.BeginInvoke(Reveal);
+        });
+    }
+
+    void PublishBoot()
+    {
+        if (!_hosted)
+            return;
+        WriteBoot(!_pageReady ? "LOADING THE EDITOR" : "STARTING THE MACRO SYSTEM");
+    }
+
+    void PublishBootFailure(string text)
+    {
+        WriteBoot(text);
+        try { _bootFailed?.Set(); } catch { /* the launcher is already gone */ }
+    }
+
+    static void WriteBoot(string text)
+    {
+        try { File.WriteAllText(Path.Combine(Path.GetTempPath(), "Vendetta.boot"), text); }
+        catch { /* the launcher keeps its last line */ }
+    }
+
+    void Reveal()
+    {
+        var area = SystemParameters.WorkArea;
+        var width = Width > 0 ? Width : 1180;
+        var height = Height > 0 ? Height : 760;
+        Left = area.Left + Math.Max(0, (area.Width - width) / 2);
+        Top = area.Top + Math.Max(0, (area.Height - height) / 2);
+        ShowInTaskbar = true;
+        Show();
+        try { ShowWindow(new WindowInteropHelper(this).Handle, 5); }
+        catch { /* Show already asked for the window */ }
+        Activate();
+    }
+
+    [DllImport("user32.dll")]
+    static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     static string FindRepo()
     {
