@@ -96,30 +96,43 @@ function withBlockSteps(macro: Macro, blockId: string, steps: Step[]): Macro {
 
 function BlockBody({ block, macros, onSteps }: { block: Block; macros: Macro[]; onSteps: (steps: Step[]) => void }) {
   if (block.type === "wait") return <p className="brief-meta">{block.ms} ms</p>;
-  if (block.type === "tapHold") {
+  if (block.type === "tapHold" || block.type === "tapSpam") {
     const key = heldName(block.key) || "Key";
     const tracked = block.watch;
     return (
       <div className="brief-path">
-        <p className="brief-meta">Track state of</p>
-        {tracked.length ? (
-          <div className="lane">
-            {tracked.map((item) => (
-              <span key={item} className="ev ev-act">
-                <b>{heldName(item)}</b>
-              </span>
-            ))}
-          </div>
-        ) : (
-          <p className="brief-empty">None</p>
-        )}
-        <p className="brief-meta">
-          Release <KeyFace label={key} />
-        </p>
-        <p className="brief-meta">{block.gapMs} ms</p>
-        <p className="brief-meta">
-          Resend <KeyFace label={key} />
-        </p>
+        {block.type === "tapSpam" ? (
+          <>
+            <p className="brief-meta">
+              Click <KeyFace label={key} /> {block.holdMs} ms down, {block.restMs} ms up
+            </p>
+            <p className="brief-meta">Pause when {tracked.length ? tracked.map(heldName).join(" ") : "a tracked key"} is pressed</p>
+            <p className="brief-meta">Resume after {block.gapMs} ms if still held</p>
+          </>
+        ) : null}
+        {block.type === "tapHold" ? (
+          <>
+            <p className="brief-meta">Track state of</p>
+            {tracked.length ? (
+              <div className="lane">
+                {tracked.map((item) => (
+                  <span key={item} className="ev ev-act">
+                    <b>{heldName(item)}</b>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="brief-empty">None</p>
+            )}
+            <p className="brief-meta">
+              Release <KeyFace label={key} />
+            </p>
+            <p className="brief-meta">{block.gapMs} ms</p>
+            <p className="brief-meta">
+              Resend <KeyFace label={key} />
+            </p>
+          </>
+        ) : null}
       </div>
     );
   }
@@ -135,6 +148,7 @@ function BlockBody({ block, macros, onSteps }: { block: Block; macros: Macro[]; 
   if (block.type === "repeat") {
     return <SendBody steps={block.steps} macros={macros} onChange={onSteps} after={block.count === 0 ? "until it stops" : `${block.count} times`} />;
   }
+  if (block.type === "onceHeld") return <SendBody steps={block.steps} macros={macros} onChange={onSteps} after={`then ${block.gapMs} ms`} />;
   if (block.type === "whileHeld" || block.type === "steps") return <SendBody steps={block.steps} macros={macros} onChange={onSteps} />;
   return null;
 }

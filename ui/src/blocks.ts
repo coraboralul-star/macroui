@@ -9,6 +9,8 @@ export function createBlock(type: Block["type"]): Block {
   if (type === "then") return { id, type, forMs: 55, steps: [] };
   if (type === "repeat") return { id, type, count: 1, steps: [] };
   if (type === "tapHold") return { id, type, key: "z", watch: ["LShift", "CapsLock", "t", "XButton2", "p"], armMs: 5, gapMs: 80, ignore: "off", ignoreMs: 150, pauseWatch: "off" };
+  if (type === "tapSpam") return { id, type, key: "z", watch: ["LShift", "CapsLock", "t", "XButton2", "p"], armMs: 5, gapMs: 80, holdMs: 18, restMs: 18, ignore: "off", ignoreMs: 150, pauseWatch: "off" };
+  if (type === "onceHeld") return { id, type, gapMs: 70, steps: [] };
   return { id, type: "wait", ms: 13 };
 }
 
@@ -125,7 +127,7 @@ export function appendSteps(block: Block, steps: Step[]): Block {
 }
 
 export function takesSteps(block: Block): block is Extract<Block, { steps: Step[] }> {
-  return block.type !== "wait" && block.type !== "tapHold";
+  return block.type !== "wait" && block.type !== "tapHold" && block.type !== "tapSpam";
 }
 
 /** Scan wait only belongs where the trigger is still supposed to be down. */

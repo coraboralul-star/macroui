@@ -74,7 +74,9 @@ export type Block =
   | { id: string; type: "repeat"; count: number; steps: Step[]; releaseStop?: ReleaseStop }
   | { id: string; type: "wait"; ms: number }
   | { id: string; type: "steps"; steps: Step[]; releaseStop?: ReleaseStop }
-  | { id: string; type: "tapHold"; key: string; watch: string[]; armMs: number; gapMs: number; ignore: IgnoreLock; ignoreMs: number; pauseWatch: PauseWatch };
+  | { id: string; type: "tapHold"; key: string; watch: string[]; armMs: number; gapMs: number; ignore: IgnoreLock; ignoreMs: number; pauseWatch: PauseWatch }
+  | { id: string; type: "tapSpam"; key: string; watch: string[]; armMs: number; gapMs: number; holdMs: number; restMs: number; ignore: IgnoreLock; ignoreMs: number; pauseWatch: PauseWatch }
+  | { id: string; type: "onceHeld"; gapMs: number; steps: Step[] };
 
 export type Macro = {
   id: string;
@@ -465,6 +467,7 @@ function normalizeBlocks(value: unknown): Block[] {
       ignore?: unknown;
       ignoreMs?: number;
       pauseWatch?: unknown;
+      restMs?: number;
       mute?: unknown;
       releaseStop?: unknown;
     };
@@ -494,14 +497,17 @@ function normalizeBlocks(value: unknown): Block[] {
       const ms = Number(raw.ms);
       return [{ id, type: "wait", ms: Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : 0 }];
     }
-    if (raw.type === "tapHold") {
+    if (raw.type === "onceHeld") {
+      const gap = Number(raw.gapMs);
+      return [{ id, type: "onceHeld", gapMs: Number.isFinite(gap) && gap >= 0 ? Math.round(gap) : 70, steps }];
+    }
+    if (raw.type === "tapHold" || raw.type === "tapSpam") {
       const arm = Number(raw.armMs);
       const gap = Number(raw.gapMs);
       const watch = Array.isArray(raw.watch) ? raw.watch.filter((item) => typeof item === "string" && item).map(canonKey) : [];
       const ignoreMs = Number(raw.ignoreMs);
-      return [{
+      const shared = {
         id,
-        type: "tapHold",
         key: canonKey(raw.key || "z"),
         watch,
         armMs: Number.isFinite(arm) && arm >= 0 ? Math.round(arm) : 5,
@@ -509,7 +515,18 @@ function normalizeBlocks(value: unknown): Block[] {
         ignore: normalizeIgnoreLock(raw.ignore),
         ignoreMs: Number.isFinite(ignoreMs) && ignoreMs >= 0 ? Math.round(ignoreMs) : 0,
         pauseWatch: normalizePauseWatch(raw.pauseWatch),
-      }];
+      };
+      if (raw.type === "tapSpam") {
+        const hold = Number(raw.holdMs);
+        const rest = Number(raw.restMs);
+        return [{
+          ...shared,
+          type: "tapSpam",
+          holdMs: Number.isFinite(hold) && hold >= 0 ? Math.round(hold) : 18,
+          restMs: Number.isFinite(rest) && rest >= 0 ? Math.round(rest) : 18,
+        }];
+      }
+      return [{ ...shared, type: "tapHold" }];
     }
     if (raw.type === "pressHold") {
       const holdMs = Number(raw.holdMs);

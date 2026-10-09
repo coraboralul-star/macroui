@@ -2161,13 +2161,15 @@ button.ghost:active:not(:disabled) {
 }
 
 .block-whileHeld { border-left-color: #f3e6cf; }
+.block-onceHeld { border-left-color: #d7c4a3; }
 .block-ifShort { border-left-color: #e07a2f; }
 .block-swapAfter { border-left-color: #3d9a7a; }
 .block-then { border-left-color: #8a7b66; }
 .block-repeat { border-left-color: #cbbfa8; }
 .block-wait { border-left-color: #6b5b4a; }
 .block-steps { border-left-color: #a89880; }
-.block-tapHold { border-left-color: #d7c4a3; }
+.block-tapHold,
+.block-tapSpam { border-left-color: #d7c4a3; }
 
 .watch-row {
   display: flex;
@@ -2772,8 +2774,10 @@ button.ghost.is-danger:hover:not(:disabled) {
 }
 
 .block-whileHeld { border-left-color: var(--text); }
+.block-onceHeld { border-left-color: #d7c4a3; }
 .block-ifShort,
-.block-tapHold { border-left-color: var(--accent); }
+.block-tapHold,
+.block-tapSpam { border-left-color: var(--accent); }
 .block-swapAfter { border-left-color: #3d9a7a; }
 .block-repeat { border-left-color: var(--muted); }
 
@@ -3905,7 +3909,9 @@ input.ev-delay {
 .block-ifShort .block-actions,
 .block-ifShort .block-fields,
 .block-tapHold .block-actions,
-.block-tapHold .block-fields { --chip-line: #c45200; }
+.block-tapHold .block-fields,
+.block-tapSpam .block-actions,
+.block-tapSpam .block-fields { --chip-line: #c45200; }
 .block-swapAfter .block-actions,
 .block-swapAfter .block-fields { --chip-line: #2e7a60; }
 .block-then .block-actions,
@@ -4312,13 +4318,15 @@ input.ev-delay {
 
 .graph-node.block-trigger,
 .graph-node.block-whileHeld,
+.graph-node.block-onceHeld,
 .graph-node.block-ifShort,
 .graph-node.block-swapAfter,
 .graph-node.block-then,
 .graph-node.block-repeat,
 .graph-node.block-wait,
 .graph-node.block-steps,
-.graph-node.block-tapHold {
+.graph-node.block-tapHold,
+.graph-node.block-tapSpam {
   border-color: var(--line);
 }
 
@@ -4567,13 +4575,15 @@ input.ev-delay {
 .graph-node.is-preview,
 .graph-node.block-trigger.is-on,
 .graph-node.block-whileHeld.is-on,
+.graph-node.block-onceHeld.is-on,
 .graph-node.block-ifShort.is-on,
 .graph-node.block-swapAfter.is-on,
 .graph-node.block-then.is-on,
 .graph-node.block-repeat.is-on,
 .graph-node.block-wait.is-on,
 .graph-node.block-steps.is-on,
-.graph-node.block-tapHold.is-on {
+.graph-node.block-tapHold.is-on,
+.graph-node.block-tapSpam.is-on {
   border: 1px solid var(--accent);
   box-shadow: var(--glow);
 }

@@ -85,6 +85,19 @@ function stepCues(steps: Step[]): Cue[] {
 
 function blockCues(block: Block, mode: "simple" | "real", splitMs?: number): Cue[] {
   if (block.type === "wait") return [{ type: "wait", ...span(waitMs(block.ms), realMs(block.ms)) }];
+  if (block.type === "tapSpam") {
+    const cues: Cue[] = [];
+    const hold = block.key ? asInput(block.key) : null;
+    const burst = () => {
+      if (!hold) return;
+      for (let i = 0; i < 2; i++) cues.push({ type: "pair", input: hold, ...span(tapMs(block.holdMs), realMs(block.holdMs + block.restMs, 56)) });
+    };
+    burst();
+    for (const code of block.watch.filter(Boolean)) cues.push({ type: "key", input: asInput(code), down: true, ...span(tapMs(40), realMs(40)) });
+    cues.push({ type: "wait", ...span(waitMs(block.gapMs), realMs(block.gapMs)) });
+    burst();
+    return cues;
+  }
   if (block.type === "tapHold") {
     const cues: Cue[] = [];
     const watch = block.watch.filter(Boolean);
@@ -94,6 +107,10 @@ function blockCues(block: Block, mode: "simple" | "real", splitMs?: number): Cue
     const hold = block.key || "";
     if (hold) cues.push({ type: "pair", input: asInput(hold), ...span(tapMs(block.armMs || 18), realMs(block.armMs || 18, 56)) });
     return cues;
+  }
+  if (block.type === "onceHeld") {
+    const body = block.steps.length ? stepCues(block.steps) : [];
+    return [...body, { type: "wait", ...span(waitMs(block.gapMs), realMs(block.gapMs)) }];
   }
   if (block.type === "whileHeld") {
     const body = block.steps.length ? loop(block.steps, 3) : [];

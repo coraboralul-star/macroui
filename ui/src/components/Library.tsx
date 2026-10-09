@@ -169,6 +169,7 @@ function mark(id: string): ReactNode {
   if (id === "runOnce") return <path d="M6 4.4v7.2l5.2-3.6L6 4.4z" />;
   if (id === "runMacro") return <><rect x="3" y="3.2" width="10" height="9.6" rx="1.4" /><path d="M7 6.2v3.6l2.8-1.8L7 6.2z" /></>;
   if (id === "repressKey") return <path d="M3.2 6.2h3.2v3.6H3.2zM8 6.2h4.8M8 8h3.2M8 9.8h4.8" />;
+  if (id === "repressSpam") return <path d="M3 6.2h2.1v3.6H3zM6.1 6.2h2.1v3.6H6.1zM9.2 7.1h3.6M9.2 8.9h2.4" />;
   if (id === "lastRecording" || id === "recordSteps") return <><circle cx="8" cy="8" r="4.6" /><circle cx="8" cy="8" r="1.6" /></>;
   return <circle cx="8" cy="8" r="2.2" />;
 }

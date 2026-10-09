@@ -6,6 +6,13 @@ import { KeyFace } from "./KeyFace";
 export function BlockLead({ block, trigger }: { block: Block | "trigger"; trigger: string }) {
   const face = <KeyFace label={trigger} empty={!trigger} />;
   if (block === "trigger") return trigger ? face : <>Bind a key</>;
+  if (block.type === "onceHeld") {
+    return (
+      <span className="block-lead">
+        <i>One</i> press of {face}
+      </span>
+    );
+  }
   if (block.type === "whileHeld") {
     return (
       <span className="block-lead">
@@ -48,10 +55,10 @@ export function BlockLead({ block, trigger }: { block: Block | "trigger"; trigge
       </span>
     );
   }
-  if (block.type === "tapHold") {
+  if (block.type === "tapHold" || block.type === "tapSpam") {
     return (
       <span className="block-lead">
-        <i>Repress</i> <KeyFace label={heldName(block.key) || "Key"} />
+        <i>{block.type === "tapSpam" ? "Spam" : "Repress"}</i> <KeyFace label={heldName(block.key) || "Key"} />
       </span>
     );
   }
