@@ -309,11 +309,14 @@ CompileBlocks(blocks) {
             steps.Push(Map("type", "wait", "ms", AsNum(Field(block, "ms", 0), 0)))
         else if (kind = "steps")
             steps.Push(Map("type", "repeat", "count", 1, "steps", child, "releaseStop", BlockReleaseStop(block)))
-        else if (kind = "tapHold") {
+        else if (kind = "onceHeld")
+            steps.Push(Map("type", "onceHeld", "gapMs", AsNum(Field(block, "gapMs", 70), 70), "steps", child))
+        else if (kind = "tapHold" || kind = "tapSpam") {
             watch := Field(block, "watch", [])
             if !(watch is Array)
                 watch := []
-            steps.Push(Map("type", "edgeHold", "key", NormKey(Field(block, "key", "z")), "watch", watch, "armMs", AsNum(Field(block, "armMs", 5), 5), "gapMs", AsNum(Field(block, "gapMs", 80), 80), "ignore", NormalizeIgnore(Field(block, "ignore", "off")), "ignoreMs", AsNum(Field(block, "ignoreMs", 0), 0), "pauseWatch", NormalizePause(Field(block, "pauseWatch", "off"))))
+            step := Map("type", "edgeHold", "key", NormKey(Field(block, "key", "z")), "watch", watch, "armMs", AsNum(Field(block, "armMs", 5), 5), "gapMs", AsNum(Field(block, "gapMs", 80), 80), "ignore", NormalizeIgnore(Field(block, "ignore", "off")), "ignoreMs", AsNum(Field(block, "ignoreMs", 0), 0), "pauseWatch", NormalizePause(Field(block, "pauseWatch", "off")), "spam", kind = "tapSpam", "holdMs", AsNum(Field(block, "holdMs", 18), 18), "restMs", AsNum(Field(block, "restMs", 18), 18))
+            steps.Push(step)
         }
         else if (kind = "pressHold") {
             if (child is Array) {
@@ -351,7 +354,8 @@ HasHoldLoop(steps) {
     for step in steps {
         if (step is Map) {
             kind := String(Field(step, "type", ""))
-            if (kind = "holdLoop" || kind = "swapLoop")
+            ; Repress and spam loop themselves. One pass lets After release run once spam stops.
+            if (kind = "holdLoop" || kind = "swapLoop" || kind = "onceHeld" || kind = "edgeHold")
                 return true
         }
     }
@@ -408,6 +412,7 @@ class Runner {
             this.releaseStop := "nextUp"
         this.stopping := false
         this.sawUp := false
+        this.releasedNow := false
         mode := modeOverride != "" ? String(modeOverride) : String(Field(macro, "playMode", "once"))
         this.mode := mode
         this.trigger := ""
@@ -549,6 +554,7 @@ class Runner {
         this.moveY := 0
         this.hasGoto := false
         this.pressedNow := Map()
+        this.releasedNow := false
         if (this.done || this.paused)
             return
         this.NoteHoldRelease()
@@ -557,10 +563,16 @@ class Runner {
                 this.pulses.Delete(k)
         if (this.waitUntil != 0 && now < this.waitUntil) {
             if this.HoldShouldStop() {
-                this.MarkDone()
+                top := this.stack.Length ? this.stack[-1] : ""
+                ; Spam yields on release so the next block, including After release, can run.
+                if (top is Object && top.HasProp("edgeSpam") && top.edgeSpam)
+                    this.waitUntil := 0
+                else {
+                    this.MarkDone()
+                    return
+                }
+            } else
                 return
-            }
-            return
         }
         this.waitUntil := 0
         this.scanWait := false
@@ -582,8 +594,18 @@ class Runner {
                 steps := []
             if (frame.index > steps.Length) {
                 if (frame.HasProp("edgeHold") && frame.edgeHold) {
+                    if (frame.HasProp("edgeSpam") && frame.edgeSpam) {
+                        if (this.TickSpamEdge(frame, now))
+                            return
+                        continue
+                    }
                     this.TickEdge(frame, now)
                     return
+                }
+                if (frame.HasProp("onceHeld") && frame.onceHeld) {
+                    if (this.TickOnce(frame, now))
+                        return
+                    continue
                 }
                 if (frame.HasProp("holdLoop") && frame.holdLoop) {
                     this.cycles++
@@ -703,6 +725,7 @@ class Runner {
                 if this.pressedNow.Has(key)
                     this.pressedNow.Delete(key)
                 this.sawUp := true
+                this.releasedNow := true
                 top := this.stack.Length > 0 ? this.stack[-1] : ""
                 cut := (top is Object && top.HasProp("drain") && top.drain)
                 ; A down and up in the same tick would never be sent. Hold it for one tick.
@@ -788,7 +811,10 @@ class Runner {
                 else
                     pauseOnce := ids
             }
-            frame := {steps: [], index: 1, repeatsLeft: 1, edgeHold: true, edgeKey: key, edgePrev: prev, edgePhase: "down", edgeArm: AsNum(Field(step, "armMs", 5), 5), edgeGap: AsNum(Field(step, "gapMs", 80), 80), edgeIgnore: NormalizeIgnore(Field(step, "ignore", "off")), edgeIgnoreMs: AsNum(Field(step, "ignoreMs", 0), 0), edgeLock: Map(), edgeRepeatAt: now + Engine.KeyDelayMs(), mute: mute, muteOn: false, pauseOnce: pauseOnce, pauseOn: false}
+            spam := Field(step, "spam", false)
+            holdFor := Max(1, Round(AsNum(Field(step, "holdMs", 18), 18) / this.speed))
+            restFor := Max(1, Round(AsNum(Field(step, "restMs", 18), 18) / this.speed))
+            frame := {steps: [], index: 1, repeatsLeft: 1, edgeHold: true, edgeKey: key, edgePrev: prev, edgePhase: "down", edgeArm: AsNum(Field(step, "armMs", 5), 5), edgeGap: AsNum(Field(step, "gapMs", 80), 80), edgeIgnore: NormalizeIgnore(Field(step, "ignore", "off")), edgeIgnoreMs: AsNum(Field(step, "ignoreMs", 0), 0), edgeLock: Map(), edgeRepeatAt: now + Engine.KeyDelayMs(), edgeSpam: spam ? true : false, edgeHoldFor: holdFor, edgeRestFor: restFor, edgeSpamOn: true, edgeSpamAt: spam ? now + holdFor : 0, mute: mute, muteOn: false, pauseOnce: pauseOnce, pauseOn: false}
             this.stack.Push(frame)
             this.ArmMute(frame)
             this.ArmPause(frame)
@@ -798,6 +824,18 @@ class Runner {
                 this.holds[this.trigger] := true
             this.ArmWait(now,5)
             return "wait"
+        }
+        if (kind = "onceHeld") {
+            if this.stopping
+                return ""
+            child := Field(step, "steps", [])
+            if !(child is Array)
+                child := []
+            gap := AsNum(Field(step, "gapMs", 70), 70) / this.speed
+            if (gap < 0)
+                gap := 0
+            this.stack.Push({steps: child, index: 1, repeatsLeft: 1, onceHeld: true, oncePhase: "run", onceFirst: true, onceGap: gap, onceReady: 0})
+            return ""
         }
         if (kind = "holdLoop") {
             if this.stopping
@@ -860,6 +898,91 @@ class Runner {
             return ""
         }
         return ""
+    }
+
+    ; true means this tick should stop. false means Advance should keep going.
+    TickOnce(frame, now) {
+        phase := String(frame.oncePhase)
+        up := this.stopping || this.trigger = "" || !Engine.KeyDown(this.trigger)
+        if (phase = "gap") {
+            if (now < frame.onceReady) {
+                this.ArmWait(now, frame.onceReady - now)
+                return true
+            }
+            this.stack.Pop()
+            return false
+        }
+        if (phase = "decide") {
+            if (up) {
+                frame.oncePhase := "gap"
+                if (now < frame.onceReady) {
+                    this.ArmWait(now, frame.onceReady - now)
+                    return true
+                }
+                this.stack.Pop()
+                return false
+            }
+            if (now >= frame.onceReady) {
+                frame.oncePhase := "run"
+                frame.onceFirst := false
+                frame.index := 1
+                if (frame.steps.Length = 0) {
+                    this.ArmWait(now, 1)
+                    return true
+                }
+                return false
+            }
+            this.ArmWait(now, 1)
+            return true
+        }
+        this.cycles++
+        gap := AsNum(frame.onceGap, 0)
+        frame.onceReady := now + gap
+        if (frame.onceFirst) {
+            frame.onceFirst := false
+            if (up) {
+                frame.oncePhase := "gap"
+                if (gap <= 0) {
+                    this.stack.Pop()
+                    return false
+                }
+                this.ArmWait(now, gap)
+                return true
+            }
+            if (gap <= 0) {
+                frame.oncePhase := "run"
+                frame.index := 1
+                if (frame.steps.Length = 0 || this.releasedNow) {
+                    this.ArmWait(now, 1)
+                    return true
+                }
+                return false
+            }
+            frame.oncePhase := "decide"
+            this.ArmWait(now, 1)
+            return true
+        }
+        if (up) {
+            frame.oncePhase := "gap"
+            if (gap <= 0) {
+                this.stack.Pop()
+                return false
+            }
+            this.ArmWait(now, gap)
+            return true
+        }
+        frame.oncePhase := "run"
+        frame.index := 1
+        if (frame.steps.Length = 0) {
+            this.ArmWait(now, 1)
+            return true
+        }
+        ; An up in this same tick must be sent before the next down.
+        if this.releasedNow {
+            this.ArmWait(now, 1)
+            return true
+        }
+        return false
     }
 
     PushHoldFrame(step) {
@@ -973,6 +1096,63 @@ class Runner {
         }
         this.RepeatHold(frame, now)
         this.ArmWait(now,5)
+    }
+
+    ; true means this tick should stop. false means the spam frame ended and Advance should continue.
+    TickSpamEdge(frame, now) {
+        key := frame.edgeKey
+        up := this.trigger != "" && !Engine.KeyDown(this.trigger)
+        if (this.stopping) {
+            this.MarkDone()
+            return true
+        }
+        if (up) {
+            this.DropHold(key)
+            if (this.trigger != "" && this.trigger != key)
+                this.DropHold(this.trigger)
+            this.ReleaseFrameMute(frame)
+            this.ReleaseFramePause(frame)
+            this.stack.Pop()
+            return false
+        }
+        if (frame.edgePhase = "quiet") {
+            frame.edgePhase := "down"
+            frame.edgeSpamOn := false
+            frame.edgeSpamAt := now
+        }
+        pulsed := false
+        for name, wasDown in frame.edgePrev {
+            isDown := Engine.FingerDown(name)
+            if (isDown && !wasDown && !pulsed && this.AcceptWatch(frame, name, now)) {
+                frame.edgePhase := "quiet"
+                pulsed := true
+            }
+            frame.edgePrev[name] := isDown
+        }
+        if (frame.edgePhase = "quiet") {
+            this.DropHold(key)
+            this.ArmWait(now, frame.edgeGap / this.speed)
+            return true
+        }
+        this.TickSpam(frame, now)
+        this.ArmWait(now, 5)
+        return true
+    }
+
+    TickSpam(frame, now) {
+        key := frame.edgeKey
+        if (key = "" || !frame.HasProp("edgeSpamAt") || frame.edgeSpamAt = 0 || now < frame.edgeSpamAt)
+            return
+        if (frame.edgeSpamOn) {
+            this.DropHold(key)
+            frame.edgeSpamOn := false
+            frame.edgeSpamAt := now + frame.edgeRestFor
+        }
+        else {
+            this.holds[key] := true
+            frame.edgeSpamOn := true
+            frame.edgeSpamAt := now + frame.edgeHoldFor
+        }
     }
 
     AcceptWatch(frame, name, now) {
@@ -1621,7 +1801,7 @@ class Engine {
                 if !(block is Map)
                     continue
                 kind := String(Field(block, "type", ""))
-                if (kind = "whileHeld" || kind = "swapAfter")
+                if (kind = "whileHeld" || kind = "swapAfter" || kind = "onceHeld")
                     return true
             }
         }
@@ -2106,8 +2286,11 @@ class Engine {
         if !(blocks is Array)
             return false
         for block in blocks
-            if (block is Map && String(Field(block, "type", "")) = "tapHold")
-                return true
+            if (block is Map) {
+                kind := String(Field(block, "type", ""))
+                if (kind = "tapHold" || kind = "tapSpam")
+                    return true
+            }
         return false
     }
 
@@ -2122,20 +2305,23 @@ class Engine {
         blocks := Field(macro, "blocks", [])
         hasHold := false
         hasTap := false
+        hasSpam := false
         if (blocks is Array) {
             for block in blocks {
                 if !(block is Map)
                     continue
                 kind := String(Field(block, "type", ""))
-                if (kind = "whileHeld" || kind = "swapAfter")
+                if (kind = "whileHeld" || kind = "swapAfter" || kind = "onceHeld")
                     hasHold := true
+                else if (kind = "tapSpam")
+                    hasSpam := true
                 else if (kind = "tapHold")
                     hasTap := true
             }
         }
-        ; A While-held block already exits when the trigger comes up. Asking the
+        ; A While-held or spam block already exits when the trigger comes up. Asking the
         ; whole runner to stop would skip Run-once / After-release blocks after it.
-        if hasHold
+        if (hasHold || hasSpam)
             return false
         if hasTap
             return true
@@ -3417,6 +3603,53 @@ RunChecks(fails) {
     Engine.physDown.Delete("XButton1")
     Engine.finger := Map()
 
+    spam := J("{'id':'spam-l','name':'Spam','enabled':true,'advanced':true,'playMode':'whileHeld','trigger':{'kind':'side','button':'XButton2'},'steps':[],'blocks':[{'type':'tapSpam','key':'LButton','watch':['RButton'],'armMs':5,'gapMs':50,'holdMs':18,'restMs':18}]}")
+    Engine.hooks["XButton2"] := true
+    Engine.NotePhysical("XButton2", true)
+    Engine.finger["RButton"] := false
+    Engine.StartRunner(spam)
+    Engine.FlushPending()
+    click := Engine.runners[1]
+    click.Advance(0)
+    fails := Check(Engine.Desired(0).Has("LButton") && Engine.Desired(0).Has("XButton2"), "spam starts with the click and the trigger down", fails)
+    click.Advance(15)
+    fails := Check(Engine.Desired(15).Has("LButton") && Engine.Desired(15).Has("XButton2"), "spam stays down through the click", fails)
+    click.Advance(20)
+    fails := Check(!Engine.Desired(20).Has("LButton") && Engine.Desired(20).Has("XButton2"), "spam lets the click up and keeps the trigger", fails)
+    click.Advance(40)
+    fails := Check(Engine.Desired(40).Has("LButton") && Engine.Desired(40).Has("XButton2"), "spam clicks again while the trigger is held", fails)
+    Engine.finger["RButton"] := true
+    click.Advance(45)
+    fails := Check(!Engine.Desired(45).Has("LButton") && Engine.Desired(45).Has("XButton2"), "a tracked press stops the clicks and keeps the trigger", fails)
+    click.Advance(70)
+    fails := Check(!Engine.Desired(70).Has("LButton") && Engine.Desired(70).Has("XButton2"), "spam stays quiet for the pause", fails)
+    click.Advance(95)
+    fails := Check(Engine.Desired(95).Has("LButton") && Engine.Desired(95).Has("XButton2"), "spam clicks again after the pause while still held", fails)
+    Engine.NotePhysical("XButton2", false)
+    click.Advance(100)
+    fails := Check(click.done && !Engine.Desired(100).Has("LButton") && !Engine.Desired(100).Has("XButton2"), "letting go stops the spam", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.finger := Map()
+    Engine.NotePhysical("XButton2", true)
+    Engine.finger["RButton"] := false
+    after := J("{'id':'spam-after','name':'After','enabled':true,'advanced':true,'playMode':'whileHeld','trigger':{'kind':'side','button':'XButton2'},'steps':[],'blocks':[{'type':'tapSpam','key':'LButton','watch':['RButton'],'armMs':0,'gapMs':50,'holdMs':18,'restMs':18},{'type':'then','forMs':0,'steps':[{'type':'key','action':'down','key':'a'},{'type':'wait','ms':40}]}]}")
+    Engine.StartRunner(after)
+    Engine.FlushPending()
+    tail := Engine.runners[1]
+    tail.Advance(0)
+    Engine.finger["RButton"] := true
+    tail.Advance(10)
+    fails := Check(!Engine.Desired(10).Has("LButton") && Engine.Desired(10).Has("XButton2"), "tracked press pauses spam before after release", fails)
+    Engine.NotePhysical("XButton2", false)
+    tail.Advance(20)
+    fails := Check(Engine.Desired(20).Has("a") && !Engine.Desired(20).Has("LButton") && !tail.done, "letting go during the pause runs after release", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.hooks.Delete("XButton2")
+    Engine.physDown.Delete("XButton2")
+    Engine.finger := Map()
+
     lock := J("{'id':'lock-z','name':'Lock','enabled':true,'advanced':true,'playMode':'whileHeld','trigger':{'kind':'side','button':'XButton1'},'steps':[],'blocks':[{'type':'tapHold','key':'z','watch':['t'],'armMs':5,'gapMs':80,'ignore':'macro','ignoreMs':150}]}")
     spamT := J("{'id':'spam-t','name':'Spam T','enabled':true,'advanced':true,'playMode':'once','trigger':{'kind':'key','button':'f'},'steps':[],'blocks':[{'type':'steps','steps':[{'type':'key','action':'down','key':'t'}]}]}")
     Engine.hooks["XButton1"] := true
@@ -3870,6 +4103,77 @@ RunChecks(fails) {
     Engine.hooks.Delete("b")
     if Engine.physDown.Has("b")
         Engine.physDown.Delete("b")
+
+    shot := J("{'id':'edit-shot','name':'Edit','enabled':true,'advanced':true,'playMode':'whileHeld','trigger':{'kind':'key','button':'n'},'steps':[],'blocks':[{'type':'onceHeld','gapMs':70,'steps':[{'type':'key','action':'down','key':'o'},{'type':'wait','ms':10},{'type':'key','action':'up','key':'o'}]},{'type':'then','forMs':0,'steps':[{'type':'key','action':'down','key':'9'},{'type':'wait','ms':10}]}]}")
+    Engine.hooks["n"] := true
+    Engine.profile := Map("macros", [shot])
+    Engine.NotePhysical("n", true)
+    Engine.StartRunner(shot)
+    Engine.FlushPending()
+    quickShot := Engine.runners[1]
+    quickShot.Advance(0)
+    fails := Check(Engine.Desired(0).Has("o") && !Engine.Desired(0).Has("9"), "one press starts with the chord", fails)
+    Engine.NotePhysical("n", false)
+    quickShot.Advance(10)
+    Engine.prevDown["edit-shot"] := true
+    Engine.PollTriggers()
+    Engine.RemoveDone()
+    fails := Check(Engine.HasRunner("edit-shot") && !Engine.Desired(10).Has("9"), "a fast release keeps the runner and does not shoot yet", fails)
+    quickShot.Advance(40)
+    fails := Check(!Engine.Desired(40).Has("9") && quickShot.cycles = 1, "the shot waits out the gap after one chord", fails)
+    quickShot.Advance(80)
+    fails := Check(Engine.Desired(80).Has("9") && quickShot.cycles = 1, "a fast press shoots 70 ms after the chord", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.NotePhysical("n", true)
+    Engine.StartRunner(shot)
+    Engine.FlushPending()
+    midShot := Engine.runners[1]
+    midShot.Advance(0)
+    midShot.Advance(10)
+    fails := Check(!Engine.Desired(10).Has("9"), "holding through the chord does not shoot", fails)
+    Engine.NotePhysical("n", false)
+    midShot.Advance(50)
+    fails := Check(!Engine.Desired(50).Has("9") && midShot.cycles = 1, "letting go during the gap does not shoot early", fails)
+    midShot.Advance(80)
+    fails := Check(Engine.Desired(80).Has("9") && midShot.cycles = 1, "a press released during the gap still waits the full 70 ms", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.NotePhysical("n", true)
+    Engine.StartRunner(shot)
+    Engine.FlushPending()
+    heldShot := Engine.runners[1]
+    heldShot.Advance(0)
+    heldShot.Advance(10)
+    heldShot.Advance(80)
+    fails := Check(Engine.Desired(80).Has("o") && !Engine.Desired(80).Has("9"), "still holding when the gap ends edits again", fails)
+    Engine.NotePhysical("n", false)
+    Engine.prevDown["edit-shot"] := true
+    Engine.PollTriggers()
+    Engine.RemoveDone()
+    heldShot.Advance(90)
+    fails := Check(Engine.HasRunner("edit-shot") && !Engine.Desired(90).Has("9") && heldShot.cycles = 2, "release after a hold finishes that pass before the shot", fails)
+    heldShot.Advance(160)
+    fails := Check(Engine.Desired(160).Has("9"), "a hold shoots 70 ms after the last pass", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.NotePhysical("n", true)
+    Engine.StartRunner(shot)
+    Engine.FlushPending()
+    spam := Engine.runners[1]
+    spam.Advance(0)
+    spam.Advance(10)
+    spam.Advance(80)
+    spam.Advance(90)
+    fails := Check(spam.cycles = 2 && !Engine.Desired(90).Has("9"), "a hold finishes the second cycle without shooting", fails)
+    spam.Advance(91)
+    fails := Check(Engine.Desired(91).Has("o") && spam.cycles = 2, "a hold starts the next cycle without waiting another 70 ms", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.hooks.Delete("n")
+    if Engine.physDown.Has("n")
+        Engine.physDown.Delete("n")
+    Engine.profile := savedProfile
 
     DllCall("Winmm.dll\timeBeginPeriod", "UInt", 1)
     clockMacro := J("{'id':'clock-5','name':'Clock','enabled':true,'basic':false,'playMode':'once','trigger':{'kind':'key','button':'b'},'steps':[{'type':'wait','ms':5}]}")

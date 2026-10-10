@@ -3,7 +3,7 @@ import type { Block, Macro, PlayMode, Step } from "./profile";
 import { pressLabel } from "./recording";
 
 export function effectivePlayMode(macro: Macro): PlayMode {
-  const tapHold = (macro.blocks ?? []).some((block) => block.type === "tapHold");
+  const tapHold = (macro.blocks ?? []).some((block) => block.type === "tapHold" || block.type === "tapSpam");
   if (tapHold) return "whileHeld";
   if (macro.advanced && macro.playMode === "whileHeld") return "once";
   return macro.playMode;
@@ -20,7 +20,7 @@ export function playModeLabel(mode: PlayMode): string {
 /** Editor nearest-up / play-full. Not the keyboard Playback "On release" mode. */
 export function usesReleaseStop(macro: Macro): boolean {
   if (macro.playMode === "whileHeld" || macro.playMode === "toggle") return true;
-  return shownBlocks(macro).some((block) => block.type === "whileHeld" || block.type === "swapAfter" || block.type === "tapHold");
+  return shownBlocks(macro).some((block) => block.type === "whileHeld" || block.type === "swapAfter" || block.type === "tapHold" || block.type === "tapSpam" || block.type === "onceHeld");
 }
 
 /** Basic editor only shows On release for a single-block hold macro. */
@@ -90,17 +90,20 @@ export function watchVerb(count: number): "is" | "are" {
   return count === 1 ? "is" : "are";
 }
 
-export function repressLine(block: Extract<Block, { type: "tapHold" }>): string {
+export function repressLine(block: Extract<Block, { type: "tapHold" | "tapSpam" }>): string {
   const key = heldName(block.key) || "Trigger";
   const tracked = block.watch.map(heldName);
   const when = tracked.length ? tracked.join(" ") : "Tracked Keys";
-  return `Repress ${key} ${block.gapMs}ms after ${when} ${watchVerb(tracked.length)} pressed`;
+  const after = `${when} ${watchVerb(tracked.length)} pressed`;
+  if (block.type === "tapSpam")
+    return `Spam ${key} ${block.holdMs} ms down, ${block.restMs} ms up. Pause ${block.gapMs} ms when ${after}, then spam again if still held`;
+  return `Repress ${key} ${block.gapMs}ms after ${after}`;
 }
 
 /** One short line under a node title. The title already carries the rule. */
 export function nodeHint(block: Block): string {
   if (block.type === "wait") return "";
-  if (block.type === "tapHold") {
+  if (block.type === "tapHold" || block.type === "tapSpam") {
     const tracked = block.watch.map((item) => heldName(item)).filter(Boolean);
     if (!tracked.length) return "No tracked keys";
     return tracked.length > 3 ? `${tracked.slice(0, 3).join(" ")} +${tracked.length - 3}` : tracked.join(" ");
@@ -110,15 +113,18 @@ export function nodeHint(block: Block): string {
   if (block.type === "ifShort") return `${body} · ${block.minCycles}×`;
   if (block.type === "swapAfter") return `${body} · past ${block.afterMs} ms`;
   if (block.type === "then" && block.forMs) return `${body} · ${block.forMs} ms`;
+  if (block.type === "onceHeld") return `${body} · then ${block.gapMs} ms`;
   return body;
 }
 
 export function blockMeta(block: Block): string {
   if (block.type === "wait") return `${block.ms} ms`;
+  if (block.type === "tapSpam") return `${block.holdMs} ms down`;
   if (block.type === "tapHold") return `after ${block.gapMs} ms`;
   if (block.type === "ifShort") return `${block.minCycles} times`;
   if (block.type === "swapAfter") return `past ${block.afterMs} ms`;
   if (block.type === "then") return block.forMs ? `for ${block.forMs} ms` : "";
+  if (block.type === "onceHeld") return `then ${block.gapMs} ms`;
   if (block.type === "repeat") return block.count === 0 ? "Until it stops" : `${block.count}×`;
   const count = block.steps.length;
   return count ? `${count} steps` : "Empty";
@@ -126,10 +132,11 @@ export function blockMeta(block: Block): string {
 
 export function blockHint(block: Block): string {
   if (block.type === "wait") return `${block.ms} ms`;
-  if (block.type === "tapHold") return repressLine(block);
+  if (block.type === "tapHold" || block.type === "tapSpam") return repressLine(block);
   if (block.type === "ifShort") return `released before ${block.underMs} ms · keep going ${block.minCycles}×`;
   if (block.type === "swapAfter") return `held past ${block.afterMs} ms`;
   if (block.type === "then") return block.forMs ? `runs ${block.forMs} ms after release` : "runs after release";
+  if (block.type === "onceHeld") return `one cycle on a press, repeats while held, then ${block.gapMs} ms`;
   if (block.type === "repeat") return block.count === 0 ? "until it stops" : `${block.count}×`;
   return phrase(block.steps);
 }
@@ -143,7 +150,7 @@ export function linkLabel(from: Block | null, to: Block): string {
 }
 
 function actsNoun(block: Block): string {
-  if (block.type === "wait" || block.type === "tapHold") return "those actions";
+  if (block.type === "wait" || block.type === "tapHold" || block.type === "tapSpam") return "those actions";
   if (!block.steps.length) return "those actions";
   const keys = [...new Set(block.steps.flatMap((step) => (step.type === "key" ? [keyLabel(step.key)] : step.type === "mouse" ? [pressLabel(step.button)] : [])))];
   if (keys.length === 1) return `the ${keys[0]} key actions`;
@@ -154,6 +161,7 @@ function actsNoun(block: Block): string {
 function sourceLine(source: Block | null, key: string): string {
   if (!source) return key === "the trigger" ? "When this macro starts, it is waiting for a trigger." : `After you press ${key}, the macro starts.`;
   if (source.type === "whileHeld") return `While you hold ${key}, it repeatedly sends ${actsNoun(source)}.`;
+  if (source.type === "onceHeld") return `While you hold ${key}, it repeats ${actsNoun(source)}. A press sends that cycle once, then waits ${source.gapMs} ms.`;
   if (source.type === "ifShort") {
     return `If you release ${key} before ${source.underMs} ms, it sends ${actsNoun(source)} ${source.minCycles} times.`;
   }
@@ -171,22 +179,25 @@ function sourceLine(source: Block | null, key: string): string {
       : `The Repeat block sends ${actsNoun(source)} ${source.count} times.`;
   }
   if (source.type === "wait") return `The Wait block pauses for ${source.ms} ms.`;
-  if (source.type === "tapHold") return `${repressLine(source)}.`;
+  if (source.type === "tapHold" || source.type === "tapSpam") return `${repressLine(source)}.`;
   if (source.type === "steps") return `The Do-once block sends ${actsNoun(source)}.`;
   return "This block finishes.";
 }
 
 function hopLine(source: Block | null, target: Block, key: string): string {
-  const fromName = !source ? "the start" : source.type === "whileHeld" ? "the While-held section" : source.type === "ifShort" ? "the early-release block" : source.type === "swapAfter" ? "the Swap-after loop" : source.type === "then" ? "the After-release block" : source.type === "steps" ? "the Do-once block" : source.type === "repeat" ? "the Repeat block" : source.type === "wait" ? "the Wait block" : "this block";
+  const fromName = !source ? "the start" : source.type === "whileHeld" ? "the While-held section" : source.type === "onceHeld" ? "the One-press block" : source.type === "ifShort" ? "the early-release block" : source.type === "swapAfter" ? "the Swap-after loop" : source.type === "then" ? "the After-release block" : source.type === "steps" ? "the Do-once block" : source.type === "repeat" ? "the Repeat block" : source.type === "wait" ? "the Wait block" : "this block";
   if (target.type === "ifShort") return `If you release ${key} early, it switches to the early-release actions.`;
   if (target.type === "swapAfter") return `If you keep holding ${key} past ${target.afterMs} ms, it swaps to this loop and repeatedly sends ${actsNoun(target)}.`;
   if (target.type === "then") {
     const dur = target.forMs ? ` for ${target.forMs} ms` : "";
     return source?.type === "whileHeld"
       ? `After the While-held section finishes, it moves to the After-release block and sends ${actsNoun(target)}${dur}.`
-      : `It then moves to the After-release block and sends ${actsNoun(target)}${dur}.`;
+      : source?.type === "tapSpam"
+        ? `After you let go, the clicks stop and the After-release block sends ${actsNoun(target)}${dur}.`
+        : `It then moves to the After-release block and sends ${actsNoun(target)}${dur}.`;
   }
   if (target.type === "whileHeld") return `It then begins the While-held block and repeatedly sends ${actsNoun(target)} while you hold ${key}.`;
+  if (target.type === "onceHeld") return `It then sends ${actsNoun(target)} once. If ${key} is still down when ${target.gapMs} ms ends, those keys repeat until you let go.`;
   if (target.type === "steps") return `It then moves on and sends ${actsNoun(target)} once.`;
   if (target.type === "repeat") {
     return target.count === 0
@@ -195,6 +206,7 @@ function hopLine(source: Block | null, target: Block, key: string): string {
   }
   if (target.type === "wait") return `It then waits ${target.ms} ms.`;
   if (target.type === "tapHold") return `It then moves to the Repress block.`;
+  if (target.type === "tapSpam") return `It then moves to the Repress Spam block.`;
   return `After ${fromName} finishes, it continues to the next block.`;
 }
 
@@ -276,8 +288,9 @@ export function setupNote(block: Block, prev: Block | null, next: Block | null, 
   if (block.type === "swapAfter") return `This loop only starts if ${key} stays down past ${block.afterMs} ms. Put it after a hold loop to swap from that loop into this one.`;
   if (block.type === "then") return `This runs after ${key} is already up. Hold length does not matter here.`;
   if (block.type === "repeat") return block.count === 0 ? "This repeats until it stops. It is not tied to holding the bind." : `This repeats ${block.count} times on its own count.`;
-  if (block.type === "tapHold") return repressLine(block);
+  if (block.type === "tapHold" || block.type === "tapSpam") return repressLine(block);
   if (block.type === "wait") return `This pause delays the next block by ${block.ms} ms.`;
+  if (block.type === "onceHeld") return `While ${key} stays down, these keys repeat. A press is one cycle, instead of a new cycle for every bit of time ${key} was down. The next block waits ${block.gapMs} ms after the last cycle.`;
   return "This block runs once, then hands off. Record keys in Edit.";
 }
 
@@ -402,6 +415,7 @@ export function graphLayout(blocks: Block[]): {
 function sceneTitle(block: Block, key: string): string {
   const bind = !key || key === "the trigger" ? "" : key;
   if (block.type === "whileHeld") return bind ? `While ${bind} held` : "While held";
+  if (block.type === "onceHeld") return bind ? `One press of ${bind}` : "One press";
   if (block.type === "ifShort") return bind ? `If ${bind} released before ${block.underMs} ms` : `If released before ${block.underMs} ms`;
   if (block.type === "swapAfter") return bind ? `If ${bind} held past ${block.afterMs} ms` : `If held past ${block.afterMs} ms`;
   if (block.type === "then") {
@@ -410,17 +424,23 @@ function sceneTitle(block: Block, key: string): string {
   }
   if (block.type === "repeat") return block.count === 0 ? "Repeat until it stops" : `Repeat ${block.count} times`;
   if (block.type === "wait") return `Wait ${block.ms} ms`;
-  if (block.type === "tapHold") return repressLine(block);
+  if (block.type === "tapHold" || block.type === "tapSpam") return repressLine(block);
   return "Do once";
 }
 
 function emptyActs(block: Block) {
-  return block.type !== "wait" && block.type !== "tapHold" && !block.steps.length;
+  return block.type !== "wait" && block.type !== "tapHold" && block.type !== "tapSpam" && !block.steps.length;
 }
 
 function sceneCopy(block: Block, prev: Block | null, next: Block | null, key: string): { why: string; affect: string } {
   const acts = actsNoun(block);
   const vacant = emptyActs(block) ? " This block has no keys yet, so the preview only shows the rule." : "";
+  if (block.type === "onceHeld") {
+    return {
+      why: `While ${key} is held, ${acts} repeat. A press does not get a new cycle for every slice of that hold.`,
+      affect: `Let go and the next block waits ${block.gapMs} ms after that one cycle. Keep holding through that wait and the keys repeat until you let go, then the next block waits ${block.gapMs} ms.${vacant}`,
+    };
+  }
   if (block.type === "whileHeld") {
     return {
       why: `This is the hold loop. It exists so ${acts} only fire while ${key} is down.`,
@@ -472,9 +492,11 @@ function sceneCopy(block: Block, prev: Block | null, next: Block | null, key: st
       affect: `Everything after this is delayed by ${block.ms} ms.`,
     };
   }
-  if (block.type === "tapHold") {
+  if (block.type === "tapHold" || block.type === "tapSpam") {
     return {
-      why: "This watches other keys and only represses after that gap - it is not a hold loop.",
+      why: block.type === "tapSpam"
+        ? "This clicks in a loop while the trigger stays down. A tracked press stops the clicks so that key can come through."
+        : "This watches other keys and only represses after that gap - it is not a hold loop.",
       affect: `${repressLine(block)}.`,
     };
   }

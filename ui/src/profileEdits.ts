@@ -140,9 +140,9 @@ function stepIssues(steps: Step[], issues: string[]) {
 }
 
 function blockIssues(block: Block, issues: string[]) {
-  if (block.type === "tapHold") {
-    if (!block.key.trim()) note(issues, "A hold block needs a key.");
-    if (!block.watch.length) note(issues, "A hold block needs a watched input.");
+  if (block.type === "tapHold" || block.type === "tapSpam") {
+    if (!block.key.trim()) note(issues, "A repress block needs a key.");
+    if (!block.watch.length) note(issues, "A repress block needs a watched input.");
   }
   if ("steps" in block) stepIssues(block.steps, issues);
 }

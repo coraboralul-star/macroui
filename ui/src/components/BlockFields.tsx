@@ -163,34 +163,62 @@ export function BlockFields({
       </span>
     );
   }
-  if (block.type === "tapHold") {
+  if (block.type === "tapHold" || block.type === "tapSpam") {
+    const watchRow = (
+      <>
+        <span className="watch-row">
+          {block.watch.length ? (
+            block.watch.map((item) => (
+              <button key={item} type="button" onClick={() => onChange({ ...block, watch: block.watch.filter((key) => key !== item) })}>
+                {heldName(item)} <span className="act-x">×</span>
+              </button>
+            ))
+          ) : (
+            <button type="button" onClick={() => onCapture("watch")}>
+              Tracked Keys
+            </button>
+          )}
+          <button type="button" onClick={() => onCapture("watch")}>
+            +
+          </button>
+        </span>
+        {watchVerb(block.watch.length)} pressed
+      </>
+    );
     return (
       <span className="block-fields is-repress">
-        <span className="repress-line">
-          Repress
-          <button type="button" onClick={() => onCapture("hold")}>
-            {heldName(block.key) || "Trigger"}
-          </button>
-          <NumberField ariaLabel="Repress after ms" min={0} value={block.gapMs} onChange={(gapMs) => onChange({ ...block, gapMs })} />
-          ms after
-          <span className="watch-row">
-            {block.watch.length ? (
-              block.watch.map((item) => (
-                <button key={item} type="button" onClick={() => onChange({ ...block, watch: block.watch.filter((key) => key !== item) })}>
-                  {heldName(item)} <span className="act-x">×</span>
-                </button>
-              ))
-            ) : (
-              <button type="button" onClick={() => onCapture("watch")}>
-                Tracked Keys
+        {block.type === "tapSpam" ? (
+          <>
+            <span className="repress-line">
+              Click
+              <button type="button" onClick={() => onCapture("hold")}>
+                {heldName(block.key) || "Key"}
               </button>
-            )}
-            <button type="button" onClick={() => onCapture("watch")}>
-              +
+              <NumberField ariaLabel="Click down ms" min={0} value={block.holdMs} onChange={(holdMs) => onChange({ ...block, holdMs })} />
+              ms down,
+              <NumberField ariaLabel="Click up ms" min={0} value={block.restMs} onChange={(restMs) => onChange({ ...block, restMs })} />
+              ms up
+              <Hint text="While the trigger stays down, each click is down for the first number, then up for the second." />
+            </span>
+            <span className="repress-line">
+              Pause
+              <NumberField ariaLabel="Pause ms" min={0} value={block.gapMs} onChange={(gapMs) => onChange({ ...block, gapMs })} />
+              ms when
+              {watchRow}
+              <Hint text="A tracked press stops the clicks so that key can come through. After this many ms, the clicks start again if the trigger is still down. If you have let go, the clicks stay stopped and After release can run." />
+            </span>
+          </>
+        ) : (
+          <span className="repress-line">
+            Repress
+            <button type="button" onClick={() => onCapture("hold")}>
+              {heldName(block.key) || "Trigger"}
             </button>
+            <NumberField ariaLabel="Repress after ms" min={0} value={block.gapMs} onChange={(gapMs) => onChange({ ...block, gapMs })} />
+            ms after
+            {watchRow}
           </span>
-          {watchVerb(block.watch.length)} pressed
-        </span>
+        )}
         <span className="repress-lock">
           Tracked macros
           <FieldSelect
@@ -222,12 +250,27 @@ export function BlockFields({
               ms
             </>
           ) : null}
-          <Hint text="Repress only. Takes the first press of each tracked key, then skips extra presses for this many ms, so a looping T or M5 macro does not keep retriggering Z. Macro skips only keys another macro sent. Both also skips physical presses. After this window, the next press can repress again." />
+          <Hint text={block.type === "tapSpam"
+            ? "Pause only. Takes the first press of each tracked key, then skips extra presses for this many ms, so a held key does not keep stopping the clicks. Macro skips only keys another macro sent. Both also skips physical presses. After this window, the next press can pause again."
+            : "Repress only. Takes the first press of each tracked key, then skips extra presses for this many ms, so a looping T or M5 macro does not keep retriggering Z. Macro skips only keys another macro sent. Both also skips physical presses. After this window, the next press can repress again."} />
         </span>
+        {block.type === "tapHold" ? (
+          <label>
+            Repress delay
+            <NumberField ariaLabel="Repress delay ms" min={0} value={block.armMs} onChange={(armMs) => onChange({ ...block, armMs })} />
+          </label>
+        ) : null}
+      </span>
+    );
+  }
+  if (block.type === "onceHeld") {
+    return (
+      <span className="block-fields">
         <label>
-          Repress delay
-          <NumberField ariaLabel="Repress delay ms" min={0} value={block.armMs} onChange={(armMs) => onChange({ ...block, armMs })} />
+          Then wait
+          <NumberField ariaLabel="Then wait ms" min={0} value={block.gapMs} onChange={(gapMs) => onChange({ ...block, gapMs })} />
         </label>
+        <Hint text="While you hold the trigger, these keys repeat. A press is one cycle, not another cycle for every slice of that hold. The next block waits this long after the last cycle. If you are still holding when that wait ends, the repeat starts and keeps going until you let go." />
       </span>
     );
   }

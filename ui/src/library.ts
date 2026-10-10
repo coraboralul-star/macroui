@@ -42,6 +42,7 @@ export const LIBRARY: LibraryItem[] = [
   { id: "repeatSteps", group: "Repeat & Run", label: "Repeat Steps", detail: "Loop the steps inside", kind: "step", create: () => [blankStep("repeat")] },
   { id: "runMacro", group: "Repeat & Run", label: "Run Macro", detail: "Start another macro", kind: "step", create: () => [blankStep("run")] },
   { id: "whileHeld", group: "Blocks", label: "While Held", detail: "Loops while the trigger is down", kind: "block", block: "whileHeld" },
+  { id: "onceHeld", group: "Blocks", label: "One Press", detail: "One cycle on a press. Repeats while you keep holding", kind: "block", block: "onceHeld" },
   { id: "ifReleasedEarly", group: "Blocks", label: "If Released Early", detail: "Short tap path", kind: "block", block: "ifShort" },
   { id: "swapAfter", group: "Blocks", label: "Swap After", detail: "Switches to this loop if you keep holding past a time", kind: "block", block: "swapAfter" },
   { id: "afterRelease", group: "Blocks", label: "After Release", detail: "Runs once you let go", kind: "block", block: "then" },
@@ -49,6 +50,7 @@ export const LIBRARY: LibraryItem[] = [
   { id: "waitBlock", group: "Blocks", label: "Wait Block", detail: "Pause before the next block", kind: "block", block: "wait" },
   { id: "runOnce", group: "Blocks", label: "Run Once", detail: "Runs one time", kind: "block", block: "steps" },
   { id: "repressKey", group: "Blocks", label: "Repress Key", detail: "Taps the trigger again. Tracked macros can keep running or stay blocked", kind: "block", block: "tapHold" },
+  { id: "repressSpam", group: "Blocks", label: "Repress Spam", detail: "Clicks while the trigger is down. A tracked press pauses the clicks, then they start again if you are still holding", kind: "block", block: "tapSpam" },
   { id: "lastRecording", group: "Recording", label: "Last Recording", detail: "Add the steps you recorded", kind: "record", source: "last" },
   { id: "recordSteps", group: "Recording", label: "Record Steps", detail: "Capture keys into this block", kind: "record", source: "live" },
 ];

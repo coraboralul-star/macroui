@@ -102,7 +102,7 @@ export function GraphEditor({
       basic: false,
       blocks: next,
       steps: [],
-      playMode: next.some((block) => block.type === "tapHold") ? "whileHeld" : macro.playMode,
+      playMode: next.some((block) => block.type === "tapHold" || block.type === "tapSpam") ? "whileHeld" : macro.playMode,
       releaseStop: macro.releaseStop === "finish" ? "finish" : "nextUp",
       ...patch,
     });
@@ -801,9 +801,9 @@ export function GraphEditor({
               const kind = pickedKey.kind === "key" ? "key" : "mouse";
               updateBlock(selectedBlock.id, { ...selectedBlock, steps: [...selectedBlock.steps, ...pressPair(kind, pickedKey.button)] });
             }
-            if (selectedBlock.type === "tapHold" && capture.slot === "hold")
+            if ((selectedBlock.type === "tapHold" || selectedBlock.type === "tapSpam") && capture.slot === "hold")
               updateBlock(selectedBlock.id, { ...selectedBlock, key: pickedKey.button });
-            if (selectedBlock.type === "tapHold" && capture.slot === "watch" && !selectedBlock.watch.includes(pickedKey.button))
+            if ((selectedBlock.type === "tapHold" || selectedBlock.type === "tapSpam") && capture.slot === "watch" && !selectedBlock.watch.includes(pickedKey.button))
               updateBlock(selectedBlock.id, { ...selectedBlock, watch: [...selectedBlock.watch, pickedKey.button] });
             setCapture(null);
           }}
