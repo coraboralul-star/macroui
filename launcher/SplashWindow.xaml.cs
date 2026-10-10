@@ -94,19 +94,47 @@ public partial class SplashWindow : Window
 
     void OnClose(object sender, RoutedEventArgs e) => Close();
 
+    public void UseIcon(string path)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(() => UseIcon(path));
+            return;
+        }
+        if (!File.Exists(path))
+            return;
+        try { Icon = BitmapFrame.Create(new Uri(path)); }
+        catch { /* the splash still runs without a window icon */ }
+    }
+
     void TryIcon()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        if (ApplyIcon(InstallLayout.ExeDirectory()))
+            return;
+        ApplyIcon(AppContext.BaseDirectory);
+    }
+
+    bool ApplyIcon(string start)
+    {
+        var dir = new DirectoryInfo(start);
         while (dir != null)
         {
             var icon = Path.Combine(dir.FullName, "shell", "vendetta.png");
             if (File.Exists(icon))
             {
-                Icon = BitmapFrame.Create(new Uri(icon));
-                return;
+                try
+                {
+                    Icon = BitmapFrame.Create(new Uri(icon));
+                    return true;
+                }
+                catch
+                {
+                    return false;
+                }
             }
             dir = dir.Parent;
         }
+        return false;
     }
 
     static FontFamily Pick(params string[] names)

@@ -9,12 +9,25 @@
     <RootNamespace>Vendetta</RootNamespace>
     <ApplicationTitle>H&amp;le</ApplicationTitle>
     <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>false</SelfContained>
+    <!-- The splash has to open before EnsureRuntime.ps1 can install the shared desktop runtime. -->
+    <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <DebugType>embedded</DebugType>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
+  <Target Name="StagePayload">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\stage-payload.ps1&quot; -Repo &quot;$(MSBuildProjectDirectory)\..&quot; -Stage &quot;$(IntermediateOutputPath)payload-stage&quot; -Zip &quot;$(IntermediateOutputPath)payload.zip&quot;" />
+  </Target>
+  <Target Name="AddPayloadResource" BeforeTargets="AssignTargetPaths" DependsOnTargets="StagePayload">
+    <ItemGroup>
+      <EmbeddedResource Remove="$(IntermediateOutputPath)payload.zip" />
+      <EmbeddedResource Include="$(IntermediateOutputPath)payload.zip">
+        <LogicalName>payload.zip</LogicalName>
+      </EmbeddedResource>
+    </ItemGroup>
+  </Target>
   <Target Name="CopyToRoot" AfterTargets="Publish">
     <Copy SourceFiles="$(PublishDir)H&amp;le.exe" DestinationFiles="$(MSBuildProjectDirectory)\..\H&amp;le.exe" />
   </Target>

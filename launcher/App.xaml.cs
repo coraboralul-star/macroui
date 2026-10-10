@@ -72,10 +72,36 @@ public partial class App : System.Windows.Application
         _ = Open(splash, cancel, e.Args.Contains("--dev"));
     }
 
-    async Task Open(SplashWindow splash, CancellationTokenSource cancel, bool dev)
+    async Task Open(SplashWindow splash, CancellationTokenSource cancel, bool devFlag)
     {
-        var repo = FindRepo();
-        var boot = new Bootstrap(repo, splash.SetStatus, cancel.Token);
+        string repo;
+        bool devRepo;
+        try
+        {
+            (repo, devRepo) = await Task.Run(
+                () => InstallLayout.Locate(splash.SetStatus, cancel.Token),
+                cancel.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (InvalidOperationException ex) when (ex.Message is "The app package is missing." or "The app did not unpack.")
+        {
+            if (!cancel.IsCancellationRequested)
+                splash.Fail(ex.Message);
+            return;
+        }
+        catch
+        {
+            if (!cancel.IsCancellationRequested)
+                splash.Fail("The app did not unpack.");
+            return;
+        }
+        if (cancel.IsCancellationRequested)
+            return;
+        splash.UseIcon(Path.Combine(repo, "shell", "vendetta.png"));
+        var boot = new Bootstrap(repo, splash.SetStatus, cancel.Token, devRepo);
         _boot = boot;
         var prepared = await boot.Prepare();
         if (cancel.IsCancellationRequested)
@@ -102,7 +128,7 @@ public partial class App : System.Windows.Application
             WorkingDirectory = repo,
         };
         start.ArgumentList.Add("--splash-host");
-        if (dev)
+        if (devRepo && devFlag)
             start.ArgumentList.Add("--dev");
         _shell = Process.Start(start);
         if (_shell == null)
@@ -210,15 +236,4 @@ public partial class App : System.Windows.Application
         }
     }
 
-    static string FindRepo()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "engine", "MacroEngine.ahk")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-        return Directory.GetCurrentDirectory();
-    }
 }

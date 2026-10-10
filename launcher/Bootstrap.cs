@@ -10,15 +10,17 @@ sealed class Bootstrap
     readonly string _repo;
     readonly Action<string> _status;
     readonly CancellationToken _cancel;
+    readonly bool _devRepo;
     Process? _running;
 
     public string ShellExe { get; }
 
-    public Bootstrap(string repo, Action<string> status, CancellationToken cancel)
+    public Bootstrap(string repo, Action<string> status, CancellationToken cancel, bool devRepo)
     {
         _repo = repo;
         _status = status;
         _cancel = cancel;
+        _devRepo = devRepo;
         ShellExe = ResolveShell(repo);
     }
 
@@ -26,41 +28,50 @@ sealed class Bootstrap
     {
         if (!File.Exists(Path.Combine(_repo, "engine", "MacroEngine.ahk")))
             return (false, "The H&le folder was not found.");
-        if (!HasTool("node"))
-            return (false, "Install Node.js, then run this again.");
-        if (!HasTool("dotnet"))
-            return (false, "Install .NET, then run this again.");
-        if (_cancel.IsCancellationRequested)
-            return (false, null);
 
-        if (!Directory.Exists(Path.Combine(_repo, "ui", "node_modules")))
+        // This repo rebuilds when sources are newer. A shipped exe has no Node or SDK, so it skips that.
+        if (_devRepo)
         {
-            _status("INSTALLING THE EDITOR");
-            if (await Shell("cmd.exe", Path.Combine(_repo, "ui"), "/d", "/c", "npm", "install") != 0)
-                return (false, "The editor did not install.");
-        }
-        if (_cancel.IsCancellationRequested)
-            return (false, null);
+            if (!HasTool("node"))
+                return (false, "Install Node.js, then run this again.");
+            if (!HasTool("dotnet"))
+                return (false, "Install .NET, then run this again.");
+            if (_cancel.IsCancellationRequested)
+                return (false, null);
 
-        var dist = Path.Combine(_repo, "ui", "dist", "index.html");
-        if (IsStale(dist, Path.Combine(_repo, "ui", "src"), Path.Combine(_repo, "ui", "index.html")))
-        {
-            _status("BUILDING THE EDITOR");
-            if (await Shell("cmd.exe", Path.Combine(_repo, "ui"), "/d", "/c", "npm", "run", "build") != 0)
-                return (false, "The editor did not build.");
-        }
-        if (_cancel.IsCancellationRequested)
-            return (false, null);
+            if (!Directory.Exists(Path.Combine(_repo, "ui", "node_modules")))
+            {
+                _status("INSTALLING THE EDITOR");
+                if (await Shell("cmd.exe", Path.Combine(_repo, "ui"), "/d", "/c", "npm", "install") != 0)
+                    return (false, "The editor did not install.");
+            }
+            if (_cancel.IsCancellationRequested)
+                return (false, null);
 
-        if (IsStale(ShellExe, Path.Combine(_repo, "shell")))
-        {
-            _status("BUILDING THE WINDOW");
-            var csproj = Path.Combine(_repo, "shell", "MacroShell.csproj");
-            if (await Shell("dotnet", _repo, "build", csproj, "-c", "Debug", "--nologo") != 0)
-                return (false, "The window did not build.");
+            var dist = Path.Combine(_repo, "ui", "dist", "index.html");
+            if (IsStale(dist, Path.Combine(_repo, "ui", "src"), Path.Combine(_repo, "ui", "index.html")))
+            {
+                _status("BUILDING THE EDITOR");
+                if (await Shell("cmd.exe", Path.Combine(_repo, "ui"), "/d", "/c", "npm", "run", "build") != 0)
+                    return (false, "The editor did not build.");
+            }
+            if (_cancel.IsCancellationRequested)
+                return (false, null);
+
+            if (IsStale(ShellExe, Path.Combine(_repo, "shell")))
+            {
+                _status("BUILDING THE WINDOW");
+                var csproj = Path.Combine(_repo, "shell", "MacroShell.csproj");
+                if (await Shell("dotnet", _repo, "build", csproj, "-c", "Debug", "--nologo") != 0)
+                    return (false, "The window did not build.");
+            }
+            if (_cancel.IsCancellationRequested)
+                return (false, null);
         }
-        if (_cancel.IsCancellationRequested)
-            return (false, null);
+        else if (!File.Exists(Path.Combine(_repo, "ui", "dist", "index.html")))
+        {
+            return (false, "The editor is missing.");
+        }
 
         if (!RuntimeReady())
         {
