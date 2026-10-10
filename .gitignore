@@ -9,6 +9,8 @@ launcher/publish/
 firmware/build/
 firmware/out/
 profiles/*.json
+profiles/*.json.bak
+profiles/*.json.tmp
 shell/bin/**/runtimes/android-*/
 shell/bin/**/runtimes/linux-*/
 shell/bin/**/runtimes/maccatalyst-*/

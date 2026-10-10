@@ -21,6 +21,10 @@ A_HotkeyInterval := 0
 if (A_Args.Length && A_Args[1] = "--self-test")
     ExitApp(SelfTest())
 
+; The shell checks this before starting another copy. A second process would
+; hit #SingleInstance Force, kill this one, and release every held key.
+Engine.instanceMutex := DllCall("CreateMutexW", "Ptr", 0, "Int", 1, "Str", "Local\MacroUI.Engine", "Ptr")
+
 A_IconHidden := true
 ListLines(false)
 KeyHistory(0)
@@ -32,6 +36,8 @@ Engine.OpenPipe()
 Engine.Loop()
 
 OnEngineExit(*) {
+    if Engine.instanceMutex
+        DllCall("CloseHandle", "Ptr", Engine.instanceMutex)
     try Engine.ReleaseAll()
     try {
         for key, _ in Engine.hooks {
@@ -60,8 +66,13 @@ Field(v, key, def := "") {
 AsNum(v, def) {
     if IsNumber(v)
         return v + 0
-    if (v is String && v != "")
-        return Number(v)
+    ; Number("abc") throws. A bad field in one saved step must not raise out of
+    ; Advance every tick, which would stall Publish and leave keys held.
+    if (v is String && v != "") {
+        try return Number(v)
+        catch
+            return def
+    }
     return def
 }
 
@@ -189,14 +200,17 @@ InstallPhysical() {
     module := DllCall("GetModuleHandle", "Ptr", 0, "Ptr")
     Engine.hKeyHook := DllCall("SetWindowsHookExW", "Int", 13, "Ptr", Engine.keyProc, "Ptr", module, "UInt", 0, "Ptr")
     Engine.rawOk := Engine.hKeyHook != 0
+    Engine.hookTick := A_TickCount
     if !Engine.rawOk
         Engine.Log("physical hook failed")
 }
 
 PhysKeyProc(nCode, wParam, lParam) {
     block := false
-    if (nCode >= 0 && Engine.rawOk)
+    if (nCode >= 0 && Engine.rawOk) {
+        Engine.hookTick := A_TickCount
         try block := Engine.ReadKey(wParam, lParam)
+    }
     if block
         return 1
     return DllCall("CallNextHookEx", "Ptr", 0, "Int", nCode, "Ptr", wParam, "Ptr", lParam, "Ptr")
@@ -1233,6 +1247,9 @@ class Engine {
     static mouseProc := 0
     static hKeyHook := 0
     static hMouseHook := 0
+    static hookTick := 0
+    static hookSuspect := false
+    static instanceMutex := 0
     static qpcFreq := 0
     static qpcOrigin := 0
     static hTimer := 0
@@ -1300,6 +1317,34 @@ class Engine {
         module := DllCall("GetModuleHandle", "Ptr", 0, "Ptr")
         this.hKeyHook := DllCall("SetWindowsHookExW", "Int", 13, "Ptr", this.keyProc, "Ptr", module, "UInt", 0, "Ptr")
         this.rawOk := this.hKeyHook != 0
+        this.hookTick := A_TickCount
+    }
+
+    ; Windows removes a low-level hook when this thread stalls, and leaves the
+    ; handle looking valid. rawOk would stay true while keys stop arriving.
+    static CheckPhysicalHook() {
+        if !this.keyProc
+            return
+        if !this.hKeyHook {
+            this.Log("physical hook missing")
+            this.RaisePhysicalHook()
+            return
+        }
+        ; A profile parse just ran on this thread. Put the hook back now, in
+        ; case that stall got it removed, instead of waiting out the silence.
+        if this.hookSuspect {
+            this.hookSuspect := false
+            this.RaisePhysicalHook()
+            return
+        }
+        if (!this.armed && this.runners.Length = 0 && this.pending.Length = 0)
+            return
+        if (this.hookTick = 0)
+            this.hookTick := A_TickCount
+        if (A_TickCount - this.hookTick < 8000)
+            return
+        this.Log("physical hook silent")
+        this.RaisePhysicalHook()
     }
 
     static SyncMouseHook() {
@@ -1503,6 +1548,7 @@ class Engine {
         now := this.Now()
         this.sendNow := Map()
         this.PollPipe()
+        this.CheckPhysicalHook()
         this.ApplyLiveConfig()
         this.PollPanic()
         this.SyncSwallow()
@@ -1515,8 +1561,18 @@ class Engine {
         this.RemoveDone()
         this.FlushPending()
         now := this.Now()
-        for r in this.runners
-            r.Advance(now)
+        for r in this.runners {
+            ; One macro that throws must not abort the tick. Before this, an
+            ; error here skipped Publish, so every other runner froze with its
+            ; keys still down. Kill only the broken runner and keep going.
+            try r.Advance(now)
+            catch as err {
+                this.Log("runner " r.id " " err.Message)
+                try r.MarkDone()
+                catch
+                    r.done := true
+            }
+        }
         this.FlushPending()
         this.RemoveDone()
         this.Publish(now)
@@ -1590,11 +1646,24 @@ class Engine {
             DirCreate(A_ScriptDir "\..\profiles")
             FileAppend('{"version":1,"name":"Default","variables":{},"macros":[]}', this.profilePath, "UTF-8")
         }
-        text := FileRead(this.profilePath, "UTF-8")
-        this.profile := JSON.Parse(text)
-        if !(this.profile is Map)
+        ; A corrupt or half-written file used to throw here. At startup that is
+        ; outside Loop's try, so the engine died with a dialog and the shell
+        ; kept relaunching it. Keep the last good profile (or none) and report.
+        loaded := ""
+        try {
+            text := FileRead(this.profilePath, "UTF-8")
+            loaded := JSON.Parse(text)
+        } catch as err {
+            this.Log("profile read " err.Message)
+            this.SendRaw('{"v":1,"type":"error","where":"engine","code":"profile-read","detail":"the saved profile could not be read"}')
+            loaded := ""
+        }
+        if (loaded is Map)
+            this.profile := loaded
+        else if !(this.profile is Map)
             this.profile := Map()
         this.liveId := Chr(1)
+        this.hookSuspect := true
         this.ApplyLiveConfig()
         if this.hooksDirty {
             this.SyncHooks()
@@ -1775,8 +1844,19 @@ class Engine {
             resume := slot["resume"]
             this.muted.Delete(id)
             this.UnpauseRunner(id)
-            if (this.HasRunner(id) || this.HasPending(id))
+            if (this.HasRunner(id) || this.HasPending(id)) {
+                ; PollTriggers skips muted ids, so a plain while-held macro whose
+                ; key came up during the mute is still alive here. Advance runs
+                ; before the next poll and would send one tick of its keys.
+                macro := this.FindMacro(id)
+                key := this.MacroTrigger(id)
+                if (macro is Map && !Field(macro, "advanced", false) && key != "" && !this.KeyDown(key)) {
+                    for r in this.runners
+                        if (r.id = id && !r.done && r.mode = "whileHeld")
+                            r.MarkDone()
+                }
                 continue
+            }
             if (resume || this.HoldReplay(id)) {
                 macro := this.FindMacro(id)
                 if (macro is Map)
@@ -2016,8 +2096,11 @@ class Engine {
         exe := String(Field(macro, "focusExe", ""))
         if (exe = "")
             exe := String(Field(this.profile, "focusExe", ""))
-        if (exe = "")
-            return true
+        if (exe = "") {
+            ; An empty focus matches every window, including this editor, so
+            ; typing a macro name would start the macro and swallow the key.
+            return !this.ShellInFront()
+        }
         key := StrLower(exe)
         if this.focusCache.Has(key)
             return this.focusCache[key]
@@ -2045,6 +2128,26 @@ class Engine {
         if (InStr(b, a "-") = 1 || InStr(a, b "-") = 1)
             return true
         return false
+    }
+
+    static ShellInFront() {
+        exe := this.ActiveExe()
+        if this.FocusMatch("MacroShell.exe", exe)
+            return true
+        ; Typing in the page can leave the WebView host as the foreground window.
+        if !this.FocusMatch("msedgewebview2.exe", exe)
+            return false
+        hwnd := DllCall("GetForegroundWindow", "Ptr")
+        root := DllCall("GetAncestor", "Ptr", hwnd, "UInt", 3, "Ptr")
+        if !root
+            return false
+        owner := ""
+        try owner := WinGetProcessName(root)
+        catch
+            owner := ""
+        if (owner = "")
+            owner := this.ExeFromHwnd(root)
+        return this.FocusMatch("MacroShell.exe", owner)
     }
 
     static ActiveExe() {
@@ -2930,13 +3033,19 @@ class Engine {
             return
         buf := Buffer(size)
         StrPut(json, buf, "UTF-8")
-        written := 0
-        ok := DllCall("WriteFile", "Ptr", this.hPipe, "Ptr", buf, "UInt", size - 1, "UInt*", &written, "Ptr", 0)
-        if !ok {
-            err := A_LastError
-            if (err = 232)
+        ; Message mode takes the whole write or fails with 232. State is sent
+        ; again next tick. An error or ack is not, so those get a few more tries.
+        tries := InStr(json, '"type":"state"') ? 1 : 4
+        loop tries {
+            written := 0
+            ok := DllCall("WriteFile", "Ptr", this.hPipe, "Ptr", buf, "UInt", size - 1, "UInt*", &written, "Ptr", 0)
+            if ok
                 return
-            this.DropClient()
+            err := A_LastError
+            if (err != 232) {
+                this.DropClient()
+                return
+            }
         }
     }
 
@@ -2954,6 +3063,7 @@ class Engine {
             if (incoming is Map) {
                 this.profile := incoming
                 this.liveId := Chr(1)
+                this.hookSuspect := true
                 this.ApplyLiveConfig()
                 if this.hooksDirty {
                     this.SyncHooks()
@@ -3054,8 +3164,15 @@ RunChecks(fails) {
     fails := Check(HookSpec("a") = "~$*a", "unfocused board hook still passes", fails)
     Engine.outputMode := "software"
     Engine.profile := Map()
+    Engine.frontKnown := true
+    Engine.frontExe := "notepad.exe"
     fails := Check(Engine.SwallowTriggers(), "no focus restriction swallows", fails)
+    Engine.frontExe := "MacroShell.exe"
+    fails := Check(!Engine.SwallowTriggers(), "the editor window does not swallow keys", fails)
+    Engine.frontExe := "notepad.exe"
     fails := Check(HookSpec("a") = "$*a", "software swallows without focus exe", fails)
+    Engine.frontKnown := false
+    Engine.frontExe := ""
     liveConfigs := J("[{'id':'home','focusExe':'','macros':[]},{'id':'game','focusExe':'Game.exe','macros':[]}]")
     fails := Check(String(Field(Engine.PickLive(liveConfigs, "notepad.exe", "home"), "id", "")) = "home", "foreground miss uses empty focus", fails)
     fails := Check(String(Field(Engine.PickLive(liveConfigs, "Game.exe", "home"), "id", "")) = "game", "foreground exe picks that config", fails)
@@ -4171,6 +4288,65 @@ RunChecks(fails) {
     Engine.StopAll()
     Engine.RemoveDone()
     Engine.hooks.Delete("n")
+    if Engine.physDown.Has("n")
+        Engine.physDown.Delete("n")
+    Engine.profile := savedProfile
+
+    fails := Check(AsNum("abc", 7) = 7, "bad number falls back instead of throwing", fails)
+    fails := Check(AsNum("12", 0) = 12 && AsNum(3, 0) = 3, "numbers still parse", fails)
+    fails := Check(JSON.Quote("a" Chr(1) "b") = '"a\u0001b"', "control chars are escaped in json", fails)
+    fails := Check(JSON.Quote("x`ny") = '"x\ny"', "newline keeps the short escape", fails)
+    badStep := J("{'id':'bad-ms','name':'Bad','enabled':true,'basic':false,'playMode':'once','trigger':{'kind':'key','button':'b'},'steps':[{'type':'wait','ms':'oops'},{'type':'key','action':'down','key':'a'},{'type':'wait','ms':10}]}")
+    Engine.StartRunner(badStep)
+    Engine.FlushPending()
+    badRun := Engine.runners[1]
+    badRun.Advance(0)
+    badRun.Advance(1)
+    fails := Check(Engine.Desired(1).Has("a"), "a step with a bad number still plays the rest", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+
+    Engine.muted := Map()
+    holdW := J("{'id':'hold-w','name':'HoldW','enabled':true,'playMode':'whileHeld','trigger':{'kind':'key','button':'h'},'steps':[{'type':'key','action':'down','key':'w'}]}")
+    gateW := J("{'id':'gate-w','name':'Gate','enabled':true,'advanced':true,'playMode':'once','trigger':{'kind':'key','button':'n'},'steps':[],'blocks':[{'type':'whileHeld','mute':['hold-w'],'steps':[{'type':'wait','ms':50}]}]}")
+    Engine.profile := Map("macros", [holdW, gateW])
+    Engine.hooks["h"] := true
+    Engine.hooks["n"] := true
+    Engine.NotePhysical("h", true)
+    Engine.NotePhysical("n", false)
+    Engine.prevDown := Map()
+    Engine.prevDown["hold-w"] := false
+    Engine.prevDown["gate-w"] := false
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    wRun := ""
+    for r in Engine.runners
+        if (r.id = "hold-w" && !r.done)
+            wRun := r
+    wRun.Advance(0)
+    fails := Check(Engine.Desired(0).Has("w"), "plain hold macro holds w", fails)
+    Engine.NotePhysical("n", true)
+    Engine.prevDown["gate-w"] := false
+    Engine.PollTriggers()
+    Engine.FlushPending()
+    gRun := ""
+    for r in Engine.runners
+        if (r.id = "gate-w" && !r.done)
+            gRun := r
+    gRun.Advance(0)
+    fails := Check(wRun.paused && !Engine.Desired(0).Has("w"), "gate mutes the plain hold", fails)
+    Engine.NotePhysical("h", false)
+    Engine.PollTriggers()
+    Engine.NotePhysical("n", false)
+    gRun.Advance(60)
+    fails := Check(wRun.done && !Engine.Desired(60).Has("w"), "unmute does not replay a hold whose key came up", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.muted := Map()
+    Engine.hooks.Delete("h")
+    Engine.hooks.Delete("n")
+    if Engine.physDown.Has("h")
+        Engine.physDown.Delete("h")
     if Engine.physDown.Has("n")
         Engine.physDown.Delete("n")
     Engine.profile := savedProfile

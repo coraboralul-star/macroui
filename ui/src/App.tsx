@@ -35,7 +35,7 @@ const BOARDS: { id: Board; label: string; later?: boolean }[] = [
 
 export function App() {
   const host = useHostStatus();
-  const { profile, selected, setSelected, update, saveMacro, setInputMode } = useProfile(host.shell);
+  const { profile, selected, setSelected, update, saveMacro, setInputMode, flush } = useProfile(host.shell);
   const [page, setPage] = useState<Page>("keyboard");
   const [board, setBoard] = useState<Board>("remap");
   const [setting, setSetting] = useState<SettingPane>("general");
@@ -143,7 +143,16 @@ export function App() {
                 <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="1.6" y="1.6" width="8.8" height="8.8" /></svg>
               )}
             </button>
-            <button type="button" aria-label="Close" className="close" onClick={() => post({ type: "window", action: "close" })}>
+            <button
+              type="button"
+              aria-label="Close"
+              className="close"
+              onClick={() => {
+                // Save first: in quit mode the process is gone before the debounce fires.
+                flush();
+                post({ type: "window", action: "close" });
+              }}
+            >
               <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2l8 8M10 2L2 10" /></svg>
             </button>
           </div>
@@ -189,7 +198,16 @@ export function App() {
                     </svg>
                     Stop
                   </button>
-                  <button type="button" className="ghost" onClick={() => post({ type: "command", action: "reload" })} disabled={!host.pipe}>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => {
+                      // Reload reads the file, so an edit still in the debounce has to be posted first.
+                      flush();
+                      post({ type: "command", action: "reload" });
+                    }}
+                    disabled={!host.pipe}
+                  >
                     <svg className="quick-icon" viewBox="0 0 16 16" aria-hidden="true">
                       <path
                         fill="none"

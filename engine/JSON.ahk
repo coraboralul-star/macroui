@@ -161,6 +161,16 @@ class JSON {
         s := StrReplace(s, "`r", "\r")
         s := StrReplace(s, "`n", "\n")
         s := StrReplace(s, "`t", "\t")
+        ; Window titles reach the state message. Any other control character
+        ; makes the JSON invalid, and the shell drops the pipe on a bad message.
+        if RegExMatch(s, "[\x00-\x1F]") {
+            out := ""
+            loop parse s {
+                code := Ord(A_LoopField)
+                out .= code < 0x20 ? Format("\u{:04X}", code) : A_LoopField
+            }
+            s := out
+        }
         return '"' s '"'
     }
 }

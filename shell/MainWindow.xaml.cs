@@ -24,7 +24,6 @@ public partial class MainWindow : Window
     NamedPipeClientStream? _pipe;
     Process? _engine;
     bool _pageReady;
-    bool _launchedEngine;
     bool _closing;
     readonly bool _hosted;
     EventWaitHandle? _live;
@@ -41,6 +40,9 @@ public partial class MainWindow : Window
     SerialPort? _board;
     readonly SemaphoreSlim _boardLock = new(1, 1);
     DispatcherTimer? _portDebounce;
+    DispatcherTimer? _quitTimer;
+    EventHandler? _quitTick;
+    readonly Queue<string> _hidPending = new();
     int _inputGen;
     string _closeMode = "tray";
     bool _allowClose;
@@ -185,14 +187,55 @@ public partial class MainWindow : Window
         if (_tray != null)
             _tray.Visible = false;
         ShowInTaskbar = true;
+        // A second launch during the splash used to Show() at Left = -20000.
+        if (!OnAnyScreen(Left, Top, Width, Height))
+        {
+            var area = SystemParameters.WorkArea;
+            var width = Width > 0 ? Width : 1180;
+            var height = Height > 0 ? Height : 760;
+            Left = area.Left + Math.Max(0, (area.Width - width) / 2);
+            Top = area.Top + Math.Max(0, (area.Height - height) / 2);
+        }
         Show();
         if (WindowState == WindowState.Minimized)
             WindowState = WindowState.Normal;
         Activate();
     }
 
+    static bool OnAnyScreen(double left, double top, double width, double height)
+    {
+        var rect = new System.Drawing.Rectangle((int)left, (int)top, Math.Max(1, (int)width), Math.Max(1, (int)height));
+        foreach (var screen in System.Windows.Forms.Screen.AllScreens)
+            if (screen.WorkingArea.IntersectsWith(rect))
+                return true;
+        return false;
+    }
+
     void QuitFromTray()
     {
+        // The page owns the debounced edit. Ask it to post the profile before
+        // the process exits; the timer covers a page that never answers.
+        if (!_pageReady || View.CoreWebView2 == null)
+        {
+            FinishQuit();
+            return;
+        }
+        SendToPage("{\"type\":\"flush\"}");
+        _quitTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        _quitTick ??= FinishQuitOnTick;
+        _quitTimer.Tick -= _quitTick;
+        _quitTimer.Tick += _quitTick;
+        _quitTimer.Start();
+    }
+
+    void FinishQuitOnTick(object? sender, EventArgs e) => FinishQuit();
+
+    void FinishQuit()
+    {
+        if (_allowClose)
+            return;
+        if (_quitTimer != null)
+            _quitTimer.Stop();
         _allowClose = true;
         Close();
     }
@@ -328,6 +371,11 @@ public partial class MainWindow : Window
         try { node = JsonNode.Parse(e.WebMessageAsJson); }
         catch { return; }
         var type = node?["type"]?.ToString();
+        if (type == "flushed")
+        {
+            FinishQuit();
+            return;
+        }
         if (type == "window")
         {
             switch (node?["action"]?.ToString())
@@ -384,14 +432,16 @@ public partial class MainWindow : Window
             RememberSwap(profile);
             try
             {
-                File.WriteAllText(_profilePath, profile.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+                WriteProfileFile(profile.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
             }
             catch
             {
                 SendToPage(ErrorJson("shell", "profile-write", "could not save the profile to disk"));
                 return;
             }
-            _ = WritePipe(e.WebMessageAsJson);
+            // The engine re-reads the file. Piping the whole profile parsed it on
+            // the hook thread, and a long stall there makes Windows drop the hook.
+            _ = WritePipe("{\"v\":1,\"type\":\"command\",\"action\":\"reload\"}");
             return;
         }
         if (type == "command")
@@ -485,8 +535,21 @@ public partial class MainWindow : Window
 
     void TryLaunchEngine()
     {
-        if (_launchedEngine)
+        // Relaunch only when the running engine is gone. Starting a second
+        // AutoHotkey hits #SingleInstance Force, which kills the resident one
+        // and releases every held key.
+        if (_engine is { HasExited: false })
             return;
+        if (_engine != null)
+        {
+            try { _engine.Dispose(); } catch { /* already gone */ }
+            _engine = null;
+        }
+        if (EngineMutexHeld())
+        {
+            _engine = FindEngineProcess();
+            return;
+        }
         var ahk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "AutoHotkey", "v2", "AutoHotkey64.exe");
         var script = Path.Combine(_repo, "engine", "MacroEngine.ahk");
         if (!File.Exists(ahk) || !File.Exists(script))
@@ -495,7 +558,6 @@ public partial class MainWindow : Window
                 PublishBootFailure("The macro system did not start.");
             return;
         }
-        _launchedEngine = true;
         var start = new ProcessStartInfo(ahk)
         {
             UseShellExecute = false,
@@ -507,11 +569,96 @@ public partial class MainWindow : Window
         _engine = Process.Start(start);
     }
 
+    static bool EngineMutexHeld()
+    {
+        try
+        {
+            using var mutex = Mutex.OpenExisting("Local\\MacroUI.Engine");
+            return true;
+        }
+        catch (WaitHandleCannotBeOpenedException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
+    static Process? FindEngineProcess()
+    {
+        Process? match = null;
+        foreach (var process in Process.GetProcessesByName("AutoHotkey64"))
+        {
+            var cmd = "";
+            try { cmd = CommandLine(process.Id); }
+            catch { /* already exited */ }
+            if (match == null
+                && cmd.Contains("MacroEngine.ahk", StringComparison.OrdinalIgnoreCase)
+                && !cmd.Contains("--self-test", StringComparison.OrdinalIgnoreCase))
+                match = process;
+            else
+                process.Dispose();
+        }
+        return match;
+    }
+
+    static string CommandLine(int pid)
+    {
+        var handle = OpenProcess(0x1000, false, pid);
+        if (handle == IntPtr.Zero)
+            return "";
+        try
+        {
+            NtQueryInformationProcess(handle, 60, IntPtr.Zero, 0, out var size);
+            if (size <= 0)
+                return "";
+            var buf = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (NtQueryInformationProcess(handle, 60, buf, size, out size) != 0)
+                    return "";
+                var text = Marshal.PtrToStructure<UnicodeString>(buf);
+                if (text.Buffer == IntPtr.Zero || text.Length == 0)
+                    return "";
+                return Marshal.PtrToStringUni(text.Buffer, text.Length / 2) ?? "";
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+        }
+        finally { CloseHandle(handle); }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct UnicodeString
+    {
+        public ushort Length;
+        public ushort MaximumLength;
+        public IntPtr Buffer;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+
+    [DllImport("kernel32.dll")]
+    static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("ntdll.dll")]
+    static extern int NtQueryInformationProcess(IntPtr process, int cls, IntPtr info, int len, out int ret);
+
     void SendToPage(string json)
     {
         if (!_pageReady || View.CoreWebView2 == null)
             return;
-        Dispatcher.Invoke(() => View.CoreWebView2.PostWebMessageAsJson(json));
+        // Posted, not Invoked: the pipe reader must never wait on the UI thread,
+        // or engine writes back up while the window is busy. The try keeps one
+        // bad payload (invalid JSON, WebView2 already closed) from throwing into
+        // PumpPipe, which used to tear the pipe down and reconnect in a loop.
+        Dispatcher.BeginInvoke(() =>
+        {
+            try { View.CoreWebView2?.PostWebMessageAsJson(json); }
+            catch { /* dropped; the next state message replaces it */ }
+        });
     }
 
     void OnWindowStateChanged(object sender, EventArgs e) => SendWindowState();
@@ -523,6 +670,21 @@ public partial class MainWindow : Window
 
     string LinkJson() =>
         JsonSerializer.Serialize(new { type = "link", shell = true, pipe = _pipe is { IsConnected: true } });
+
+    // Write to a sibling file and swap it in. A crash or power loss during a
+    // plain WriteAllText left a truncated default.json, which the engine could
+    // not parse and which the page then replaced with the built-in profile.
+    // The previous file is kept as default.json.bak so that is recoverable.
+    void WriteProfileFile(string text)
+    {
+        var tmp = _profilePath + ".tmp";
+        var bak = _profilePath + ".bak";
+        File.WriteAllText(tmp, text, new UTF8Encoding(false));
+        if (File.Exists(_profilePath))
+            File.Replace(tmp, _profilePath, bak, ignoreMetadataErrors: true);
+        else
+            File.Move(tmp, _profilePath);
+    }
 
     void SendReady()
     {
@@ -705,8 +867,42 @@ public partial class MainWindow : Window
         var abs = AsBool(node?["abs"]);
         var ax = AsInt(node?["ax"]);
         var ay = AsInt(node?["ay"]);
-        if (!_boardLock.Wait(40))
+        // A dropped up leaves that key held on the board. Wait out the lock for
+        // ups. A down that loses the race is queued and sent ahead of the next
+        // report, so the board still sees down before up.
+        var keyed = down.Count > 0 || up.Count > 0;
+        if (!_boardLock.Wait(up.Count > 0 ? 1500 : 40))
+        {
+            if (keyed)
+            {
+                _hidPending.Enqueue(json);
+                while (_hidPending.Count > 16)
+                    _hidPending.Dequeue();
+            }
             return;
+        }
+        try
+        {
+            while (_hidPending.Count > 0)
+                WriteHidLocked(_hidPending.Dequeue());
+            WriteHidLocked(down, up, dx, dy, abs, ax, ay);
+        }
+        finally
+        {
+            _boardLock.Release();
+        }
+    }
+
+    void WriteHidLocked(string json)
+    {
+        JsonNode? node;
+        try { node = JsonNode.Parse(json); }
+        catch { return; }
+        WriteHidLocked(ReadNames(node?["down"]), ReadNames(node?["up"]), AsInt(node?["x"]), AsInt(node?["y"]), AsBool(node?["abs"]), AsInt(node?["ax"]), AsInt(node?["ay"]));
+    }
+
+    void WriteHidLocked(List<string> down, List<string> up, int dx, int dy, bool abs, int ax, int ay)
+    {
         try
         {
             if (_board is not { IsOpen: true })
@@ -758,10 +954,6 @@ public partial class MainWindow : Window
         catch
         {
             CloseBoard();
-        }
-        finally
-        {
-            _boardLock.Release();
         }
     }
 

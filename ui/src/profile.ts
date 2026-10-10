@@ -353,13 +353,15 @@ export function isProfile(value: unknown): value is Profile {
 
 export function normalizeProfile(value: unknown): Profile {
   if (!isProfile(value)) return structuredClone(defaultProfile);
-  const macros = onePerTrigger(value.macros.map(normalizeMacro));
+  // A null or scalar entry has no user data; normalizing it would invent a macro on the default key.
+  const macroList = (list: unknown[]) => onePerTrigger(list.filter((item) => item && typeof item === "object").map((item) => normalizeMacro(item as Macro)));
+  const macros = macroList(value.macros);
   const saved = Array.isArray(value.configs) ? value.configs : [];
   const configs = saved.length
     ? saved.map((item, index) => ({
         id: item?.id || newId(),
         name: item?.name || `Profile ${index + 1}`,
-        macros: Array.isArray(item?.macros) ? onePerTrigger(item.macros.map(normalizeMacro)) : [],
+        macros: Array.isArray(item?.macros) ? macroList(item.macros) : [],
         focusExe: typeof item?.focusExe === "string" ? item.focusExe : "",
       }))
     : [{ id: "default", name: value.name || "Default", macros, focusExe: typeof (value as Profile).focusExe === "string" ? (value as Profile).focusExe : "" }];
@@ -391,9 +393,13 @@ function onePerTrigger(macros: Macro[]): Macro[] {
   });
 }
 
-function normalizeMacro(value: Macro): Macro {
-  const trigger = value.trigger ?? { kind: "key" as const, button: "f" };
-  const kind = trigger.kind ?? "key";
+function normalizeMacro(raw: Macro): Macro {
+  // A null entry or a non-object macro in a hand-edited file used to throw here,
+  // inside the ready handler. That left the page on the built-in profile, and the
+  // next edit wrote that over the user's file.
+  const value = (raw && typeof raw === "object" ? raw : {}) as Macro;
+  const trigger = value.trigger && typeof value.trigger === "object" ? value.trigger : { kind: "key" as const, button: "f" };
+  const kind: TriggerKind = trigger.kind === "mouse" || trigger.kind === "side" ? trigger.kind : "key";
   const rawButton = typeof trigger.button === "string" ? trigger.button : defaultButton(kind);
   const sided = kind === "key" ? canonKey(rawButton) : rawButton;
   const button = sided === "LButton" || sided === "RButton" ? "" : sided;
@@ -406,15 +412,16 @@ function normalizeMacro(value: Macro): Macro {
       : mouseSteps(button, gapMs)
     : Array.isArray(value.steps) ? normalizeSteps(value.steps) : [];
   return {
-    id: value.id || newId(),
-    name: value.name || "Macro",
+    id: typeof value.id === "string" && value.id ? value.id : newId(),
+    // name and focusExe are used with .trim() / .toLowerCase() in render.
+    name: typeof value.name === "string" && value.name ? value.name : "Macro",
     enabled: value.enabled !== false,
     priority: Number(value.priority) || 0,
     speed: Number(value.speed) > 0 ? Number(value.speed) : 1,
     playMode: value.playMode || "once",
     repeatCount: Math.max(1, Number(value.repeatCount) || 1),
     exclusive: Boolean(value.exclusive),
-    focusExe: value.focusExe ?? "",
+    focusExe: typeof value.focusExe === "string" ? value.focusExe : "",
     trigger: { kind, button },
     steps,
     recording: normalizeRecording(value.recording),
@@ -434,7 +441,10 @@ function muteIds(value: unknown): string[] {
 
 function normalizeSteps(steps: Step[]): Step[] {
   return steps.flatMap((step): Step[] => {
-    if (step.type === "key") return [{ ...step, key: canonKey(step.key) }];
+    // canonKey calls toLowerCase, so a non-string key threw out of normalizeProfile.
+    if (!step || typeof step !== "object") return [];
+    if (step.type === "key") return [{ ...step, key: canonKey(typeof step.key === "string" ? step.key : "") }];
+    if (step.type === "mouse") return [{ ...step, button: typeof step.button === "string" ? step.button : "" }];
     if (step.type === "scanWait") {
       const ms = Number(step.ms);
       return [{ type: "scanWait", ms: Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : 0 }];
@@ -508,7 +518,7 @@ function normalizeBlocks(value: unknown): Block[] {
       const ignoreMs = Number(raw.ignoreMs);
       const shared = {
         id,
-        key: canonKey(raw.key || "z"),
+        key: canonKey(typeof raw.key === "string" && raw.key ? raw.key : "z"),
         watch,
         armMs: Number.isFinite(arm) && arm >= 0 ? Math.round(arm) : 5,
         gapMs: Number.isFinite(gap) && gap >= 0 ? Math.round(gap) : 80,
@@ -531,13 +541,20 @@ function normalizeBlocks(value: unknown): Block[] {
     if (raw.type === "pressHold") {
       const holdMs = Number(raw.holdMs);
       const ms = Number.isFinite(holdMs) && holdMs >= 0 ? Math.round(holdMs) : 80;
-      const key = canonKey(raw.key || "");
+      const key = canonKey(typeof raw.key === "string" ? raw.key : "");
       const migrated: Step[] = [];
       if (key) {
         migrated.push({ type: "key", action: "down", key }, { type: "wait", ms: 18 }, { type: "key", action: "up", key });
       }
       migrated.push({ type: "scanWait", ms });
       return [{ id, type: "steps", steps: migrated }];
+    }
+    // A block type this build does not know (saved by a newer build or another
+    // branch) used to be dropped here, so the next save silently deleted it. Keep
+    // it in place with its fields; the engine skips kinds it cannot compile, and
+    // every fall-through in the UI reads only id, type and steps.
+    if (typeof raw.type === "string" && raw.type) {
+      return [{ ...(item as Record<string, unknown>), id, type: raw.type, steps } as unknown as Block];
     }
     return [];
   });
