@@ -895,6 +895,12 @@ class Runner {
             return ""
         }
         if (kind = "burst") {
+            ; After release runs only once the trigger is up. A down with no
+            ; up in the block before this stays held until this block's up.
+            if (this.trigger != "" && Engine.KeyDown(this.trigger)) {
+                this.ArmWait(now, 1)
+                return "again"
+            }
             child := Field(step, "steps", [])
             if !(child is Array)
                 child := []
@@ -4290,6 +4296,29 @@ RunChecks(fails) {
     Engine.hooks.Delete("n")
     if Engine.physDown.Has("n")
         Engine.physDown.Delete("n")
+    Engine.profile := savedProfile
+
+    heldSeven := J("{'id':'hold-7','name':'B','enabled':true,'advanced':true,'releaseStop':'nextUp','playMode':'once','trigger':{'kind':'key','button':'b'},'steps':[],'blocks':[{'type':'steps','steps':[{'type':'key','action':'down','key':'b'},{'type':'wait','ms':18},{'type':'key','action':'up','key':'b'},{'type':'wait','ms':10},{'type':'key','action':'down','key':'7'}]},{'type':'then','forMs':55,'steps':[{'type':'key','action':'up','key':'7'}]}]}")
+    Engine.hooks["b"] := true
+    Engine.profile := Map("macros", [heldSeven])
+    Engine.NotePhysical("b", true)
+    Engine.StartRunner(heldSeven)
+    Engine.FlushPending()
+    hold7 := Engine.runners[1]
+    hold7.Advance(0)
+    hold7.Advance(18)
+    hold7.Advance(28)
+    fails := Check(Engine.Desired(28).Has("7") && !hold7.done, "a down stays down while the trigger is held", fails)
+    hold7.Advance(100)
+    fails := Check(Engine.Desired(100).Has("7") && !hold7.done, "after release does not send the up while the trigger is held", fails)
+    Engine.NotePhysical("b", false)
+    hold7.Advance(101)
+    fails := Check(!Engine.Desired(101).Has("7") && !hold7.done, "after release sends the matching up when the trigger comes up", fails)
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.hooks.Delete("b")
+    if Engine.physDown.Has("b")
+        Engine.physDown.Delete("b")
     Engine.profile := savedProfile
 
     fails := Check(AsNum("abc", 7) = 7, "bad number falls back instead of throwing", fails)
