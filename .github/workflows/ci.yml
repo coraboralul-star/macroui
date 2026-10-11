@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ui:
+    name: UI build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install
+        working-directory: ui
+        run: npm ci
+      - name: Build
+        working-directory: ui
+        run: npm run build
+
+  windows:
+    name: Shell and launcher
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Build shell
+        run: dotnet build shell/MacroShell.csproj
+      - name: Build launcher
+        run: dotnet build launcher/Vendetta.csproj
