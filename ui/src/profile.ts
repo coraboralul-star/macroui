@@ -445,16 +445,24 @@ function muteIds(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string" && item.length > 0);
 }
 
+function roundMs(value: unknown, fallback: number): number {
+  const ms = Number(value);
+  return Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : fallback;
+}
+
+function roundCoord(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n) : 0;
+}
+
 function normalizeSteps(steps: Step[]): Step[] {
   return steps.flatMap((step): Step[] => {
     // canonKey calls toLowerCase, so a non-string key threw out of normalizeProfile.
     if (!step || typeof step !== "object") return [];
     if (step.type === "key") return [{ ...step, key: canonKey(typeof step.key === "string" ? step.key : "") }];
     if (step.type === "mouse") return [{ ...step, button: typeof step.button === "string" ? step.button : "" }];
-    if (step.type === "scanWait") {
-      const ms = Number(step.ms);
-      return [{ type: "scanWait", ms: Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : 0 }];
-    }
+    if (step.type === "scanWait") return [{ type: "scanWait", ms: roundMs(step.ms, 0) }];
+    if (step.type === "wait") return [{ type: "wait", ms: roundMs(step.ms, 0) }];
     if (step.type === "randomWait") {
       const minRaw = Number(step.minMs);
       const maxRaw = Number(step.maxMs);
@@ -467,7 +475,22 @@ function normalizeSteps(steps: Step[]): Step[] {
       const dy = Number(step.dy);
       return [{ type: "scroll", dy: Number.isFinite(dy) ? Math.round(dy) : 0 }];
     }
-    if (step.type === "repeat" && Array.isArray(step.steps)) return [{ ...step, steps: normalizeSteps(step.steps) }];
+    if (step.type === "move") return [{ ...step, x: roundCoord(step.x), y: roundCoord(step.y) }];
+    if (step.type === "goto") {
+      const next: Extract<Step, { type: "goto" }> = { ...step, x: roundCoord(step.x), y: roundCoord(step.y) };
+      if (step.ms != null) next.ms = roundMs(step.ms, 0);
+      if (step.where != null) next.where = normalizeGotoWhere(step.where);
+      return [next];
+    }
+    if (step.type === "repeat") {
+      const count = Number(step.count);
+      return [{
+        ...step,
+        // 0 means until stop. A missing count plays as 1, matching the engine.
+        count: Number.isFinite(count) ? Math.max(0, Math.round(count)) : 1,
+        steps: Array.isArray(step.steps) ? normalizeSteps(step.steps) : [],
+      }];
+    }
     return [step];
   });
 }

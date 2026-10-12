@@ -18,6 +18,17 @@ export function isSleep(step: Step | undefined): step is Extract<Step, { type: "
   return !!step && (step.type === "wait" || step.type === "scanWait");
 }
 
+function childSteps(step: Extract<Step, { type: "repeat" }>): Step[] {
+  return Array.isArray(step.steps) ? step.steps : [];
+}
+
+/** Notches stay at least 1. A 0-notch scroll has no sign, so Up would become Down. */
+export function scrollDy(dy: number, notches: number): number {
+  const up = dy < 0;
+  const mag = Math.max(1, Math.round(notches) || 0);
+  return up ? -mag : mag;
+}
+
 export function liveSteps(events: RecEvent[], mode: "recorded" | "fixed" | "none", fixedMs: number): Step[] {
   const steps: Step[] = [];
   let last = 0;
@@ -37,6 +48,7 @@ export function liveSteps(events: RecEvent[], mode: "recorded" | "fixed" | "none
 }
 
 export function laneCells(steps: Step[]): LaneCell[] {
+  if (!Array.isArray(steps)) return [{ type: "join", index: 0 }];
   const cells: LaneCell[] = [];
   let index = 0;
   while (index < steps.length) {
@@ -77,7 +89,7 @@ export function laneCells(steps: Step[]): LaneCell[] {
     else if (step.type === "randomWait") cells.push({ type: "randomWait", index, minMs: step.minMs, maxMs: step.maxMs });
     else if (step.type === "goto") cells.push({ type: "goto", index, x: step.x, y: step.y, ms: step.ms ?? 15, where: step.where ?? "screen" });
     else if (step.type === "run") cells.push({ type: "run", index, macroId: step.macroId });
-    else if (step.type === "repeat") cells.push({ type: "repeat", index, count: step.count, steps: step.steps });
+    else if (step.type === "repeat") cells.push({ type: "repeat", index, count: step.count, steps: childSteps(step) });
     index += 1;
     if (index < steps.length && !isSleep(steps[index])) cells.push({ type: "join", index });
   }
@@ -131,6 +143,7 @@ export function pressPair(kind: "key" | "mouse", button: string): Step[] {
 }
 
 export function expandTaps(steps: Step[]): Step[] {
+  if (!Array.isArray(steps)) return [];
   let changed = false;
   const next = steps.flatMap((step): Step[] => {
     if ((step.type === "key" || step.type === "mouse") && step.action === "tap") {
@@ -150,7 +163,7 @@ export function expandTaps(steps: Step[]): Step[] {
       ];
     }
     if (step.type === "repeat") {
-      const inner = expandTaps(step.steps);
+      const inner = expandTaps(childSteps(step));
       if (inner !== step.steps) {
         changed = true;
         return [{ ...step, steps: inner }];
@@ -186,10 +199,11 @@ export function replaceAct(steps: Step[], index: number, button: string, input: 
 }
 
 export function applyDelayMode(steps: Step[], mode: "fixed" | "none", ms: number): Step[] {
+  if (!Array.isArray(steps)) return [];
   if (mode === "none") {
     return steps.flatMap((step): Step[] => {
-      if (isSleep(step)) return [];
-      if (step.type === "repeat") return [{ ...step, steps: applyDelayMode(step.steps, mode, ms) }];
+      if (isSleep(step) || step.type === "randomWait") return [];
+      if (step.type === "repeat") return [{ ...step, steps: applyDelayMode(childSteps(step), mode, ms) }];
       if ((step.type === "key" || step.type === "mouse") && step.action === "tap") {
         return step.type === "key"
           ? [{ type: "key", action: "down", key: step.key }, { type: "key", action: "up", key: step.key }]
@@ -200,7 +214,8 @@ export function applyDelayMode(steps: Step[], mode: "fixed" | "none", ms: number
   }
   return steps.map((step) => {
     if (isSleep(step)) return { ...step, ms };
-    if (step.type === "repeat") return { ...step, steps: applyDelayMode(step.steps, mode, ms) };
+    if (step.type === "randomWait") return { type: "wait", ms };
+    if (step.type === "repeat") return { ...step, steps: applyDelayMode(childSteps(step), mode, ms) };
     if ((step.type === "key" || step.type === "mouse") && step.action === "tap") return { ...step, holdMs: ms };
     return step;
   });
