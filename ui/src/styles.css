@@ -6500,3 +6500,40 @@ input.ev-delay {
   line-height: 1.35;
 }
 
+.output-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--key);
+  color: var(--text);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.output-chip span {
+  color: var(--muted);
+  font-weight: 650;
+  letter-spacing: 0.12em;
+}
+
+.output-chip.is-live {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.output-chip.is-warn {
+  border-color: var(--danger);
+  color: #ffd0d0;
+}
+
+.output-chip.is-live:hover { border-color: var(--accent); }
+.output-chip.is-warn:hover { border-color: var(--danger); }
+
+.output-chip.is-warn span { color: #e7a090; }
+

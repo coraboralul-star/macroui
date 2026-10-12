@@ -2,13 +2,13 @@ import { INPUT_MODES, type InputMode } from "../profile";
 
 export type CloseMode = "tray" | "quit";
 
-export type SettingPane = "general" | "updates" | "interface" | "input";
+export type SettingPane = "general" | "updates" | "interface" | "output";
 
 const PANES: { id: SettingPane; label: string }[] = [
   { id: "general", label: "General" },
   { id: "updates", label: "Updates" },
   { id: "interface", label: "Interface" },
-  { id: "input", label: "Input" },
+  { id: "output", label: "Output" },
 ];
 
 const METHOD_NOTE: Record<InputMode, string> = {
@@ -129,13 +129,13 @@ export function SettingsPage({
             </div>
           </>
         ) : null}
-        {pane === "input" ? (
+        {pane === "output" ? (
           <>
-            <h2>Input</h2>
+            <h2>Output</h2>
             <p className="settings-lead">Choose where macros send keys and mouse. Only one path is used.</p>
             <div className="settings-stack">
               <div className="settings-block">
-                <div className="settings-choices" role="radiogroup" aria-label="Input method">
+                <div className="settings-choices" role="radiogroup" aria-label="Output method">
                   {INPUT_MODES.map((item) => (
                     <button
                       key={item.value}

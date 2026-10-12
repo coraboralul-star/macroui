@@ -18,6 +18,10 @@ export function normalizeInputMode(value: unknown): InputMode {
   return value === "rp2040" || value === "rp2350" ? value : "software";
 }
 
+export function inputModeLabel(mode: InputMode): string {
+  return INPUT_MODES.find((item) => item.value === mode)?.label ?? "Default";
+}
+
 export type GotoWhere = "screen" | "window" | "client";
 
 export const GOTO_WHERE: { value: GotoWhere; label: string }[] = [

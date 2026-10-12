@@ -5,10 +5,12 @@ import {
   parseFault,
   parseLink,
   parseMaximized,
+  parseOutput,
   parsePorts,
   parseWindows,
   statusLabel,
   type BoardPort,
+  type LiveOutput,
   type WindowRow,
 } from "./hostMessages";
 import type { EngineState } from "./profile";
@@ -19,6 +21,7 @@ export function useHostStatus() {
   const [engine, setEngine] = useState<EngineState>({ armed: false, running: [], held: [], activeId: "" });
   const [fault, setFault] = useState<string | null>(null);
   const [ports, setPorts] = useState<BoardPort[]>([]);
+  const [output, setOutput] = useState<LiveOutput | null>(null);
   const [windows, setWindows] = useState<WindowRow[]>([]);
   const [maximized, setMaximized] = useState(false);
 
@@ -45,6 +48,8 @@ export function useHostStatus() {
       if (nextMaximized !== null) setMaximized(nextMaximized);
       const nextPorts = parsePorts(message);
       if (nextPorts) setPorts(nextPorts);
+      const nextOutput = parseOutput(message);
+      if (nextOutput) setOutput(nextOutput);
     });
     post({ type: "hello" });
     return off;
@@ -53,5 +58,5 @@ export function useHostStatus() {
   const runningIds = useMemo(() => new Set(engine.running.map((item) => item.id)), [engine.running]);
   const status = statusLabel(pipe, shell, engine.armed);
 
-  return { shell, pipe, engine, windows, ports, fault, setFault, maximized, runningIds, status };
+  return { shell, pipe, engine, windows, ports, output, fault, setFault, maximized, runningIds, status };
 }

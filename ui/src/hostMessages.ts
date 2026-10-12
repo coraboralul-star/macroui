@@ -1,5 +1,7 @@
 import type { HostMessage } from "./bridge";
-import type { EngineState } from "./profile";
+import { normalizeInputMode, type EngineState, type InputMode } from "./profile";
+
+export type LiveOutput = { mode: InputMode; requested: InputMode };
 
 export type BoardPort = { port: string; chip: string; name: string };
 export type WindowRow = { exe: string; title: string };
@@ -50,6 +52,31 @@ export function parsePorts(message: HostMessage): BoardPort[] | null {
     if (typeof row.port !== "string" || typeof row.chip !== "string") return [];
     return [{ port: row.port, chip: row.chip, name: typeof row.name === "string" ? row.name : row.chip }];
   });
+}
+
+export function parseOutput(message: HostMessage): LiveOutput | null {
+  if (message.type !== "output") return null;
+  const mode = normalizeInputMode(message.mode);
+  const requested = "requested" in message ? normalizeInputMode(message.requested) : mode;
+  return { mode, requested };
+}
+
+/** Header label. A software echo from before this choice was applied keeps the choice on screen. */
+export function outputChipMode(output: LiveOutput | null, selected: InputMode): InputMode {
+  if (!output) return selected;
+  if (output.mode !== "software") return output.mode;
+  if (output.requested !== "software") return "software";
+  return selected;
+}
+
+export function outputFallenBack(output: LiveOutput | null): boolean {
+  return output != null && output.mode === "software" && output.requested !== "software";
+}
+
+/** Default is always available. A board counts only after the shell says it opened that board. */
+export function outputConnected(output: LiveOutput | null, selected: InputMode): boolean {
+  if (selected === "software") return true;
+  return output?.mode === selected;
 }
 
 export function statusLabel(pipe: boolean, shell: boolean, armed: boolean): string {

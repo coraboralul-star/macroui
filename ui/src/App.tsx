@@ -12,7 +12,8 @@ import { FieldSelect } from "./components/FieldSelect";
 import { SettingsPage, type CloseMode, type SettingPane } from "./components/SettingsPage";
 import { keyLabel } from "./keyboard";
 import { pressLabel } from "./recording";
-import { normalizeInputMode } from "./profile";
+import { inputModeLabel, normalizeInputMode } from "./profile";
+import { outputChipMode, outputConnected, outputFallenBack } from "./hostMessages";
 import { useHostStatus } from "./useHostStatus";
 import { useMacroActions, type TriggerMenu } from "./useMacroActions";
 import { useProfile } from "./useProfile";
@@ -89,7 +90,16 @@ export function App() {
   }, [host.windows, profile.focusExe]);
 
   const inputMode = normalizeInputMode(profile.inputMode);
-  const inputConnected = inputMode === "software" || host.ports.some((item) => item.chip === inputMode);
+  const inputConnected = outputConnected(host.output, inputMode);
+  const chipMode = outputChipMode(host.output, inputMode);
+  const chipLabel = inputModeLabel(chipMode);
+  const outputFallen = outputFallenBack(host.output);
+
+  const openOutputSettings = () => {
+    setPage("settings");
+    setSetting("output");
+    setMenu(null);
+  };
 
   return (
     <>
@@ -126,6 +136,16 @@ export function App() {
             </button>
           </nav>
           <div className="top-end">
+            <button
+              type="button"
+              className={`output-chip${outputFallen ? " is-warn" : ""}${host.output?.mode === chipMode && chipMode !== "software" ? " is-live" : ""}`}
+              title={outputFallen ? "The board is not in use" : "Output settings"}
+              aria-label={outputFallen ? `Output ${chipLabel}. The board is not in use.` : `Output ${chipLabel}`}
+              onClick={openOutputSettings}
+            >
+              <span>Output</span>
+              {chipLabel}
+            </button>
             <p className={`status${host.pipe && host.engine.armed ? " is-live" : ""}`}>{host.status}</p>
           </div>
           <div className="chrome">

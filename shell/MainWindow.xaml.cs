@@ -35,6 +35,8 @@ public partial class MainWindow : Window
     string _portsJson = "";
     string _inputMode = "software";
     string _outputMode = "software";
+    string _outputRequested = "software";
+    string _outputPageJson = "{\"type\":\"output\",\"mode\":\"software\",\"requested\":\"software\"}";
     int _mouseBits;
     bool _swapClicks;
     SerialPort? _board;
@@ -411,6 +413,7 @@ public partial class MainWindow : Window
             SendToPage(LinkJson());
             SendReady();
             SendPorts(true);
+            SendToPage(_outputPageJson);
             SendWindowState();
             if (_lastState.Length > 0)
                 SendToPage(_lastState);
@@ -763,7 +766,7 @@ public partial class MainWindow : Window
             if (mode == "software")
             {
                 CloseBoard();
-                await SetOutput("software");
+                await SetOutput("software", mode);
                 return;
             }
 
@@ -771,7 +774,7 @@ public partial class MainWindow : Window
             if (string.IsNullOrEmpty(hit.Port))
             {
                 CloseBoard();
-                await SetOutput("software");
+                await SetOutput("software", mode);
                 SendToPage(ErrorJson("shell", "no-board", $"no H&le {ChipLabel(mode)} board was found"));
                 return;
             }
@@ -782,7 +785,7 @@ public partial class MainWindow : Window
             if (fail != "")
             {
                 CloseBoard();
-                await SetOutput("software");
+                await SetOutput("software", mode);
                 if (fail == "mismatch")
                     SendToPage(ErrorJson("shell", "board-mismatch", $"the board on {hit.Port} is not an H&le {ChipLabel(mode)}"));
                 else
@@ -790,7 +793,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await SetOutput(mode);
+            await SetOutput(mode, mode);
         }
         finally
         {
@@ -798,9 +801,13 @@ public partial class MainWindow : Window
         }
     }
 
-    async Task SetOutput(string mode)
+    async Task SetOutput(string mode, string requested)
     {
         _outputMode = mode;
+        _outputRequested = requested;
+        var page = JsonSerializer.Serialize(new { type = "output", mode, requested });
+        _outputPageJson = page;
+        SendToPage(page);
         await WritePipe(OutputJson(mode));
     }
 
