@@ -194,17 +194,10 @@ function compilePlayed(events: RecEvent[]): Step[] {
 }
 
 function compileCustom(recording: Recording): Step[] {
-  const presses = pairPresses(recording.events);
+  const played = compilePlayed(recording.events);
   const hold = Math.max(1, recording.holdMs);
-  const interval = Math.max(0, recording.intervalMs);
-  const steps: Step[] = [];
-  presses.forEach((press, index) => {
-    steps.push(downStep(press));
-    steps.push({ type: "wait", ms: hold });
-    steps.push(upStep(press));
-    if (index < presses.length - 1 && interval > 0) steps.push({ type: "wait", ms: interval });
-  });
-  return steps;
+  if (recording.intervalMs <= 0) return played.filter((step) => step.type !== "wait");
+  return played.map((step) => (step.type === "wait" ? { ...step, ms: hold } : step));
 }
 
 function downStep(event: { kind: "key" | "mouse"; button: string }): Step {

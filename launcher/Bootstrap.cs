@@ -39,7 +39,7 @@ sealed class Bootstrap
             if (_cancel.IsCancellationRequested)
                 return (false, null);
 
-            if (!Directory.Exists(Path.Combine(_repo, "ui", "node_modules")))
+            if (EditorInstallStale())
             {
                 _status("INSTALLING THE EDITOR");
                 if (await Shell("cmd.exe", Path.Combine(_repo, "ui"), "/d", "/c", "npm", "install") != 0)
@@ -48,8 +48,16 @@ sealed class Bootstrap
             if (_cancel.IsCancellationRequested)
                 return (false, null);
 
-            var dist = Path.Combine(_repo, "ui", "dist", "index.html");
-            if (IsStale(dist, Path.Combine(_repo, "ui", "src"), Path.Combine(_repo, "ui", "index.html")))
+            var ui = Path.Combine(_repo, "ui");
+            var dist = Path.Combine(ui, "dist", "index.html");
+            if (IsStale(dist,
+                Path.Combine(ui, "src"),
+                Path.Combine(ui, "index.html"),
+                Path.Combine(ui, "package.json"),
+                Path.Combine(ui, "package-lock.json"),
+                Path.Combine(ui, "vite.config.ts"),
+                Path.Combine(ui, "tsconfig.json"),
+                Path.Combine(ui, "public")))
             {
                 _status("BUILDING THE EDITOR");
                 if (await Shell("cmd.exe", Path.Combine(_repo, "ui"), "/d", "/c", "npm", "run", "build") != 0)
@@ -134,6 +142,24 @@ sealed class Bootstrap
                 framework = match.Groups[1].Value.Trim();
         }
         return Path.Combine(repo, "shell", "bin", "Debug", framework, "MacroShell.exe");
+    }
+
+    bool EditorInstallStale()
+    {
+        var modules = Path.Combine(_repo, "ui", "node_modules");
+        if (!Directory.Exists(modules))
+            return true;
+        var marker = Path.Combine(modules, ".package-lock.json");
+        if (!File.Exists(marker))
+            return true;
+        var installed = File.GetLastWriteTimeUtc(marker);
+        foreach (var name in new[] { "package.json", "package-lock.json" })
+        {
+            var path = Path.Combine(_repo, "ui", name);
+            if (File.Exists(path) && File.GetLastWriteTimeUtc(path) > installed)
+                return true;
+        }
+        return false;
     }
 
     static bool IsStale(string output, params string[] roots)

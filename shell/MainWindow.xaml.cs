@@ -466,17 +466,17 @@ public partial class MainWindow : Window
             try
             {
                 var pipe = new NamedPipeClientStream(".", "MacroUI", PipeDirection.InOut, PipeOptions.Asynchronous);
-                await pipe.ConnectAsync(1500, ct);
+                await pipe.ConnectAsync(1500, ct).ConfigureAwait(false);
                 pipe.ReadMode = PipeTransmissionMode.Message;
                 _pipe = pipe;
                 misses = 0;
                 SendToPage(LinkJson());
-                await SendProfileEnvelope();
-                await WritePipe(OutputJson(_outputMode));
+                await SendProfileEnvelope().ConfigureAwait(false);
+                await WritePipe(OutputJson(_outputMode)).ConfigureAwait(false);
                 var buf = new byte[1024 * 1024];
                 while (!ct.IsCancellationRequested)
                 {
-                    var n = await pipe.ReadAsync(buf, ct);
+                    var n = await pipe.ReadAsync(buf, ct).ConfigureAwait(false);
                     if (n <= 0) break;
                     var text = Encoding.UTF8.GetString(buf, 0, n);
                     var kind = MessageType(text);
@@ -506,7 +506,7 @@ public partial class MainWindow : Window
             _lastState = "";
             if (!_closing)
                 SendToPage(LinkJson());
-            try { await Task.Delay(700, ct); } catch { break; }
+            try { await Task.Delay(700, ct).ConfigureAwait(false); } catch { break; }
         }
     }
 
@@ -648,12 +648,12 @@ public partial class MainWindow : Window
 
     void SendToPage(string json)
     {
-        if (!_pageReady || View.CoreWebView2 == null)
+        if (!_pageReady)
             return;
         // Posted, not Invoked: the pipe reader must never wait on the UI thread,
-        // or engine writes back up while the window is busy. The try keeps one
-        // bad payload (invalid JSON, WebView2 already closed) from throwing into
-        // PumpPipe, which used to tear the pipe down and reconnect in a loop.
+        // or engine writes back up while the window is busy. The view is only
+        // touched inside the post. Reading it from the pipe thread throws, the
+        // read loop treats that as a dead pipe, and the engine hello never lands.
         Dispatcher.BeginInvoke(() =>
         {
             try { View.CoreWebView2?.PostWebMessageAsJson(json); }

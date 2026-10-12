@@ -218,8 +218,10 @@ PhysKeyProc(nCode, wParam, lParam) {
 
 PhysMouseProc(nCode, wParam, lParam) {
     ; Movement and the wheel are not triggers. Handling them here cuts the mouse rate.
-    if (nCode >= 0 && Engine.hMouseHook && wParam != 0x200 && wParam != 0x20A && wParam != 0x20E)
+    if (nCode >= 0 && Engine.hMouseHook && wParam != 0x200 && wParam != 0x20A && wParam != 0x20E) {
+        Engine.mouseHookTick := A_TickCount
         try Engine.ReadMouse(wParam, lParam)
+    }
     return DllCall("CallNextHookEx", "Ptr", 0, "Int", nCode, "Ptr", wParam, "Ptr", lParam, "Ptr")
 }
 
@@ -1254,6 +1256,7 @@ class Engine {
     static hKeyHook := 0
     static hMouseHook := 0
     static hookTick := 0
+    static mouseHookTick := 0
     static hookSuspect := false
     static instanceMutex := 0
     static qpcFreq := 0
@@ -1328,43 +1331,92 @@ class Engine {
 
     ; Windows removes a low-level hook when this thread stalls, and leaves the
     ; handle looking valid. rawOk would stay true while keys stop arriving.
+    ; The mouse hook dies the same way, so a side button stays silent until restart.
     static CheckPhysicalHook() {
         if !this.keyProc
             return
         if !this.hKeyHook {
             this.Log("physical hook missing")
             this.RaisePhysicalHook()
+            this.RaiseMouseHook()
             return
         }
-        ; A profile parse just ran on this thread. Put the hook back now, in
-        ; case that stall got it removed, instead of waiting out the silence.
+        ; A profile parse just ran on this thread. Put both hooks back now, in
+        ; case that stall got them removed, instead of waiting out the silence.
         if this.hookSuspect {
             this.hookSuspect := false
             this.RaisePhysicalHook()
+            this.RaiseMouseHook()
             return
         }
         if (!this.armed && this.runners.Length = 0 && this.pending.Length = 0)
             return
+        now := A_TickCount
         if (this.hookTick = 0)
-            this.hookTick := A_TickCount
-        if (A_TickCount - this.hookTick < 8000)
-            return
-        this.Log("physical hook silent")
-        this.RaisePhysicalHook()
+            this.hookTick := now
+        if (this.mouseHookTick = 0)
+            this.mouseHookTick := now
+        needMouse := this.MouseHookNeeded()
+        if (needMouse && !this.hMouseHook)
+            this.RaiseMouseHook()
+        if this.NeedsKeyRaise(this.hookTick, this.mouseHookTick, needMouse, true, now) {
+            this.Log("physical hook silent")
+            this.RaisePhysicalHook()
+        }
+        if this.NeedsMouseRaise(this.mouseHookTick, needMouse, true, now) {
+            this.Log("mouse hook silent")
+            this.RaiseMouseHook()
+        }
     }
 
-    static SyncMouseHook() {
-        need := false
+    ; Mouse clicks keep this thread alive. An idle keyboard hook is still installed.
+    static NeedsKeyRaise(keyTick, mouseTick, needMouse, armed, now) {
+        if !armed
+            return false
+        if (now - keyTick < 8000)
+            return false
+        if (needMouse && mouseTick != 0 && now - mouseTick < 8000)
+            return false
+        return true
+    }
+
+    static NeedsMouseRaise(mouseTick, needMouse, armed, now) {
+        if (!armed || !needMouse)
+            return false
+        return (now - mouseTick) >= 8000
+    }
+
+    static MouseHookNeeded() {
         for key, _ in this.hooks
             if IsMouseButton(key)
-                need := true
-        if (need && !this.hMouseHook && this.mouseProc) {
-            module := DllCall("GetModuleHandle", "Ptr", 0, "Ptr")
-            this.hMouseHook := DllCall("SetWindowsHookExW", "Int", 14, "Ptr", this.mouseProc, "Ptr", module, "UInt", 0, "Ptr")
-        } else if (!need && this.hMouseHook) {
+                return true
+        return false
+    }
+
+    ; Unhook first. A handle Windows already removed still looks valid, and
+    ; installing a second time would leave the dead one in place.
+    static RaiseMouseHook() {
+        if this.hMouseHook {
             DllCall("UnhookWindowsHookEx", "Ptr", this.hMouseHook)
             this.hMouseHook := 0
         }
+        if (!this.MouseHookNeeded() || !this.mouseProc)
+            return
+        module := DllCall("GetModuleHandle", "Ptr", 0, "Ptr")
+        this.hMouseHook := DllCall("SetWindowsHookExW", "Int", 14, "Ptr", this.mouseProc, "Ptr", module, "UInt", 0, "Ptr")
+        this.mouseHookTick := A_TickCount
+    }
+
+    static SyncMouseHook() {
+        if !this.MouseHookNeeded() {
+            if this.hMouseHook {
+                DllCall("UnhookWindowsHookEx", "Ptr", this.hMouseHook)
+                this.hMouseHook := 0
+            }
+            return
+        }
+        if (!this.hMouseHook && this.mouseProc)
+            this.RaiseMouseHook()
     }
 
     ; Injected SendInput is ignored. Pico HID is a real device, so those reports
@@ -2662,6 +2714,9 @@ class Engine {
                 this.sendNow[k] := true
             try Send("{Blind}" parts)
             ; Leave sendNow set until the next tick so a late $* hotkey is still echo.
+            ; Send puts AutoHotkey's hook in front of ours. $* then swallows the
+            ; trigger's key-up, and a While pressed macro never sees the release.
+            this.RaisePhysicalHook()
         }
         if (dx != 0 || dy != 0)
             try MouseMove(dx, dy, 0, "R")
@@ -3867,6 +3922,12 @@ RunChecks(fails) {
     TriggerHook("$*LShift")
     fails := Check(!Engine.KeyDown("LShift"), "the ll hook owns the finger while a send hotkey fires", fails)
     Engine.rawOk := false
+    fails := Check(!Engine.NeedsKeyRaise(0, 1000, true, false, 9000), "idle engine leaves the keyboard hook", fails)
+    fails := Check(Engine.NeedsKeyRaise(0, 0, false, true, 9000), "a quiet keyboard hook is put back", fails)
+    fails := Check(!Engine.NeedsKeyRaise(0, 8000, true, true, 9000), "mouse activity keeps the keyboard hook", fails)
+    fails := Check(Engine.NeedsMouseRaise(0, true, true, 9000), "a quiet mouse hook is put back", fails)
+    fails := Check(!Engine.NeedsMouseRaise(8000, true, true, 9000), "a live mouse hook stays", fails)
+    fails := Check(!Engine.NeedsMouseRaise(0, false, true, 9000), "no mouse trigger means no mouse hook", fails)
     sender := J("{'id':'send-t','name':'T','enabled':true,'playMode':'whileHeld','trigger':{'kind':'key','button':'t'},'steps':[{'type':'key','action':'down','key':'shift'},{'type':'wait','ms':10},{'type':'key','action':'up','key':'shift'},{'type':'wait','ms':10}]}")
     target := J("{'id':'shift-mac','name':'Shift','enabled':true,'playMode':'whileHeld','trigger':{'kind':'key','button':'LShift'},'steps':[{'type':'wait','ms':80}]}")
     Engine.profile := Map("macros", [sender, target])

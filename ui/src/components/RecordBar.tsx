@@ -66,6 +66,14 @@ export function RecordBar({
     };
     finishRef.current = finish;
 
+    const cancel = () => {
+      if (done) return;
+      done = true;
+      events.current = [];
+      held.current = new Set();
+      onLiveRef.current?.(null);
+      setActive(false);
+    };
     const onKey = (event: KeyboardEvent) => {
       if (event.repeat) return;
       const key = keyFromCode(event.code);
@@ -80,7 +88,11 @@ export function RecordBar({
     };
     const onPointer = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest?.("[data-chrome], button, input, textarea, select")) return;
+      if (event.type === "pointerdown" && target?.closest?.("button, input, textarea, select")) {
+        if (!target.closest("[data-rec-keep]")) cancel();
+        return;
+      }
+      if (target?.closest?.("[data-chrome]")) return;
       const button = mouseFromButton(event.button);
       if (!button) return;
       push("mouse", button, event.type === "pointerdown");
@@ -129,6 +141,7 @@ export function RecordBar({
         <button
           type="button"
           className={`rec-arm${active ? " is-live" : ""}`}
+          data-rec-keep=""
           aria-label={active ? "Stop" : "Start"}
           onClick={toggle}
         >
@@ -140,6 +153,7 @@ export function RecordBar({
         <button
           type="button"
           className={`rec-well${active ? " is-live" : ""}`}
+          data-rec-keep=""
           tabIndex={-1}
           aria-hidden="true"
           onClick={toggle}

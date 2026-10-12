@@ -167,8 +167,13 @@ static void handle_line(char const *text) {
     if (usage < 0 || usage > 255)
       return;
     key_set((uint8_t)usage, down != 0);
-    cdc_reply(send_keyboard_now() ? "ok\n" : "hid-busy\n");
-    kb_dirty = false;
+    if (send_keyboard_now()) {
+      kb_dirty = false;
+      cdc_reply("ok\n");
+    } else {
+      kb_dirty = true;
+      cdc_reply("hid-busy\n");
+    }
     return;
   }
 
