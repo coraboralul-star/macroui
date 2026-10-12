@@ -90,8 +90,34 @@ export function deleteConfig(profile: Profile, id: string): Profile {
   return writeActive(next, next.macros);
 }
 
+function clearMacroId(steps: Step[], id: string): Step[] {
+  return steps.map((step) => {
+    if (step.type === "run") return step.macroId === id ? { ...step, macroId: "" } : step;
+    if (step.type === "repeat") return { ...step, steps: clearMacroId(Array.isArray(step.steps) ? step.steps : [], id) };
+    return step;
+  });
+}
+
+function clearMacroRefs(block: Block, id: string): Block {
+  if (block.type === "whileHeld" || block.type === "swapAfter") {
+    return {
+      ...block,
+      steps: clearMacroId(block.steps, id),
+      mute: block.mute.filter((item) => item !== id),
+    };
+  }
+  if ("steps" in block && Array.isArray(block.steps)) return { ...block, steps: clearMacroId(block.steps, id) };
+  return block;
+}
+
 export function deleteMacro(profile: Profile, id: string): Profile {
-  const macros = profile.macros.filter((item) => item.id !== id);
+  const macros = profile.macros
+    .filter((item) => item.id !== id)
+    .map((item) => ({
+      ...item,
+      steps: clearMacroId(item.steps, id),
+      blocks: item.blocks?.map((block) => clearMacroRefs(block, id)),
+    }));
   return writeActive({ ...profile, macros }, macros);
 }
 
@@ -130,8 +156,10 @@ function note(issues: string[], text: string) {
   if (!issues.includes(text)) issues.push(text);
 }
 
-function stepIssues(steps: Step[], issues: string[]) {
+function stepIssues(steps: Step[] | undefined, issues: string[]) {
+  if (!Array.isArray(steps)) return;
   for (const step of steps) {
+    if (!step || typeof step !== "object") continue;
     if (step.type === "key" && !step.key.trim()) note(issues, "A key step has no key.");
     if (step.type === "mouse" && !step.button.trim()) note(issues, "A mouse step has no button.");
     if (step.type === "run" && !step.macroId.trim()) note(issues, "A run step needs a macro.");

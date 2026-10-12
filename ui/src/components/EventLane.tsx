@@ -5,7 +5,7 @@ import type { Macro, Step } from "../profile";
 import { Capture, type Captured } from "./Capture";
 import { FieldSelect } from "./FieldSelect";
 import { NumberField } from "./NumberField";
-import { canPlace, deleteAct, dropHold, expandTaps, insertSteps, laneCells, moveStep, replaceAct, setDelay, type LaneCell } from "../eventLane";
+import { canPlace, deleteAct, dropHold, expandTaps, insertSteps, laneCells, moveStep, replaceAct, scrollDy, setDelay, type LaneCell } from "../eventLane";
 
 type MenuLine = { kind: "label"; text: string } | { kind: "item"; label: string; run: () => void };
 
@@ -365,8 +365,7 @@ function CellView({
     const up = cell.dy < 0;
     const notches = Math.abs(cell.dy);
     const setNotches = (next: number) => {
-      const mag = Math.max(0, next);
-      onChange(steps.map((step, index) => (index === cell.index && step.type === "scroll" ? { ...step, dy: up ? -mag : mag } : step)));
+      onChange(steps.map((step, index) => (index === cell.index && step.type === "scroll" ? { ...step, dy: scrollDy(cell.dy, next) } : step)));
     };
     return (
       <span
@@ -396,7 +395,7 @@ function CellView({
           >
             {up ? "Up" : "Down"}
           </button>
-          <NumberField ariaLabel="Notches" min={0} value={notches} onChange={setNotches} />
+          <NumberField ariaLabel="Notches" min={1} value={notches} onChange={setNotches} />
         </small>
       </span>
     );

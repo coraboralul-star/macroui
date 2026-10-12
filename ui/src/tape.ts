@@ -55,7 +55,7 @@ export function segment(steps: Step[]): TapeNode[] {
     else if (step.type === "randomWait") nodes.push({ type: "randomWait", index, minMs: step.minMs, maxMs: step.maxMs });
     else if (step.type === "goto") nodes.push({ type: "goto", index, x: step.x, y: step.y, ms: step.ms ?? 15, where: normalizeGotoWhere(step.where) });
     else if (step.type === "run") nodes.push({ type: "run", index, macroId: step.macroId });
-    else nodes.push({ type: "repeat", index, count: step.count, steps: step.steps });
+    else if (step.type === "repeat") nodes.push({ type: "repeat", index, count: step.count, steps: Array.isArray(step.steps) ? step.steps : [] });
     index += 1;
   }
   return nodes;
@@ -69,7 +69,7 @@ export function readList(steps: Step[], path: Path): Step[] {
   let list = steps;
   for (const index of path) {
     const step = list[index];
-    if (!step || step.type !== "repeat") return [];
+    if (!step || step.type !== "repeat" || !Array.isArray(step.steps)) return [];
     list = step.steps;
   }
   return list;
@@ -80,7 +80,7 @@ export function writeList(steps: Step[], path: Path, next: Step[]): Step[] {
   const [head, ...rest] = path;
   return steps.map((step, index) => {
     if (index !== head || step.type !== "repeat") return step;
-    return { ...step, steps: writeList(step.steps, rest, next) };
+    return { ...step, steps: writeList(Array.isArray(step.steps) ? step.steps : [], rest, next) };
   });
 }
 
