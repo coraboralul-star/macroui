@@ -79,7 +79,13 @@ export function stepPhrase(step: Step): string {
     return `click ${name}`;
   }
   if (step.type === "wait" || step.type === "scanWait") return `wait ${step.ms} ms`;
+  if (step.type === "randomWait") return `wait ${step.minMs}-${step.maxMs} ms`;
   if (step.type === "move") return `move ${step.x}, ${step.y}`;
+  if (step.type === "scroll") {
+    if (step.dy < 0) return `scroll up ${Math.abs(step.dy)}`;
+    if (step.dy > 0) return `scroll down ${step.dy}`;
+    return "scroll 0";
+  }
   if (step.type === "goto") return `go to ${step.x}, ${step.y} (${step.where || "screen"})`;
   if (step.type === "repeat") return `repeat ${step.count}`;
   if (step.type === "run") return "run a macro";

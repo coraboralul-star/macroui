@@ -361,6 +361,81 @@ function CellView({
       </div>
     );
   }
+  if (cell.type === "scroll") {
+    const up = cell.dy < 0;
+    const notches = Math.abs(cell.dy);
+    const setNotches = (next: number) => {
+      const mag = Math.max(0, next);
+      onChange(steps.map((step, index) => (index === cell.index && step.type === "scroll" ? { ...step, dy: up ? -mag : mag } : step)));
+    };
+    return (
+      <span
+        className={`ev${dragFrom === cell.index ? " is-dragging" : ""}${targeted ? " is-target" : ""}`}
+        draggable={!readOnly}
+        onDragStart={(event) => {
+          event.dataTransfer.setData("text/plain", String(cell.index));
+          event.dataTransfer.effectAllowed = "move";
+          onDragIndex(cell.index);
+        }}
+        onDragEnd={onDragEnd}
+        onDragOver={onAllowDrop(cell.index)}
+        onDrop={onDropAt(cell.index)}
+        onContextMenu={(event) => onMenu(event, [{ kind: "item", label: "Delete", run: () => onChange(deleteAct(steps, cell.index)) }])}
+      >
+        <b>Scroll</b>
+        <small>
+          <button
+            type="button"
+            className="ev-dir"
+            aria-label="Scroll direction"
+            disabled={readOnly}
+            onClick={() => {
+              const mag = notches || 1;
+              onChange(steps.map((step, index) => (index === cell.index && step.type === "scroll" ? { ...step, dy: up ? mag : -mag } : step)));
+            }}
+          >
+            {up ? "Up" : "Down"}
+          </button>
+          <NumberField ariaLabel="Notches" min={0} value={notches} onChange={setNotches} />
+        </small>
+      </span>
+    );
+  }
+  if (cell.type === "randomWait") {
+    return (
+      <span
+        className={`ev${dragFrom === cell.index ? " is-dragging" : ""}${targeted ? " is-target" : ""}`}
+        draggable={!readOnly}
+        onDragStart={(event) => {
+          event.dataTransfer.setData("text/plain", String(cell.index));
+          event.dataTransfer.effectAllowed = "move";
+          onDragIndex(cell.index);
+        }}
+        onDragEnd={onDragEnd}
+        onDragOver={onAllowDrop(cell.index)}
+        onDrop={onDropAt(cell.index)}
+        onContextMenu={(event) => onMenu(event, [{ kind: "item", label: "Delete", run: () => onChange(deleteAct(steps, cell.index)) }])}
+      >
+        <b>Random</b>
+        <small className="ev-range">
+          <span>Min</span>
+          <NumberField
+            ariaLabel="Min"
+            min={0}
+            value={cell.minMs}
+            onChange={(minMs) => onChange(steps.map((step, index) => (index === cell.index && step.type === "randomWait" ? { ...step, minMs } : step)))}
+          />
+          <span>Max</span>
+          <NumberField
+            ariaLabel="Max"
+            min={0}
+            value={cell.maxMs}
+            onChange={(maxMs) => onChange(steps.map((step, index) => (index === cell.index && step.type === "randomWait" ? { ...step, maxMs } : step)))}
+          />
+        </small>
+      </span>
+    );
+  }
   if (cell.type === "move") {
     return (
       <span

@@ -17,6 +17,8 @@ export type TapeNode =
   | PressNode
   | { type: "wait"; index: number; ms: number }
   | { type: "move"; index: number; x: number; y: number }
+  | { type: "scroll"; index: number; dy: number }
+  | { type: "randomWait"; index: number; minMs: number; maxMs: number }
   | { type: "goto"; index: number; x: number; y: number; ms: number; where: GotoWhere }
   | { type: "run"; index: number; macroId: string }
   | { type: "repeat"; index: number; count: number; steps: Step[] };
@@ -49,6 +51,8 @@ export function segment(steps: Step[]): TapeNode[] {
       });
     } else if (step.type === "wait" || step.type === "scanWait") nodes.push({ type: "wait", index, ms: step.ms });
     else if (step.type === "move") nodes.push({ type: "move", index, x: step.x, y: step.y });
+    else if (step.type === "scroll") nodes.push({ type: "scroll", index, dy: step.dy });
+    else if (step.type === "randomWait") nodes.push({ type: "randomWait", index, minMs: step.minMs, maxMs: step.maxMs });
     else if (step.type === "goto") nodes.push({ type: "goto", index, x: step.x, y: step.y, ms: step.ms ?? 15, where: normalizeGotoWhere(step.where) });
     else if (step.type === "run") nodes.push({ type: "run", index, macroId: step.macroId });
     else nodes.push({ type: "repeat", index, count: step.count, steps: step.steps });

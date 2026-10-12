@@ -18,6 +18,8 @@ const STEP_TYPES: { value: Step["type"]; label: string }[] = [
   { value: "goto", label: "Go to" },
   { value: "wait", label: "Wait" },
   { value: "scanWait", label: "Scan Wait" },
+  { value: "randomWait", label: "Random Wait" },
+  { value: "scroll", label: "Scroll" },
   { value: "repeat", label: "Repeat" },
   { value: "run", label: "Run" },
 ];
@@ -168,6 +170,17 @@ function StepFields({
   if (step.type === "wait" || step.type === "scanWait") {
     return <NumberBox label="ms" value={step.ms} min={1} onChange={(ms) => onChange({ ...step, ms })} />;
   }
+  if (step.type === "randomWait") {
+    return (
+      <>
+        <NumberBox label="Min" value={step.minMs} min={0} onChange={(minMs) => onChange({ ...step, minMs })} />
+        <NumberBox label="Max" value={step.maxMs} min={0} onChange={(maxMs) => onChange({ ...step, maxMs })} />
+      </>
+    );
+  }
+  if (step.type === "scroll") {
+    return <NumberBox label="Notches" signed value={step.dy} onChange={(dy) => onChange({ ...step, dy })} />;
+  }
   if (step.type === "repeat") {
     return <NumberBox label="Times, 0 = until stop" value={step.count} min={0} onChange={(count) => onChange({ ...step, count })} />;
   }
@@ -240,6 +253,8 @@ function label(step: Step) {
   if (step.type === "move") return "Move";
   if (step.type === "goto") return "Go to";
   if (step.type === "wait" || step.type === "scanWait") return "Wait";
+  if (step.type === "randomWait") return "Random";
+  if (step.type === "scroll") return "Scroll";
   if (step.type === "repeat") return "Repeat";
   return "Run";
 }

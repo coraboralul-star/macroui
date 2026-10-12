@@ -166,6 +166,8 @@ function mark(id: string): ReactNode {
   if (id === "repeatBlock" || id === "repeatSteps") return <path d="M12.6 6.2A4.6 4.6 0 0 0 4 5.2M3.4 3.2v2.4h2.4M3.4 9.8A4.6 4.6 0 0 0 12 10.8M12.6 12.8V10.4H10.2" />;
   if (id === "waitBlock" || id === "wait") return <><circle cx="8" cy="8" r="4.6" /><path d="M8 5.4V8l1.8 1.4" /></>;
   if (id === "scanWait") return <><circle cx="8" cy="8" r="4.6" /><path d="M8 8l2.4-1.6M8 3.6V5" /></>;
+  if (id === "randomWait") return <><circle cx="8" cy="8" r="4.6" /><path d="M5.2 8h5.6M8 5.2v5.6" /></>;
+  if (id === "mouseScroll") return <path d="M8 3.2v2.6M6.2 4.6 8 3.2l1.8 1.4M8 12.8v-2.6M6.2 11.4 8 12.8l1.8-1.4" />;
   if (id === "runOnce") return <path d="M6 4.4v7.2l5.2-3.6L6 4.4z" />;
   if (id === "runMacro") return <><rect x="3" y="3.2" width="10" height="9.6" rx="1.4" /><path d="M7 6.2v3.6l2.8-1.8L7 6.2z" /></>;
   if (id === "repressKey") return <path d="M3.2 6.2h3.2v3.6H3.2zM8 6.2h4.8M8 8h3.2M8 9.8h4.8" />;

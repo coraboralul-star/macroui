@@ -61,6 +61,8 @@ export type Step =
   | { type: "goto"; x: number; y: number; ms?: number; where?: GotoWhere }
   | { type: "wait"; ms: number }
   | { type: "scanWait"; ms: number }
+  | { type: "randomWait"; minMs: number; maxMs: number }
+  | { type: "scroll"; dy: number }
   | { type: "repeat"; count: number; steps: Step[] }
   | { type: "run"; macroId: string };
 
@@ -332,6 +334,10 @@ export function blankStep(type: Step["type"]): Step {
       return { type: "wait", ms: 50 };
     case "scanWait":
       return { type: "scanWait", ms: 80 };
+    case "randomWait":
+      return { type: "randomWait", minMs: 40, maxMs: 70 };
+    case "scroll":
+      return { type: "scroll", dy: -3 };
     case "repeat":
       return { type: "repeat", count: 2, steps: [] };
     case "run":
@@ -448,6 +454,18 @@ function normalizeSteps(steps: Step[]): Step[] {
     if (step.type === "scanWait") {
       const ms = Number(step.ms);
       return [{ type: "scanWait", ms: Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : 0 }];
+    }
+    if (step.type === "randomWait") {
+      const minRaw = Number(step.minMs);
+      const maxRaw = Number(step.maxMs);
+      let minMs = Number.isFinite(minRaw) && minRaw >= 0 ? Math.round(minRaw) : 0;
+      let maxMs = Number.isFinite(maxRaw) && maxRaw >= 0 ? Math.round(maxRaw) : 0;
+      if (minMs > maxMs) [minMs, maxMs] = [maxMs, minMs];
+      return [{ type: "randomWait", minMs, maxMs }];
+    }
+    if (step.type === "scroll") {
+      const dy = Number(step.dy);
+      return [{ type: "scroll", dy: Number.isFinite(dy) ? Math.round(dy) : 0 }];
     }
     if (step.type === "repeat" && Array.isArray(step.steps)) return [{ ...step, steps: normalizeSteps(step.steps) }];
     return [step];

@@ -63,6 +63,15 @@ function stepCues(steps: Step[]): Cue[] {
       cues.push({ type: "wait", ...span(waitMs(step.ms), realMs(step.ms)) });
       continue;
     }
+    if (step.type === "randomWait") {
+      const ms = Math.round((step.minMs + step.maxMs) / 2);
+      cues.push({ type: "wait", ...span(waitMs(ms), realMs(ms)) });
+      continue;
+    }
+    if (step.type === "scroll") {
+      cues.push({ type: "wait", ...span(420, 180) });
+      continue;
+    }
     if (step.type === "key" || step.type === "mouse") {
       const input = asInput(step.type === "key" ? step.key : step.button);
       if (step.action === "down") cues.push({ type: "key", input, down: true, ...span(tapMs(step.holdMs ?? 16), realMs(step.holdMs ?? 16)) });

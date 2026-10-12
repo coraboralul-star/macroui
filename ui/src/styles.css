@@ -3831,6 +3831,28 @@ button.ghost.is-danger:hover:not(:disabled) {
   color: inherit;
 }
 
+.ev-dir {
+  padding: 0 2px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  letter-spacing: 0;
+  font-size: inherit;
+}
+
+.ev small.ev-range {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 1px 6px;
+  justify-content: center;
+  align-items: center;
+  text-align: left;
+}
+
+.ev small.ev-range input {
+  width: 2.2rem;
+}
+
 .ev-act {
   box-sizing: border-box;
   width: 3.5rem;

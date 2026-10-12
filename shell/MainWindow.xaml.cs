@@ -864,6 +864,7 @@ public partial class MainWindow : Window
         var up = ReadNames(node?["up"]);
         var dx = AsInt(node?["x"]);
         var dy = AsInt(node?["y"]);
+        var wheel = AsInt(node?["wheel"]);
         var abs = AsBool(node?["abs"]);
         var ax = AsInt(node?["ax"]);
         var ay = AsInt(node?["ay"]);
@@ -873,7 +874,7 @@ public partial class MainWindow : Window
         var keyed = down.Count > 0 || up.Count > 0;
         if (!_boardLock.Wait(up.Count > 0 ? 1500 : 40))
         {
-            if (keyed)
+            if (keyed || wheel != 0)
             {
                 _hidPending.Enqueue(json);
                 while (_hidPending.Count > 16)
@@ -885,7 +886,7 @@ public partial class MainWindow : Window
         {
             while (_hidPending.Count > 0)
                 WriteHidLocked(_hidPending.Dequeue());
-            WriteHidLocked(down, up, dx, dy, abs, ax, ay);
+            WriteHidLocked(down, up, dx, dy, wheel, abs, ax, ay);
         }
         finally
         {
@@ -898,10 +899,10 @@ public partial class MainWindow : Window
         JsonNode? node;
         try { node = JsonNode.Parse(json); }
         catch { return; }
-        WriteHidLocked(ReadNames(node?["down"]), ReadNames(node?["up"]), AsInt(node?["x"]), AsInt(node?["y"]), AsBool(node?["abs"]), AsInt(node?["ax"]), AsInt(node?["ay"]));
+        WriteHidLocked(ReadNames(node?["down"]), ReadNames(node?["up"]), AsInt(node?["x"]), AsInt(node?["y"]), AsInt(node?["wheel"]), AsBool(node?["abs"]), AsInt(node?["ax"]), AsInt(node?["ay"]));
     }
 
-    void WriteHidLocked(List<string> down, List<string> up, int dx, int dy, bool abs, int ax, int ay)
+    void WriteHidLocked(List<string> down, List<string> up, int dx, int dy, int wheel, bool abs, int ax, int ay)
     {
         try
         {
@@ -929,11 +930,12 @@ public partial class MainWindow : Window
                 dx = 0;
                 dy = 0;
             }
-            else if (mouseTouch || dx != 0 || dy != 0)
+            else if (mouseTouch || dx != 0 || dy != 0 || wheel != 0)
             {
-                BoardLine(serial, $"M {bits} {dx} {dy} 0");
+                BoardLine(serial, $"M {bits} {dx} {dy} {wheel}");
                 dx = 0;
                 dy = 0;
+                wheel = 0;
                 mouseTouch = false;
             }
             foreach (var raw in up)
@@ -947,6 +949,8 @@ public partial class MainWindow : Window
                 else if (HidMap.KeyUsage(name, out var usage))
                     BoardLine(serial, $"K {usage} 0");
             }
+            if (wheel != 0)
+                BoardLine(serial, $"M {bits} 0 0 {wheel}");
             if (mouseTouch)
                 BoardLine(serial, $"M {bits} 0 0 0");
             _mouseBits = bits;

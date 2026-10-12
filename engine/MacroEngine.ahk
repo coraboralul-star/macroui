@@ -419,6 +419,7 @@ class Runner {
         this.paused := false
         this.moveX := 0
         this.moveY := 0
+        this.wheel := 0
         this.hasGoto := false
         this.gotoX := 0
         this.gotoY := 0
@@ -562,12 +563,14 @@ class Runner {
         this.echoDown := Map()
         this.moveX := 0
         this.moveY := 0
+        this.wheel := 0
         this.hasGoto := false
     }
 
     Advance(now) {
         this.moveX := 0
         this.moveY := 0
+        this.wheel := 0
         this.hasGoto := false
         this.pressedNow := Map()
         this.releasedNow := false
@@ -705,6 +708,11 @@ class Runner {
         ; blocks. After-release (burst) still runs after both paths.
         if (this.tookShort && this.stack.Length = 1 && kind != "burst" && kind != "ifShort")
             return ""
+        if (kind = "randomWait") {
+            this.scanWait := false
+            ms := Engine.RandomWaitMs(Field(step, "minMs", 0), Field(step, "maxMs", 0)) / this.speed
+            return this.ArmWait(now, ms)
+        }
         if (kind = "wait" || kind = "scanWait") {
             if (kind = "scanWait") {
                 if (this.trigger != "" && !Engine.FingerDown(this.trigger)) {
@@ -769,6 +777,10 @@ class Runner {
             y := this.Clamp(Round(AsNum(Field(step, "y", 0), 0)))
             this.moveX += x
             this.moveY += y
+            return ""
+        }
+        if (kind = "scroll") {
+            this.wheel += Round(AsNum(Field(step, "dy", 0), 0))
             return ""
         }
         if (kind = "goto") {
@@ -1632,8 +1644,10 @@ class Engine {
             }
         }
         this.FlushPending()
-        this.RemoveDone()
+        ; Publish before dropping finished runners. A scroll or move on the last
+        ; step is a one-shot, and RemoveDone would throw it away with the runner.
         this.Publish(now)
+        this.RemoveDone()
         this.Broadcast(false)
     }
 
@@ -2614,14 +2628,16 @@ class Engine {
     static Publish(now) {
         dx := 0
         dy := 0
+        wheel := 0
         hasAbs := false
         absX := 0
         absY := 0
         for r in this.runners {
-            if (r.done || r.paused)
+            if r.paused
                 continue
             dx += r.moveX
             dy += r.moveY
+            wheel += r.wheel
             if r.hasGoto {
                 hasAbs := true
                 absX := r.gotoX
@@ -2630,6 +2646,7 @@ class Engine {
             }
             r.moveX := 0
             r.moveY := 0
+            r.wheel := 0
         }
         if (dx > 16000)
             dx := 16000
@@ -2673,27 +2690,28 @@ class Engine {
             if this.applied.Has(k)
                 this.applied.Delete(k)
         if this.dry {
-            this.sent.Push(Map("down", downs, "up", ups, "x", dx, "y", dy))
+            this.sent.Push(Map("down", downs, "up", ups, "x", dx, "y", dy, "wheel", wheel))
             return
         }
         if (hasAbs && !this.PassBoard()) {
-            this.Emit(downs, ups, 0, 0)
+            this.Emit(downs, ups, 0, 0, false, 0, 0, wheel)
             this.MoveAbs(absX, absY)
         } else if (hasAbs && this.PassBoard())
-            this.Emit(downs, ups, 0, 0, true, absX, absY)
+            this.Emit(downs, ups, 0, 0, true, absX, absY, wheel)
         else
-            this.Emit(downs, ups, dx, dy)
+            this.Emit(downs, ups, dx, dy, false, 0, 0, wheel)
     }
 
-    static Emit(downs, ups, dx, dy, abs := false, ax := 0, ay := 0) {
+    static Emit(downs, ups, dx, dy, abs := false, ax := 0, ay := 0, wheel := 0) {
         if (this.outputMode != "software") {
-            if (!downs.Length && !ups.Length && dx = 0 && dy = 0 && !abs)
+            hidWheel := this.HidWheel(wheel)
+            if (!downs.Length && !ups.Length && dx = 0 && dy = 0 && hidWheel = 0 && !abs)
                 return
             if (abs)
-                this.SendRaw(this.HidJson(downs, ups, 0, 0, true, ax, ay))
+                this.SendRaw(this.HidJson(downs, ups, 0, 0, true, ax, ay, hidWheel))
             else {
                 this.HidScale(&dx, &dy)
-                this.SendRaw(this.HidJson(downs, ups, dx, dy))
+                this.SendRaw(this.HidJson(downs, ups, dx, dy, false, 0, 0, hidWheel))
             }
             for k in downs
                 this.QueueHidEcho(k, true)
@@ -2706,6 +2724,7 @@ class Engine {
             parts .= SendPiece(this.OutName(k), "down")
         for k in ups
             parts .= SendPiece(this.OutName(k), "up")
+        parts .= this.WheelSend(wheel)
         if (parts != "") {
             this.sendNow := Map()
             for k in downs
@@ -2736,9 +2755,42 @@ class Engine {
         this.mouseAtY += Integer(dy)
     }
 
-    static HidJson(downs, ups, dx, dy, abs := false, ax := 0, ay := 0) {
+    ; dy on a scroll step is positive for down. The board wheel is the HID sign, positive for up.
+    static HidWheel(dy) {
+        return -Round(AsNum(dy, 0))
+    }
+
+    static WheelSend(dy) {
+        n := Round(AsNum(dy, 0))
+        if (n = 0)
+            return ""
+        if (n > 0)
+            return "{WheelDown " n "}"
+        return "{WheelUp " Abs(n) "}"
+    }
+
+    static WaitSpan(minMs, maxMs, &lo, &hi) {
+        lo := Max(0, Round(AsNum(minMs, 0)))
+        hi := Max(0, Round(AsNum(maxMs, 0)))
+        if (lo > hi) {
+            hold := lo
+            lo := hi
+            hi := hold
+        }
+    }
+
+    static RandomWaitMs(minMs, maxMs) {
+        lo := 0
+        hi := 0
+        this.WaitSpan(minMs, maxMs, &lo, &hi)
+        if (lo = hi)
+            return lo
+        return Random(lo, hi)
+    }
+
+    static HidJson(downs, ups, dx, dy, abs := false, ax := 0, ay := 0, wheel := 0) {
         extra := abs ? ',"abs":true,"ax":' Integer(ax) ',"ay":' Integer(ay) : ""
-        return '{"v":1,"type":"hid","down":' this.HidKeys(downs) ',"up":' this.HidKeys(ups) ',"x":' Integer(dx) ',"y":' Integer(dy) extra '}'
+        return '{"v":1,"type":"hid","down":' this.HidKeys(downs) ',"up":' this.HidKeys(ups) ',"x":' Integer(dx) ',"y":' Integer(dy) ',"wheel":' Integer(wheel) extra '}'
     }
 
     static HidScale(&dx, &dy) {
@@ -3253,6 +3305,25 @@ RunChecks(fails) {
     fails := Check(InStr(hid, '"LButton"') && InStr(hid, '"w"') && InStr(hid, '"space"') && InStr(hid, '"x":4') && InStr(hid, '"y":-3') && InStr(hid, '"type":"hid"') && !InStr(hid, '"RButton"'), "hid json keeps logical names", fails)
     absHid := Engine.HidJson([], [], 0, 0, true, 1565, 75)
     fails := Check(InStr(absHid, '"abs":true') && InStr(absHid, '"ax":1565') && InStr(absHid, '"ay":75'), "hid json abs goto", fails)
+    fails := Check(Engine.WheelSend(3) = "{WheelDown 3}", "scroll down", fails)
+    fails := Check(Engine.WheelSend(-3) = "{WheelUp 3}", "scroll up", fails)
+    fails := Check(Engine.WheelSend(0) = "", "zero scroll sends nothing", fails)
+    fails := Check(Engine.HidWheel(-3) = 3, "scroll up is a positive board wheel", fails)
+    fails := Check(Engine.HidWheel(3) = -3, "scroll down is a negative board wheel", fails)
+    spanLo := 0
+    spanHi := 0
+    Engine.WaitSpan(70, 40, &spanLo, &spanHi)
+    fails := Check(spanLo = 40 && spanHi = 70, "random wait swaps the range", fails)
+    Engine.WaitSpan(-8, 12, &spanLo, &spanHi)
+    fails := Check(spanLo = 0 && spanHi = 12, "random wait clamps the range", fails)
+    fails := Check(Engine.RandomWaitMs(15, 15) = 15, "random wait uses a fixed range", fails)
+    loop 30 {
+        rolled := Engine.RandomWaitMs(70, 40)
+        if (rolled < 40 || rolled > 70) {
+            fails := Check(false, "random wait stays inside the range", fails)
+            break
+        }
+    }
     fails := Check(Engine.OutName("LButton") = "RButton", "swap left sends right", fails)
     fails := Check(Engine.OutName("RButton") = "LButton", "swap right sends left", fails)
     fails := Check(Engine.OutName("MButton") = "MButton", "swap leaves middle", fails)
