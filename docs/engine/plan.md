@@ -71,10 +71,10 @@ The #49 fake-clock harness lands before the first block port in #46. The trace c
 | #38 analysis doc | No. It is a reading of `engine/MacroEngine.ahk`. |
 | #49 first slice: run the existing AHK `--self-test` in CI, and a fake-clock harness | No, once the analysis rules exist. |
 | #39 baseline numbers | Done on this PC. `docs/engine/benchmarks.md`. |
-| #40 language micro-benchmarks | Yes. Next. The baseline does not choose C or C++. |
+| #40 language micro-benchmarks | Done on this PC. `docs/engine/decision-language.md`. C17. |
 | #53 comparison | Yes, same PC, same harness. |
 | Hooks, SendInput, and the board | Yes. Linux CI covers the core with a fake clock. |
 
 ## Next step
 
-`docs/engine/benchmarks.md` is the #39 AHK baseline from this PC. #40 is next: the same micro-benchmarks in C17 and C++20, then `docs/engine/decision-language.md`. Do not start the native engine, and do not create `engine-native/`, until that decision is written.
+`docs/engine/decision-language.md` chooses C17. #41 is next: the architecture doc and an empty native project that builds in CI. The language rules in the decision doc stay as written. MMCSS stays off; that measurement is already in the decision doc.
