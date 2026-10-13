@@ -76,4 +76,4 @@ The #49 fake-clock harness lands before the first block port in #46. The trace c
 
 ## Next step
 
-Write `docs/engine/ahk-analysis.md` (#38). Do not start the native engine, and do not choose the language, until #39 has numbers from the PC.
+`docs/engine/ahk-analysis.md` is the #38 reading of the current script. Do not start the native engine, and do not choose the language, until #39 has numbers from the PC.
