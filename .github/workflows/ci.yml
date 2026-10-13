@@ -52,3 +52,33 @@ jobs:
         run: dotnet build shell/MacroShell.csproj
       - name: Build launcher
         run: dotnet build launcher/Vendetta.csproj
+
+  engine-linux:
+    name: Native engine core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure
+        run: cmake -S engine-native -B engine-native/build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build engine-native/build
+      - name: Version
+        run: test "$(engine-native/build/macroui-engine)" = "macroui-engine 0"
+
+  engine-windows:
+    name: Native engine
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure
+        run: cmake -S engine-native -B engine-native/build -A x64
+      - name: Build
+        run: cmake --build engine-native/build --config Release
+      - name: Version
+        shell: pwsh
+        run: |
+          $line = (& "engine-native/build/macroui-engine.exe" | Out-String).Trim()
+          if ($line -ne "macroui-engine 0") {
+            Write-Error "version was [$line]"
+            exit 1
+          }

@@ -2,7 +2,7 @@
 
 This is the working plan for the native engine. GitHub issues #37-#54 are the task list. This file is the corrected order and the behaviour rules. When an issue body disagrees with this file, follow this file and update the issue to match.
 
-Nothing in `engine-native/` is built yet. Phase 0 starts at #38.
+`engine-native/` is the empty C17 program from #41. It prints `macroui-engine 0` and exits. It is not the resident engine. Phase 0 started at #38.
 
 ## Already closed
 
@@ -72,9 +72,10 @@ The #49 fake-clock harness lands before the first block port in #46. The trace c
 | #49 first slice: run the existing AHK `--self-test` in CI, and a fake-clock harness | No, once the analysis rules exist. |
 | #39 baseline numbers | Done on this PC. `docs/engine/benchmarks.md`. |
 | #40 language micro-benchmarks | Done on this PC. `docs/engine/decision-language.md`. C17. |
+| #41 architecture and empty project | No. `docs/engine/architecture.md`. CI builds `engine-native/`. |
 | #53 comparison | Yes, same PC, same harness. |
 | Hooks, SendInput, and the board | Yes. Linux CI covers the core with a fake clock. |
 
 ## Next step
 
-`docs/engine/decision-language.md` chooses C17. #41 is next: the architecture doc and an empty native project that builds in CI. The language rules in the decision doc stay as written. MMCSS stays off; that measurement is already in the decision doc.
+The architecture doc and the empty `engine-native/` program are #41. #42 is next: `docs/engine/ipc-protocol.md` and the hex vectors. No shell code. The language stays C17. MMCSS stays off. Playback priority is the table in `docs/engine/architecture.md`. The language-bench pin stays a measurement.
