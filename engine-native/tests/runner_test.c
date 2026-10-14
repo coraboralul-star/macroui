@@ -39,6 +39,21 @@ static uint16_t kid(const char *name)
     return id;
 }
 
+static int report_has(const struct engine_play *state, uint16_t id)
+{
+    int n;
+    int i;
+
+    if (!state)
+        return 0;
+    n = engine_report_down_count(&state->last);
+    for (i = 0; i < n; i++) {
+        if (engine_report_down(&state->last, i) == id)
+            return 1;
+    }
+    return 0;
+}
+
 static int has_id(struct engine_play *state, int64_t now, uint16_t id)
 {
     uint16_t ids[ENGINE_HOLD_CAP];
@@ -1535,16 +1550,15 @@ static void check_hold_loop(void)
            "block play full still presses the later down");
 
     memset(skip_steps, 0, sizeof skip_steps);
-    skip_steps[0].type = ENGINE_STEP_EDGE_HOLD;
-    skip_steps[1].type = ENGINE_STEP_SCAN_WAIT;
+    skip_steps[0].type = ENGINE_STEP_SCAN_WAIT;
     engine_macro_init(&loop);
     set_id(&loop, "rest");
     loop.steps = skip_steps;
-    loop.step_count = 2;
+    loop.step_count = 1;
     fresh();
     engine_play_start(&play, &loop, -1, 1);
     engine_play_tick(&play, 0);
-    expect(live_id(&play, "rest") == NULL, "edgeHold and scanWait are still skipped");
+    expect(live_id(&play, "rest") == NULL, "scanWait is still skipped");
 }
 
 static void check_swap_loop(void)
@@ -2780,6 +2794,566 @@ static void check_once_held(void)
            "gapMs uses the arm conversion at a fast clock");
 }
 
+static void fill_edge(struct engine_step *step, uint16_t key, int32_t arm, int32_t gap,
+                      int32_t hold, int32_t rest, int spam, int ignore, int pause_block,
+                      uint32_t first, uint32_t count)
+{
+    memset(step, 0, sizeof *step);
+    step->type = ENGINE_STEP_EDGE_HOLD;
+    step->key = key;
+    step->a = arm;
+    step->b = gap;
+    step->d = hold;
+    step->e = rest;
+    step->action = engine_edge_action(spam, ignore, pause_block);
+    step->first = first;
+    step->count = count;
+}
+
+static void check_edge_hold(void)
+{
+    struct engine_play *state = fresh();
+    struct engine_fingers fingers;
+    struct engine_step steps[8];
+    struct engine_step watch[2];
+    struct engine_macro tap;
+    struct engine_macro spam;
+    struct engine_macro other;
+    struct engine_macro catalog[3];
+    struct engine_runner *runner;
+    uint16_t side = kid("XButton1");
+    uint16_t side2 = kid("XButton2");
+    uint16_t z = kid("z");
+    uint16_t t = kid("t");
+    uint16_t a = kid("a");
+    uint16_t click = kid("LButton");
+    uint16_t right = kid("RButton");
+    uint16_t f = kid("f");
+
+    (void)state;
+    expect(engine_step_kind("tapHold") == ENGINE_STEP_EDGE_HOLD, "tap hold kind");
+    expect(engine_ignore_mode("macro") == ENGINE_IGNORE_MACRO, "macro ignore");
+    expect(engine_ignore_mode("both") == ENGINE_IGNORE_BOTH, "both ignore");
+    expect(engine_ignore_mode("once") == ENGINE_IGNORE_OFF && engine_ignore_mode("nope") == ENGINE_IGNORE_OFF,
+           "once is not an ignore lock");
+    expect(engine_pause_mode("once") == 0, "once is not a lock");
+    expect(engine_pause_mode(" block ") == 1 && engine_pause_mode("Block") == 1, "block stays a mute");
+    expect(engine_pause_mode("true") == 0 && engine_pause_mode(NULL) == 0, "other pause names stay off");
+
+    memset(steps, 0, sizeof steps);
+    fill_edge(&steps[0], z, 5, 80, 18, 18, 0, ENGINE_IGNORE_OFF, 0, 1, 1);
+    steps[1].key = t;
+    engine_macro_init(&tap);
+    set_id(&tap, "tap-z");
+    tap.steps = steps;
+    tap.step_count = 2;
+    tap.top_count = 1;
+    tap.trigger = side;
+    tap.mode = ENGINE_MODE_WHILE_HELD;
+    tap.speed = 1.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    press(&fingers, &play, t, 0);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "tap-z");
+    expect(runner != NULL && has_id(&play, 0, z) && has_id(&play, 0, side) && report_has(&play, z),
+           "tap hold presses z and the trigger");
+    engine_play_tick(&play, 5);
+    expect(live_id(&play, "tap-z") != NULL && has_id(&play, 5, z) && has_id(&play, 5, side) &&
+               report_has(&play, z) == 0,
+           "tap hold stays down while the watched key is up");
+    engine_play_tick(&play, 400);
+    expect(report_has(&play, z) && has_id(&play, 400, z), "tap hold repeats z like a windows hold");
+    press(&fingers, &play, t, 1);
+    engine_play_tick(&play, 410);
+    expect(has_id(&play, 410, z) && has_id(&play, 410, side), "tap hold waits before the release");
+    engine_play_tick(&play, 415);
+    expect(has_id(&play, 415, z) == 0 && has_id(&play, 415, side) == 0,
+           "tap hold releases z and the trigger");
+    engine_play_tick(&play, 495);
+    expect(has_id(&play, 495, z) && has_id(&play, 495, side) == 0,
+           "tap hold presses z again while the trigger is still held");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    press(&fingers, &play, t, 1);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 5);
+    engine_play_tick(&play, 10);
+    engine_play_tick(&play, 15);
+    press(&fingers, &play, side, 0);
+    engine_play_tick(&play, 95);
+    expect(live_id(&play, "tap-z") == NULL && has_id(&play, 95, z) == 0,
+           "letting go during the gap does not press z again");
+    engine_play_stop_all(&play);
+    expect(has_id(&play, 95, z) == 0 && has_id(&play, 95, side) == 0, "physical release clears z");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    press(&fingers, &play, t, 0);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 5);
+    expect(has_id(&play, 5, z) && has_id(&play, 5, side), "sprint stays down before release");
+    press(&fingers, &play, side, 0);
+    engine_play_tick(&play, 6);
+    expect(live_id(&play, "tap-z") == NULL && has_id(&play, 6, z) == 0 && has_id(&play, 6, side) == 0,
+           "releasing sprint while holding stops the repress");
+
+    memset(steps, 0, sizeof steps);
+    fill_edge(&steps[0], click, 5, 50, 18, 18, 1, ENGINE_IGNORE_OFF, 0, 1, 1);
+    steps[1].key = right;
+    engine_macro_init(&spam);
+    set_id(&spam, "spam-l");
+    spam.steps = steps;
+    spam.step_count = 2;
+    spam.top_count = 1;
+    spam.trigger = side2;
+    spam.mode = ENGINE_MODE_WHILE_HELD;
+    spam.speed = 1.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side2, 1);
+    press(&fingers, &play, right, 0);
+    engine_play_start(&play, &spam, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, click) && has_id(&play, 0, side2),
+           "spam starts with the click and the trigger down");
+    engine_play_tick(&play, 15);
+    expect(has_id(&play, 15, click) && has_id(&play, 15, side2) && report_has(&play, click) == 0,
+           "spam stays down through the click");
+    engine_play_tick(&play, 20);
+    expect(has_id(&play, 20, click) == 0 && has_id(&play, 20, side2),
+           "spam lets the click up and keeps the trigger");
+    engine_play_tick(&play, 40);
+    expect(has_id(&play, 40, click) && has_id(&play, 40, side2),
+           "spam clicks again while the trigger is held");
+    press(&fingers, &play, right, 1);
+    engine_play_tick(&play, 45);
+    expect(has_id(&play, 45, click) == 0 && has_id(&play, 45, side2),
+           "a tracked press stops the clicks and keeps the trigger");
+    engine_play_tick(&play, 70);
+    expect(has_id(&play, 70, click) == 0 && has_id(&play, 70, side2), "spam stays quiet for the pause");
+    engine_play_tick(&play, 95);
+    expect(has_id(&play, 95, click) && has_id(&play, 95, side2),
+           "spam clicks again after the pause while still held");
+    press(&fingers, &play, side2, 0);
+    engine_play_tick(&play, 100);
+    expect(live_id(&play, "spam-l") == NULL && has_id(&play, 100, click) == 0 &&
+               has_id(&play, 100, side2) == 0,
+           "letting go stops the spam");
+
+    memset(steps, 0, sizeof steps);
+    fill_edge(&steps[0], click, 0, 50, 18, 18, 1, ENGINE_IGNORE_OFF, 0, 4, 1);
+    steps[1].type = ENGINE_STEP_BURST;
+    steps[1].first = 2;
+    steps[1].count = 2;
+    steps[2].type = ENGINE_STEP_KEY;
+    steps[2].action = ENGINE_ACT_DOWN;
+    steps[2].key = a;
+    steps[3].type = ENGINE_STEP_WAIT;
+    steps[3].a = 40;
+    steps[4].key = right;
+    engine_macro_init(&spam);
+    set_id(&spam, "spam-after");
+    spam.steps = steps;
+    spam.step_count = 5;
+    spam.top_count = 2;
+    spam.trigger = side2;
+    spam.mode = ENGINE_MODE_WHILE_HELD;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side2, 1);
+    press(&fingers, &play, right, 0);
+    engine_play_start(&play, &spam, -1, 1);
+    engine_play_tick(&play, 0);
+    press(&fingers, &play, right, 1);
+    engine_play_tick(&play, 10);
+    expect(has_id(&play, 10, click) == 0 && has_id(&play, 10, side2),
+           "tracked press pauses spam before after release");
+    press(&fingers, &play, side2, 0);
+    engine_play_tick(&play, 20);
+    runner = live_id(&play, "spam-after");
+    expect(runner != NULL && has_id(&play, 20, a) && has_id(&play, 20, click) == 0,
+           "letting go during the pause runs after release");
+
+    memset(steps, 0, sizeof steps);
+    fill_edge(&steps[0], z, 5, 80, 18, 18, 0, ENGINE_IGNORE_MACRO, 0, 1, 1);
+    steps[0].f = 150;
+    steps[1].key = t;
+    memset(watch, 0, sizeof watch);
+    watch[0].type = ENGINE_STEP_KEY;
+    watch[0].action = ENGINE_ACT_DOWN;
+    watch[0].key = t;
+    engine_macro_init(&tap);
+    set_id(&tap, "lock-z");
+    tap.steps = steps;
+    tap.step_count = 2;
+    tap.top_count = 1;
+    tap.trigger = side;
+    tap.mode = ENGINE_MODE_WHILE_HELD;
+    engine_macro_init(&spam);
+    set_id(&spam, "spam-t");
+    spam.steps = watch;
+    spam.step_count = 1;
+    spam.top_count = 1;
+    spam.trigger = f;
+    spam.mode = ENGINE_MODE_ONCE;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    press(&fingers, &play, t, 0);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    press(&fingers, &play, t, 1);
+    engine_play_tick(&play, 10);
+    engine_play_tick(&play, 15);
+    expect(has_id(&play, 15, z) == 0, "lock takes the first tracked press");
+    engine_play_tick(&play, 95);
+    expect(has_id(&play, 95, z), "lock returns to hold after the first repress");
+    press(&fingers, &play, t, 0);
+    engine_play_tick(&play, 100);
+    press(&fingers, &play, t, 1);
+    engine_play_tick(&play, 110);
+    engine_play_tick(&play, 115);
+    expect(has_id(&play, 115, z) == 0, "macro lock still takes a physical press inside the window");
+    engine_play_tick(&play, 195);
+    expect(has_id(&play, 195, z), "macro lock returns to hold after a physical press");
+    press(&fingers, &play, t, 0);
+    engine_play_start(&play, &spam, -1, 1);
+    engine_play_flush(&play);
+    engine_play_advance(&play, 200);
+    engine_play_publish(&play, 200);
+    press(&fingers, &play, t, 1);
+    engine_play_tick(&play, 210);
+    engine_play_tick(&play, 215);
+    expect(has_id(&play, 215, z), "macro lock skips a sent key inside the window");
+
+    memset(steps, 0, sizeof steps);
+    fill_edge(&steps[0], z, 5, 80, 18, 18, 0, ENGINE_IGNORE_BOTH, 0, 1, 1);
+    steps[0].f = 150;
+    steps[1].key = t;
+    engine_macro_init(&tap);
+    set_id(&tap, "lock-both");
+    tap.steps = steps;
+    tap.step_count = 2;
+    tap.top_count = 1;
+    tap.trigger = side;
+    tap.mode = ENGINE_MODE_WHILE_HELD;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    press(&fingers, &play, t, 0);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    press(&fingers, &play, t, 1);
+    engine_play_tick(&play, 10);
+    engine_play_tick(&play, 15);
+    engine_play_tick(&play, 95);
+    press(&fingers, &play, t, 0);
+    engine_play_tick(&play, 100);
+    press(&fingers, &play, t, 1);
+    engine_play_tick(&play, 110);
+    engine_play_tick(&play, 115);
+    expect(has_id(&play, 115, z), "both lock skips a physical press inside the window");
+    press(&fingers, &play, t, 0);
+    engine_play_tick(&play, 200);
+    press(&fingers, &play, t, 1);
+    engine_play_tick(&play, 250);
+    engine_play_tick(&play, 260);
+    expect(has_id(&play, 260, z) == 0, "a rejected press does not refresh the lock");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    press(&fingers, &play, t, 0);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    press(&fingers, &play, t, 1);
+    engine_play_tick(&play, 10);
+    engine_play_tick(&play, 15);
+    engine_play_tick(&play, 95);
+    press(&fingers, &play, t, 0);
+    engine_play_tick(&play, 100);
+    press(&fingers, &play, t, 1);
+    engine_play_tick(&play, 270);
+    engine_play_tick(&play, 275);
+    expect(has_id(&play, 275, z) == 0, "both lock takes a press after the window");
+
+    memset(watch, 0, sizeof watch);
+    watch[0].type = ENGINE_STEP_WAIT;
+    watch[0].a = 50;
+    engine_macro_init(&spam);
+    set_id(&spam, "spam-t");
+    spam.steps = watch;
+    spam.step_count = 1;
+    spam.trigger = t;
+    spam.mode = ENGINE_MODE_TOGGLE;
+    engine_macro_init(&other);
+    set_id(&other, "other-f");
+    other.steps = watch;
+    other.step_count = 1;
+    other.trigger = f;
+    other.mode = ENGINE_MODE_TOGGLE;
+    memset(steps, 0, sizeof steps);
+    fill_edge(&steps[0], z, 5, 80, 18, 18, 0, ENGINE_IGNORE_OFF, 0, 1, 2);
+    steps[1].key = t;
+    steps[2].key = side2;
+    engine_macro_init(&tap);
+    set_id(&tap, "pause-z");
+    tap.steps = steps;
+    tap.step_count = 3;
+    tap.top_count = 1;
+    tap.trigger = side;
+    tap.mode = ENGINE_MODE_WHILE_HELD;
+    tap.advanced = 1;
+    catalog[0] = tap;
+    catalog[1] = spam;
+    catalog[2] = other;
+    fresh();
+    engine_play_set_macros(&play, catalog, 3);
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    engine_play_start(&play, &spam, -1, 1);
+    engine_play_start(&play, &other, -1, 1);
+    engine_play_flush(&play);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "spam-t");
+    expect(runner != NULL && runner->paused == 0 && engine_play_muted(&play, "spam-t") == 0 &&
+               engine_play_muted(&play, "other-f") == 0,
+           "once leaves tracked macros running with no lock");
+
+    fill_edge(&steps[0], z, 5, 80, 18, 18, 0, ENGINE_IGNORE_OFF, 1, 1, 2);
+    steps[1].key = t;
+    steps[2].key = side2;
+    engine_macro_init(&tap);
+    set_id(&tap, "block-z");
+    tap.steps = steps;
+    tap.step_count = 3;
+    tap.top_count = 1;
+    tap.trigger = side;
+    tap.mode = ENGINE_MODE_WHILE_HELD;
+    tap.advanced = 1;
+    catalog[0] = tap;
+    fresh();
+    engine_play_set_macros(&play, catalog, 3);
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    press(&fingers, &play, t, 0);
+    engine_play_start(&play, &spam, -1, 1);
+    engine_play_start(&play, &other, -1, 1);
+    engine_play_flush(&play);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "spam-t");
+    expect(runner != NULL && runner->paused && engine_play_muted(&play, "spam-t"),
+           "block mutes a tracked macro");
+    runner = live_id(&play, "other-f");
+    expect(runner != NULL && runner->paused == 0 && engine_play_muted(&play, "other-f") == 0,
+           "block leaves other macros alone");
+    engine_play_stop(&play, "block-z");
+    runner = live_id(&play, "spam-t");
+    expect(runner != NULL && runner->paused == 0 && engine_play_muted(&play, "spam-t") == 0,
+           "release unmutes the tracked macro");
+
+    memset(steps, 0, sizeof steps);
+    fill_edge(&steps[0], z, 5, 80, 18, 18, 0, ENGINE_IGNORE_OFF, 0, 1, 1);
+    steps[1].key = t;
+    engine_macro_init(&tap);
+    set_id(&tap, "fast");
+    tap.steps = steps;
+    tap.step_count = 2;
+    tap.top_count = 1;
+    tap.trigger = side;
+    tap.mode = ENGINE_MODE_WHILE_HELD;
+    tap.speed = 2.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    press(&fingers, &play, t, 0);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "fast");
+    expect(runner != NULL && runner->wait_until == 5, "the 5 ms poll is not divided by speed");
+    engine_play_tick(&play, 5);
+    press(&fingers, &play, t, 1);
+    engine_play_tick(&play, 10);
+    runner = live_id(&play, "fast");
+    expect(runner != NULL && runner->wait_until == 13 && has_id(&play, 10, z),
+           "armMs is divided by speed");
+    engine_play_tick(&play, 13);
+    runner = live_id(&play, "fast");
+    expect(runner != NULL && runner->wait_until == 53 && has_id(&play, 13, z) == 0,
+           "gapMs is divided by speed at the wait");
+    engine_play_tick(&play, 53);
+    expect(has_id(&play, 53, z), "the sped gap presses z again");
+
+    tap.speed = 1.0;
+    steps[0].b = 0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    press(&fingers, &play, t, 1);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 5);
+    engine_play_tick(&play, 10);
+    runner = live_id(&play, "fast");
+    expect(runner != NULL && runner->wait_until == 11 && has_id(&play, 10, z) == 0,
+           "a gap of 0 still waits 1 ms");
+    engine_play_tick(&play, 11);
+    expect(has_id(&play, 11, z), "a gap of 0 presses z after that wait");
+
+    steps[0].b = -5;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    press(&fingers, &play, t, 1);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 5);
+    engine_play_tick(&play, 10);
+    runner = live_id(&play, "fast");
+    expect(runner != NULL && runner->wait_until == 11, "a negative gap still waits 1 ms");
+
+    memset(steps, 0, sizeof steps);
+    fill_edge(&steps[0], z, 5, 80, 18, 18, 0, ENGINE_IGNORE_OFF, 0, 0, 0);
+    engine_macro_init(&tap);
+    set_id(&tap, "empty");
+    tap.steps = steps;
+    tap.step_count = 1;
+    tap.top_count = 1;
+    tap.trigger = 0;
+    tap.mode = ENGINE_MODE_WHILE_HELD;
+    fresh();
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 20);
+    expect(live_id(&play, "empty") != NULL && has_id(&play, 20, z),
+           "an empty trigger does not stop the hold");
+
+    tap.trigger = side;
+    set_id(&tap, "missing");
+    fresh();
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 1);
+    expect(live_id(&play, "missing") == NULL && has_id(&play, 1, z) == 0,
+           "a missing snapshot stops the hold");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    engine_play_set_fingers(&play, &fingers);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 1);
+    expect(live_id(&play, "missing") == NULL, "a key that was never reported stops the hold");
+
+    set_id(&tap, "stop");
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_ask_stop(&play, "stop");
+    engine_play_tick(&play, 1);
+    expect(live_id(&play, "stop") == NULL && has_id(&play, 1, z) == 0, "stopping ends a tap hold");
+
+    memset(steps, 0, sizeof steps);
+    fill_edge(&steps[0], click, 5, 50, 18, 18, 1, ENGINE_IGNORE_OFF, 0, 0, 0);
+    engine_macro_init(&spam);
+    set_id(&spam, "stop-spam");
+    spam.steps = steps;
+    spam.step_count = 1;
+    spam.top_count = 1;
+    spam.trigger = side2;
+    spam.mode = ENGINE_MODE_WHILE_HELD;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side2, 1);
+    engine_play_start(&play, &spam, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_ask_stop(&play, "stop-spam");
+    engine_play_tick(&play, 1);
+    expect(live_id(&play, "stop-spam") == NULL && has_id(&play, 1, click) == 0,
+           "stopping ends spam");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_IF_SHORT;
+    steps[0].a = 150;
+    steps[0].b = 0;
+    fill_edge(&steps[1], z, 5, 80, 18, 18, 0, ENGINE_IGNORE_OFF, 0, 0, 0);
+    steps[2].type = ENGINE_STEP_BURST;
+    steps[2].first = 3;
+    steps[2].count = 2;
+    steps[3].type = ENGINE_STEP_KEY;
+    steps[3].action = ENGINE_ACT_DOWN;
+    steps[3].key = a;
+    steps[4].type = ENGINE_STEP_WAIT;
+    steps[4].a = 40;
+    engine_macro_init(&tap);
+    set_id(&tap, "short");
+    tap.steps = steps;
+    tap.step_count = 5;
+    tap.top_count = 3;
+    tap.trigger = side;
+    tap.mode = ENGINE_MODE_ONCE;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 0);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "short");
+    expect(runner != NULL && runner->took_short && has_id(&play, 0, z) == 0 && has_id(&play, 0, a),
+           "took_short skips edgeHold and still runs burst");
+
+    memset(steps, 0, sizeof steps);
+    fill_edge(&steps[0], z, 5, 80, 18, 18, 0, ENGINE_IGNORE_OFF, 0, 0, 0);
+    engine_macro_init(&tap);
+    set_id(&tap, "bare");
+    tap.steps = steps;
+    tap.step_count = 1;
+    tap.top_count = 1;
+    tap.trigger = side;
+    fresh();
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_flush(&play);
+    engine_runner_advance(&play.runners[0], 0, NULL, NULL);
+    expect(has_id(&play, 0, z) && play.runners[0].done == 0, "edgeHold holds on the bare runner");
+    engine_runner_advance(&play.runners[0], 5, NULL, NULL);
+    expect(play.runners[0].done && has_id(&play, 5, z) == 0,
+           "edgeHold on the bare runner counts a missing finger as up");
+
+    play.freq = 10000000;
+    fresh();
+    play.freq = 10000000;
+    memset(steps, 0, sizeof steps);
+    fill_edge(&steps[0], z, 5, 80, 18, 18, 0, ENGINE_IGNORE_OFF, 0, 1, 1);
+    steps[1].key = t;
+    engine_macro_init(&tap);
+    set_id(&tap, "clock");
+    tap.steps = steps;
+    tap.step_count = 2;
+    tap.top_count = 1;
+    tap.trigger = side;
+    tap.mode = ENGINE_MODE_WHILE_HELD;
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    press(&fingers, &play, t, 0);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "clock");
+    expect(runner != NULL && runner->wait_until == 50000, "the edge poll uses the fast clock");
+    engine_play_tick(&play, 4000000);
+    expect(report_has(&play, z), "the key repeat uses the fast clock");
+}
+
 int main(void)
 {
     check_names();
@@ -2803,6 +3377,7 @@ int main(void)
     check_burst();
     check_if_short();
     check_once_held();
+    check_edge_hold();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

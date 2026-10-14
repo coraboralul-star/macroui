@@ -306,6 +306,64 @@ int engine_goto_where(const char *name)
     return ENGINE_WHERE_SCREEN;
 }
 
+int engine_ignore_mode(const char *name)
+{
+    if (!name)
+        return ENGINE_IGNORE_OFF;
+    if (strcmp(name, "macro") == 0)
+        return ENGINE_IGNORE_MACRO;
+    if (strcmp(name, "both") == 0)
+        return ENGINE_IGNORE_BOTH;
+    return ENGINE_IGNORE_OFF;
+}
+
+int engine_pause_mode(const char *name)
+{
+    const char *start;
+    const char *end;
+    char buf[8];
+    int n;
+    int i;
+
+    if (!name)
+        return 0;
+    start = name;
+    while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n')
+        start++;
+    end = start + strlen(start);
+    while (end > start &&
+           (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n'))
+        end--;
+    n = (int)(end - start);
+    if (n <= 0 || n >= (int)sizeof buf)
+        return 0;
+    for (i = 0; i < n; i++) {
+        char c = start[i];
+        if (c >= 'A' && c <= 'Z')
+            c = (char)(c - 'A' + 'a');
+        buf[i] = c;
+    }
+    buf[n] = '\0';
+    if (strcmp(buf, "block") == 0)
+        return 1;
+    return 0;
+}
+
+uint8_t engine_edge_action(int spam, int ignore, int pause_block)
+{
+    uint8_t action = 0;
+
+    if (spam)
+        action |= (uint8_t)ENGINE_EDGE_SPAM;
+    if (ignore == ENGINE_IGNORE_MACRO)
+        action |= (uint8_t)(ENGINE_IGNORE_MACRO << 1);
+    else if (ignore == ENGINE_IGNORE_BOTH)
+        action |= (uint8_t)(ENGINE_IGNORE_BOTH << 1);
+    if (pause_block)
+        action |= (uint8_t)ENGINE_EDGE_PAUSE_BLOCK;
+    return action;
+}
+
 int engine_has_hold_loop(const struct engine_step *steps, uint32_t count)
 {
     uint32_t i;
@@ -378,6 +436,15 @@ static int finger_down(const struct engine_play *play, uint16_t id);
 static int finger_seen(const struct engine_play *play, uint16_t id);
 static void release_frame_mute(struct engine_play *play, struct engine_runner *runner,
                                struct engine_frame *frame);
+static void release_edge_mute(struct engine_play *play, struct engine_runner *runner,
+                              struct engine_frame *frame);
+static int push_edge(struct engine_runner *runner, struct engine_play *play,
+                     const struct engine_step *step, int64_t now);
+static void note_sent(struct engine_play *play, uint16_t id, int64_t now);
+static int catalog_id(const struct engine_play *play, const struct engine_runner *owner,
+                      int32_t index, char *dst);
+static int mute_one(struct engine_play *play, const char *id);
+static void unmute_one(struct engine_play *play, const char *id);
 static int push_hold(struct engine_runner *runner, struct engine_play *play,
                      const struct engine_step *step);
 static void note_hold_release(struct engine_runner *runner, const struct engine_play *play);
@@ -391,11 +458,14 @@ static void mark_done(struct engine_runner *runner, struct engine_play *play)
         return;
     runner->done = 1;
     runner->paused = 0;
-    for (i = 0; i < runner->stack_count; i++)
+    for (i = 0; i < runner->stack_count; i++) {
         release_frame_mute(play, runner, &runner->stack[i]);
+        release_edge_mute(play, runner, &runner->stack[i]);
+    }
     runner->hold_count = 0;
     runner->pulse_count = 0;
     runner->pressed_count = 0;
+    runner->echo_count = 0;
     runner->stack_count = 0;
 }
 
@@ -729,6 +799,7 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
             pulse_del(runner, id);
             press_add(runner, id);
             runner->saw_up = 0;
+            note_sent(play, id, now);
             return ENGINE_ADV_CONT;
         }
         if (step->action == ENGINE_ACT_UP) {
@@ -767,6 +838,7 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
                 mark_done(runner, play);
                 return ENGINE_ADV_WAIT;
             }
+            note_sent(play, id, now);
         }
         return ENGINE_ADV_CONT;
     }
@@ -930,6 +1002,11 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
         frame->once_gap = step->a > 0 ? engine_scale_wait_ms((double)step->a, runner->speed) : 0;
         return ENGINE_ADV_CONT;
     }
+    if (step->type == ENGINE_STEP_EDGE_HOLD) {
+        if (!push_edge(runner, play, step, now))
+            return ENGINE_ADV_WAIT;
+        return ENGINE_ADV_WAIT;
+    }
     return ENGINE_ADV_CONT;
 }
 
@@ -1025,6 +1102,374 @@ static int finish_once(struct engine_runner *runner, struct engine_play *play, i
     return 1;
 }
 
+static void note_sent(struct engine_play *play, uint16_t id, int64_t now)
+{
+    if (!play || id == 0 || id > ENGINE_KEY_ID_MAX)
+        return;
+    play->last_sent[id] = now;
+    play->last_sent_ok[id] = 1;
+}
+
+static int64_t ticks_of(const struct engine_runner *runner, int64_t ms)
+{
+    int64_t freq = runner && runner->freq > 0 ? runner->freq : 1000;
+
+    if (ms <= 0)
+        return 0;
+    return engine_ms_to_ticks(ms, freq);
+}
+
+static int pulse_has(const struct engine_runner *runner, uint16_t id)
+{
+    int i;
+
+    if (!runner)
+        return 0;
+    for (i = 0; i < runner->pulse_count; i++) {
+        if (runner->pulses[i].id == id)
+            return 1;
+    }
+    return 0;
+}
+
+static int sent_down(const struct engine_play *play, uint16_t id)
+{
+    int i;
+
+    if (!play || id == 0)
+        return 0;
+    for (i = 0; i < play->runner_count; i++) {
+        const struct engine_runner *runner = &play->runners[i];
+        if (runner->done)
+            continue;
+        if (hold_has(runner, id) || pulse_has(runner, id))
+            return 1;
+    }
+    return 0;
+}
+
+static int sent_since(const struct engine_play *play, uint16_t id, int64_t since)
+{
+    if (!play || id == 0 || id > ENGINE_KEY_ID_MAX || !play->last_sent_ok[id])
+        return 0;
+    return play->last_sent[id] >= since;
+}
+
+static void echo_add(struct engine_runner *runner, uint16_t id)
+{
+    int i;
+
+    if (!runner || id == 0 || engine_is_mouse_button(id))
+        return;
+    for (i = 0; i < runner->echo_count; i++) {
+        if (runner->echo[i] == id)
+            return;
+    }
+    if (runner->echo_count >= ENGINE_HOLD_CAP)
+        return;
+    runner->echo[runner->echo_count++] = id;
+}
+
+/* 0 rejects. A reject leaves the lock time alone. */
+static int accept_watch(struct engine_runner *runner, struct engine_play *play,
+                        struct engine_frame *frame, int index, int64_t now)
+{
+    int mode;
+    int32_t ms;
+    uint16_t id;
+
+    if (!frame || index < 0 || index >= frame->edge_watch_n)
+        return 0;
+    mode = frame->edge_ignore;
+    ms = frame->edge_ignore_ms;
+    id = frame->edge_watch[index];
+    if (mode != ENGINE_IGNORE_OFF && ms > 0 && frame->edge_lock_set[index]) {
+        int64_t window = ticks_of(runner, ms);
+
+        if (now - frame->edge_lock[index] < window) {
+            if (mode == ENGINE_IGNORE_BOTH)
+                return 0;
+            if (mode == ENGINE_IGNORE_MACRO &&
+                (sent_down(play, id) || sent_since(play, id, frame->edge_lock[index])))
+                return 0;
+        }
+    }
+    frame->edge_lock[index] = now;
+    frame->edge_lock_set[index] = 1;
+    return 1;
+}
+
+static void repeat_hold(struct engine_runner *runner, struct engine_frame *frame, int64_t now)
+{
+    uint16_t key;
+
+    if (!runner || !frame)
+        return;
+    key = frame->edge_key;
+    if (key == 0 || engine_is_mouse_button(key) || !hold_has(runner, key))
+        return;
+    if (frame->edge_repeat_at == 0)
+        frame->edge_repeat_at = engine_arm_deadline(now, ticks_of(runner, ENGINE_KEY_DELAY_MS));
+    if (now < frame->edge_repeat_at)
+        return;
+    echo_add(runner, key);
+    frame->edge_repeat_at = engine_arm_deadline(now, ticks_of(runner, ENGINE_KEY_REPEAT_MS));
+}
+
+static void release_edge_mute(struct engine_play *play, struct engine_runner *runner,
+                              struct engine_frame *frame)
+{
+    int i;
+
+    if (!frame || !frame->edge_mute_on)
+        return;
+    frame->edge_mute_on = 0;
+    if (!play)
+        return;
+    for (i = 0; i < frame->edge_muted_n; i++) {
+        char id[ENGINE_ID_CAP];
+
+        if (!catalog_id(play, runner, frame->edge_muted[i], id))
+            continue;
+        unmute_one(play, id);
+    }
+}
+
+static void arm_edge_mute(struct engine_play *play, struct engine_runner *runner,
+                          struct engine_frame *frame)
+{
+    int i;
+    int w;
+
+    if (!play || !play->macros || !runner || !frame)
+        return;
+    for (i = 0; i < play->macro_count; i++) {
+        const struct engine_macro *macro = &play->macros[i];
+        int match = 0;
+
+        if (!macro->id[0] || same_id(macro->id, runner->id) || macro->trigger == 0)
+            continue;
+        for (w = 0; w < frame->edge_watch_n; w++) {
+            if (frame->edge_watch[w] == macro->trigger) {
+                match = 1;
+                break;
+            }
+        }
+        if (!match)
+            continue;
+        if (frame->edge_muted_n >= ENGINE_EDGE_MUTE_CAP)
+            break;
+        if (!mute_one(play, macro->id))
+            break;
+        frame->edge_muted[frame->edge_muted_n++] = i;
+        frame->edge_mute_on = 1;
+    }
+}
+
+static void copy_watch(struct engine_runner *runner, struct engine_frame *frame,
+                       const struct engine_step *step)
+{
+    uint32_t n;
+    uint32_t i;
+
+    if (!runner || !frame || !step || !runner->steps)
+        return;
+    if (step->first > runner->step_count)
+        return;
+    n = step->count;
+    if (n > runner->step_count - step->first)
+        n = runner->step_count - step->first;
+    for (i = 0; i < n && frame->edge_watch_n < ENGINE_EDGE_WATCH_CAP; i++) {
+        uint16_t id = runner->steps[step->first + i].key;
+
+        if (id == 0 || id > ENGINE_KEY_ID_MAX)
+            continue;
+        frame->edge_watch[frame->edge_watch_n++] = id;
+    }
+}
+
+static int push_edge(struct engine_runner *runner, struct engine_play *play,
+                     const struct engine_step *step, int64_t now)
+{
+    struct engine_frame *frame;
+    int spam;
+    int ignore;
+
+    if (!runner || !step)
+        return 0;
+    if (!push_frame(runner, play, 0, 0, 1, ENGINE_STOP_NONE))
+        return 0;
+    frame = &runner->stack[runner->stack_count - 1];
+    spam = (step->action & ENGINE_EDGE_SPAM) != 0;
+    ignore = (step->action >> 1) & 3;
+    if (ignore > ENGINE_IGNORE_BOTH)
+        ignore = ENGINE_IGNORE_OFF;
+    frame->edge_hold = 1;
+    frame->edge_spam = spam;
+    frame->edge_key = step->key;
+    frame->edge_phase = ENGINE_EDGE_PHASE_DOWN;
+    frame->edge_arm_ms = step->a;
+    frame->edge_gap_ms = step->b;
+    frame->edge_ignore = ignore;
+    frame->edge_ignore_ms = step->f;
+    frame->edge_hold_for = engine_scale_wait_ms((double)step->d, runner->speed);
+    frame->edge_rest_for = engine_scale_wait_ms((double)step->e, runner->speed);
+    copy_watch(runner, frame, step);
+    frame->edge_repeat_at = engine_arm_deadline(now, ticks_of(runner, ENGINE_KEY_DELAY_MS));
+    if (spam) {
+        frame->edge_spam_on = 1;
+        frame->edge_spam_at = engine_arm_deadline(now, ticks_of(runner, frame->edge_hold_for));
+    }
+    if (step->key != 0 && !hold_add(runner, step->key)) {
+        mark_done(runner, play);
+        return 0;
+    }
+    if (runner->trigger != 0 && runner->trigger != step->key &&
+        !hold_add(runner, runner->trigger)) {
+        mark_done(runner, play);
+        return 0;
+    }
+    if ((step->action & ENGINE_EDGE_PAUSE_BLOCK) != 0)
+        arm_edge_mute(play, runner, frame);
+    arm_ms(runner, now, 5.0, 1.0);
+    return 1;
+}
+
+static int watch_edge(struct engine_runner *runner, struct engine_play *play,
+                      struct engine_frame *frame, int64_t now, int phase)
+{
+    int pulsed = 0;
+    int i;
+
+    for (i = 0; i < frame->edge_watch_n; i++) {
+        int is_down = finger_down(play, frame->edge_watch[i]);
+
+        if (is_down && !frame->edge_prev[i] && !pulsed &&
+            accept_watch(runner, play, frame, i, now)) {
+            frame->edge_phase = phase;
+            pulsed = 1;
+        }
+        frame->edge_prev[i] = (uint8_t)(is_down ? 1 : 0);
+    }
+    return frame->edge_phase == phase;
+}
+
+static void tick_tap(struct engine_runner *runner, struct engine_play *play, int64_t now)
+{
+    struct engine_frame *frame;
+
+    if (!runner || runner->stack_count <= 0)
+        return;
+    frame = &runner->stack[runner->stack_count - 1];
+    if (runner->stopping || (runner->trigger != 0 && !finger_down(play, runner->trigger))) {
+        mark_done(runner, play);
+        return;
+    }
+    if (frame->edge_phase == ENGINE_EDGE_PHASE_ARM) {
+        hold_del(runner, frame->edge_key);
+        if (runner->trigger != frame->edge_key)
+            hold_del(runner, runner->trigger);
+        frame->edge_phase = ENGINE_EDGE_PHASE_GAP;
+        arm_ms(runner, now, (double)frame->edge_gap_ms, runner->speed);
+        return;
+    }
+    if (frame->edge_phase == ENGINE_EDGE_PHASE_GAP) {
+        if (runner->trigger != 0 && !finger_down(play, runner->trigger)) {
+            mark_done(runner, play);
+            return;
+        }
+        if (frame->edge_key != 0 && !hold_add(runner, frame->edge_key)) {
+            mark_done(runner, play);
+            return;
+        }
+        frame->edge_phase = ENGINE_EDGE_PHASE_DOWN;
+        frame->edge_repeat_at = engine_arm_deadline(now, ticks_of(runner, ENGINE_KEY_DELAY_MS));
+    }
+    if (watch_edge(runner, play, frame, now, ENGINE_EDGE_PHASE_ARM)) {
+        arm_ms(runner, now, (double)frame->edge_arm_ms, runner->speed);
+        return;
+    }
+    repeat_hold(runner, frame, now);
+    arm_ms(runner, now, 5.0, 1.0);
+}
+
+static int toggle_spam(struct engine_runner *runner, struct engine_play *play,
+                       struct engine_frame *frame, int64_t now)
+{
+    int64_t delta;
+
+    if (frame->edge_key == 0 || frame->edge_spam_at == 0 || now < frame->edge_spam_at)
+        return 1;
+    if (frame->edge_spam_on) {
+        hold_del(runner, frame->edge_key);
+        frame->edge_spam_on = 0;
+        delta = ticks_of(runner, frame->edge_rest_for);
+        frame->edge_spam_at = engine_arm_deadline(now, delta);
+        return 1;
+    }
+    if (!hold_add(runner, frame->edge_key)) {
+        mark_done(runner, play);
+        return 0;
+    }
+    frame->edge_spam_on = 1;
+    delta = ticks_of(runner, frame->edge_hold_for);
+    frame->edge_spam_at = engine_arm_deadline(now, delta);
+    return 1;
+}
+
+/* 1 keeps walking after the spam frame pops. 0 stops this tick. */
+static int tick_spam(struct engine_runner *runner, struct engine_play *play, int64_t now)
+{
+    struct engine_frame *frame;
+    int up;
+
+    if (!runner || runner->stack_count <= 0)
+        return 0;
+    frame = &runner->stack[runner->stack_count - 1];
+    up = runner->trigger != 0 && !finger_down(play, runner->trigger);
+    if (runner->stopping) {
+        mark_done(runner, play);
+        return 0;
+    }
+    if (up) {
+        hold_del(runner, frame->edge_key);
+        if (runner->trigger != 0 && runner->trigger != frame->edge_key)
+            hold_del(runner, runner->trigger);
+        release_edge_mute(play, runner, frame);
+        if (runner->stack_count > 0)
+            runner->stack_count--;
+        return 1;
+    }
+    if (frame->edge_phase == ENGINE_EDGE_PHASE_QUIET) {
+        frame->edge_phase = ENGINE_EDGE_PHASE_DOWN;
+        frame->edge_spam_on = 0;
+        frame->edge_spam_at = now;
+    }
+    if (watch_edge(runner, play, frame, now, ENGINE_EDGE_PHASE_QUIET)) {
+        hold_del(runner, frame->edge_key);
+        arm_ms(runner, now, (double)frame->edge_gap_ms, runner->speed);
+        return 0;
+    }
+    if (!toggle_spam(runner, play, frame, now))
+        return 0;
+    arm_ms(runner, now, 5.0, 1.0);
+    return 0;
+}
+
+static int edge_should_stop(const struct engine_runner *runner, const struct engine_play *play)
+{
+    const struct engine_frame *frame;
+
+    if (!runner || runner->stack_count <= 0)
+        return 0;
+    frame = &runner->stack[runner->stack_count - 1];
+    if (!frame->edge_hold)
+        return 0;
+    if (runner->stopping)
+        return 1;
+    return runner->trigger != 0 && !finger_down(play, runner->trigger);
+}
+
 static void advance_runner(struct engine_runner *runner, struct engine_play *play, int64_t now,
                            engine_roll_fn roll, void *roll_ctx)
 {
@@ -1044,8 +1489,19 @@ static void advance_runner(struct engine_runner *runner, struct engine_play *pla
         return;
     note_hold_release(runner, play);
     pulse_drop_due(runner, now);
-    if (runner->wait_until != 0 && now < runner->wait_until)
-        return;
+    if (runner->wait_until != 0 && now < runner->wait_until) {
+        /* Spam clears the wait so the next block can run. A tap hold ends. */
+        if (edge_should_stop(runner, play)) {
+            if (runner->stack[runner->stack_count - 1].edge_spam)
+                runner->wait_until = 0;
+            else {
+                mark_done(runner, play);
+                return;
+            }
+        } else {
+            return;
+        }
+    }
     runner->wait_until = 0;
     runner->scan_wait = 0;
     if (runner->stopping && stop_mode(runner) == ENGINE_STOP_NEXT_UP && runner->saw_up) {
@@ -1067,6 +1523,15 @@ static void advance_runner(struct engine_runner *runner, struct engine_play *pla
         }
         frame = &runner->stack[runner->stack_count - 1];
         if (frame->index >= frame->count) {
+            if (frame->edge_hold) {
+                if (frame->edge_spam) {
+                    if (!tick_spam(runner, play, now))
+                        return;
+                    continue;
+                }
+                tick_tap(runner, play, now);
+                return;
+            }
             if (frame->once_held) {
                 if (!finish_once(runner, play, now))
                     return;
@@ -1181,6 +1646,7 @@ static void pause_runner(struct engine_runner *runner)
     runner->paused = 1;
     runner->hold_count = 0;
     runner->pulse_count = 0;
+    runner->echo_count = 0;
     runner->move_x = 0;
     runner->move_y = 0;
     runner->wheel = 0;
@@ -1827,10 +2293,49 @@ static int32_t sat_i32(int64_t value)
     return (int32_t)value;
 }
 
+static int collect_echo(struct engine_play *play, uint16_t *out, int cap)
+{
+    int count = 0;
+    int i;
+    int h;
+
+    if (!play || !out || cap <= 0)
+        return 0;
+    for (i = 0; i < play->runner_count; i++) {
+        struct engine_runner *runner = &play->runners[i];
+
+        if (runner->done || runner->paused)
+            continue;
+        for (h = 0; h < runner->echo_count && count < cap; h++) {
+            uint16_t id = runner->echo[h];
+
+            if (id == 0 || already(out, count, id))
+                continue;
+            out[count++] = id;
+        }
+        runner->echo_count = 0;
+    }
+    return count;
+}
+
+static void note_report_sent(struct engine_play *play, int64_t now)
+{
+    int n;
+    int i;
+
+    if (!play)
+        return;
+    n = engine_report_down_count(&play->last);
+    for (i = 0; i < n; i++)
+        note_sent(play, engine_report_down(&play->last, i), now);
+}
+
 int engine_play_publish(struct engine_play *play, int64_t now)
 {
     uint16_t desired[ENGINE_HOLD_CAP];
+    uint16_t extra[ENGINE_HOLD_CAP];
     int desired_count;
+    int extra_count;
     int64_t dx = 0;
     int64_t dy = 0;
     int64_t wheel = 0;
@@ -1859,12 +2364,16 @@ int engine_play_publish(struct engine_play *play, int64_t now)
         runner->wheel = 0;
     }
     desired_count = engine_play_desired(play, now, desired, ENGINE_HOLD_CAP);
+    extra_count = collect_echo(play, extra, ENGINE_HOLD_CAP);
     if (has_abs)
-        return engine_output_publish(&play->output, desired, desired_count, NULL, 0,
-                                     0, 0, sat_i32(wheel), 1, ax, ay, play->dpi, &play->last);
-    return engine_output_publish(&play->output, desired, desired_count, NULL, 0,
-                                 clamp_sum(dx), clamp_sum(dy), sat_i32(wheel),
-                                 0, 0, 0, play->dpi, &play->last);
+        engine_output_publish(&play->output, desired, desired_count, extra, extra_count,
+                              0, 0, sat_i32(wheel), 1, ax, ay, play->dpi, &play->last);
+    else
+        engine_output_publish(&play->output, desired, desired_count, extra, extra_count,
+                              clamp_sum(dx), clamp_sum(dy), sat_i32(wheel),
+                              0, 0, 0, play->dpi, &play->last);
+    note_report_sent(play, now);
+    return engine_report_active(&play->last);
 }
 
 void engine_play_remove_done(struct engine_play *play)

@@ -160,6 +160,8 @@ These are not divided by `speed`: `ifShort` `underMs`, `swapLoop` `afterMs`, `mo
 
 `onceHeld` `gapMs` is divided by speed when the frame is built. A positive gap then uses the wait minimum of 1. `0` or less does not wait. The 1 ms poll, the empty-body yield, and the `releasedNow` yield are not divided by speed.
 
+`edgeHold` `armMs` and `gapMs` are divided by speed at the wait. `holdMs` and `restMs` are divided when the frame is built, with the wait minimum of 1. The 5 ms poll, the key delay, and the key repeat are not divided by speed. The runner uses the dry-mode delay of 400 ms and repeat of 33 ms. It does not call `SystemParametersInfo`.
+
 `randomWait` is inside the inclusive min and max after the bounds are swapped and clamped at 0. The test injects the roll. It is not an exact-interval check.
 
 ## Data
@@ -231,7 +233,7 @@ engine-native/
   tests/hook_win_test.c   Windows hook struct and install check
   tests/output_test.c     portable report, diff, and line plan
   tests/output_win_test.c Windows SendInput fill
-  tests/runner_test.c     fake clock, the basic steps, run, goto, holdLoop, swapLoop, burst, ifShort, and onceHeld
+  tests/runner_test.c     fake clock, the basic steps, run, goto, holdLoop, swapLoop, burst, ifShort, onceHeld, and edgeHold
 ```
 
 `engine/` stays the AHK engine until #54.
@@ -252,7 +254,7 @@ The program prints `macroui-engine 0` and exits 0. That string is the version un
 | #43 | Timing loop and clock. `src/core/clock.c` and `src/win/clock_win.c`. |
 | #44 | Hooks, trigger bits, and the watchdog. `src/core/hook.c` and `src/win/hook_win.c`. |
 | #45 | Output. `src/ipc/report.c`, `src/core/output.c`, `src/win/output_win.c`, and `shell/ReportBoard.cs`. |
-| #46 | Block compiler and runner. `src/core/runner.c` runs the basic steps, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, and `onceHeld`. Mute is on that runner. `edgeHold` and `scanWait` are still open. |
+| #46 | Block compiler and runner. `src/core/runner.c` runs the basic steps, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, `onceHeld`, and `edgeHold`. Mute is on that runner. `scanWait` is still open. |
 | #47 | Profile loading, live config, and validation. |
 | #48 | Process lifecycle, single instance, and exit. |
 | #49 | Fake-clock harness is `tests/runner_test.c`. Windows CI runs the AHK `--self-test`. The trace corpus is still open. |
