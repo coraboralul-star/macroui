@@ -14,6 +14,9 @@
 #define ENGINE_HOLD_CAP 64
 #define ENGINE_STEP_CAP 256
 #define ENGINE_ID_CAP 64
+#define ENGINE_MUTE_ID_CAP 256
+#define ENGINE_MUTE_SLOT_CAP 64
+#define ENGINE_FINGER_BYTES ((ENGINE_KEY_ID_MAX / 8u) + 1u)
 
 #define ENGINE_MODE_ONCE 0
 #define ENGINE_MODE_REPEAT 1
@@ -30,9 +33,9 @@
 #define ENGINE_ACT_UP 2
 
 /* Numbers stay fixed. The play tick runs key, mouse, move, scroll, wait,
-   randomWait, repeat, goto, and run.
-   The rest are recognized so a later slice can fill them in.
-   pressHold is not one of these: it expands to several steps. */
+   randomWait, repeat, goto, run, and holdLoop.
+   swapLoop, burst, ifShort, onceHeld, edgeHold, and scanWait are recognized
+   and still skipped. pressHold is not one of these: it expands to several steps. */
 #define ENGINE_STEP_KEY 1
 #define ENGINE_STEP_MOUSE 2
 #define ENGINE_STEP_MOVE 3
@@ -62,7 +65,11 @@
    span in first and count. A negative repeat count becomes 0, which loops.
    goto stores x in a and y in b, where in action, and the duration in count.
    0 does not wait. A missing duration is 15 when the step is built.
-   run stores the catalog index in a. A negative index is a missing target. */
+   run stores the catalog index in a. A negative index is a missing target.
+   holdLoop stores the child span in first and count, swapAfterMs in a, and
+   the frame release stop in b. 0 swapAfterMs does not swap. b keeps finish
+   and nextUp. Anything else is none. mute_at and mute_n index the macro
+   mute table. Those entries are catalog indexes. */
 struct engine_step {
     uint8_t type;
     uint8_t action;
@@ -71,6 +78,8 @@ struct engine_step {
     int32_t b;
     uint32_t first;
     uint32_t count;
+    uint16_t mute_at;
+    uint16_t mute_n;
 };
 
 struct engine_frame {
@@ -79,6 +88,12 @@ struct engine_frame {
     uint32_t index;
     int32_t repeats_left;
     int release_stop;
+    int hold_loop;
+    int drain;
+    int mute_on;
+    int32_t swap_after_ms;
+    uint16_t mute_at;
+    uint16_t mute_n;
 };
 
 struct engine_pulse {
@@ -117,6 +132,7 @@ struct engine_runner {
     int scan_wait;
     int done;
     int paused;
+    int32_t cycles;
     uint16_t trigger;
 };
 
@@ -136,9 +152,12 @@ struct engine_macro {
     int exclusive;
     int release_stop;
     int basic;
+    int advanced;
     int trigger_is_key;
     int32_t gap_ms;
     uint16_t trigger;
+    const int32_t *mutes;
+    uint32_t mute_count;
 };
 
 typedef int64_t (*engine_roll_fn)(int64_t lo, int64_t hi, void *ctx);
@@ -146,6 +165,13 @@ typedef int64_t (*engine_roll_fn)(int64_t lo, int64_t hi, void *ctx);
 /* Foreground snapshot for goto. The core does not query a window.
    have_mouse 0 is a mouse at 0, 0. A missing window or client rect
    makes that goto a no-op. */
+/* Physical finger. seen is physDown.Has. down is the value.
+   A key that was never reported is not down. */
+struct engine_fingers {
+    uint8_t down[ENGINE_FINGER_BYTES];
+    uint8_t seen[ENGINE_FINGER_BYTES];
+};
+
 struct engine_pointer {
     int have_mouse;
     int32_t mouse_x;
@@ -160,8 +186,9 @@ struct engine_pointer {
 
 /* The play struct is large. Keep it off a deep stack.
    freq 0 is stored as 1000 when a runner starts. dpi 0 is left 0.
-   macros is the caller's catalog. run indexes it. The pointer is the
-   tick's mouse and window origin. */
+   macros is the caller's catalog. run indexes it. holdLoop indexes mutes
+   the same way. The pointer is the tick's mouse and window origin.
+   The finger snapshot is the physical key state for that tick. */
 struct engine_play {
     struct engine_runner runners[ENGINE_RUNNER_CAP];
     int runner_count;
@@ -179,6 +206,14 @@ struct engine_play {
     int macro_count;
     struct engine_pointer pointer;
     int have_pointer;
+    struct engine_fingers fingers;
+    int have_fingers;
+    int32_t mute_ids[ENGINE_MUTE_ID_CAP];
+    uint32_t mute_count;
+    char mute_slot_id[ENGINE_MUTE_SLOT_CAP][ENGINE_ID_CAP];
+    int mute_slot_count[ENGINE_MUTE_SLOT_CAP];
+    int mute_slot_resume[ENGINE_MUTE_SLOT_CAP];
+    int mute_slot_used[ENGINE_MUTE_SLOT_CAP];
 };
 
 void engine_macro_init(struct engine_macro *macro);
@@ -216,6 +251,28 @@ void engine_play_set_macros(struct engine_play *play, const struct engine_macro 
 /* Copies the snapshot. A null pointer clears it. */
 void engine_play_set_pointer(struct engine_play *play, const struct engine_pointer *pointer);
 
+/* Clears both maps. */
+void engine_fingers_clear(struct engine_fingers *fingers);
+
+/* Marks the id as seen. down 0 leaves it up. Id 0 and an id past the table are ignored. */
+void engine_fingers_set(struct engine_fingers *fingers, uint16_t id, int down);
+
+/* 1 when the id was reported and is down. */
+int engine_fingers_down(const struct engine_fingers *fingers, uint16_t id);
+
+/* 1 when the id was reported, including a report that it is up. */
+int engine_fingers_seen(const struct engine_fingers *fingers, uint16_t id);
+
+/* Copies the snapshot. A null pointer clears it.
+   A missing snapshot is not a finger: holdLoop does not treat it as a release. */
+void engine_play_set_fingers(struct engine_play *play, const struct engine_fingers *fingers);
+
+/* 1 when the mute count for id is above 0. */
+int engine_play_muted(const struct engine_play *play, const char *id);
+
+/* The mute count. 0 when id is not in the table. */
+int engine_play_mute_count(const struct engine_play *play, const char *id);
+
 /* mode_override below 0 keeps the macro mode. restart 0 leaves a live id alone.
    Returns 1 when a runner was queued. A full list queues nothing and stops nothing. */
 int engine_play_start(struct engine_play *play, const struct engine_macro *macro,
@@ -226,7 +283,8 @@ void engine_play_advance(struct engine_play *play, int64_t now);
 
 /* Runs one runner. run does nothing here: there is no catalog.
    goto uses a screen point and a mouse at 0, 0.
-   engine_play_advance is the path that starts run and reads the pointer. */
+   holdLoop does nothing here: there is no mute list and no finger snapshot.
+   engine_play_advance is the path that starts run, reads the pointer, and runs holdLoop. */
 void engine_runner_advance(struct engine_runner *runner, int64_t now,
                            engine_roll_fn roll, void *roll_ctx);
 
