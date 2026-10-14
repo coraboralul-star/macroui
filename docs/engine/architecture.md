@@ -185,7 +185,7 @@ The numeric `type` values arrive with the compiler. The kinds are the ones the a
 
 Key id 0 is empty. Ids 1..255 are the virtual key after side resolution. Id 256 is Numpad Enter. Mouse buttons are five slots beside that array: left, right, middle, X1, X2. They are not virtual keys.
 
-`Alias`, `NormKey`, and `SafeKey` run at load. The tick does not look up a name. More than one macro may share a key. `trigger_head[257]` is a 1-based index into a chain built at load, or 0. The chain is walked. That is the array from the language decision, plus the one id the virtual-key space cannot hold, plus a chain because `PollTriggers` walks every macro on that key.
+`Alias`, `NormKey`, and `SafeKey` run at load. The tick does not look up a name. More than one macro may share a key. `trigger_head` has `ENGINE_KEY_ID_MAX + 1` slots, which is 262. That covers virtual keys, Numpad Enter, and the five mouse ids. Each entry is a 1-based index into a chain built at load, or 0. The chain is profile order. The tick walks it.
 
 `applied` stores key ids. The IPC thread turns them into the names on the state message. The playback thread does not format that text. The name table is filled once at startup.
 
@@ -200,11 +200,11 @@ Resident startup on Windows (#48). Linux still prints the version and exits.
 3. Start the IPC thread, the hook thread, then the playback thread.
 4. No console window. The Windows exe is built with the Windows subsystem.
 
-`--self-test` prints `macroui-engine 0` and returns before step 2. `--bench` returns before step 2 and does not measure. `--profile` stores the path and does not open it. There is no relative default. A missing value or any other argument exits 1 before the mutex. Both engines share the mutex name. Switching engines is: release keys, quit, wait until the mutex is free, then start the other.
+`--self-test` prints `macroui-engine 0` and returns before step 2. `--bench` returns before step 2 and does not measure. `--profile` stores the path. The IPC thread opens that path before it creates the pipe. There is no relative default, and a missing file is not created. A missing value or any other argument exits 1 before the mutex. Both engines share the mutex name. Switching engines is: release keys, quit, wait until the mutex is free, then start the other.
 
 `ERROR_ALREADY_EXISTS` closes only the new handle. It does not call `ReleaseMutex`. AutoHotkey still does not check that error. `#SingleInstance Force` only sees another AutoHotkey script, so launching `MacroEngine.ahk` by hand can still run beside the native process. The shell's `EngineMutexHeld` will not start AutoHotkey while the name is taken. `FindEngineProcess` still looks for `AutoHotkey64`. Adopting the native pid is #50. Do not run both engines.
 
-The hook thread is `engine_win_hook_run`. The playback thread waits the disarmed 16 ms slice until quit, then releases applied keys. It does not advance a runner. The IPC thread creates `\\.\pipe\MacroUI` with the flags in `docs/engine/ipc-protocol.md`. `command` `quit` writes the command ack, then sets the quit flag. A first byte of `{` gets `ack` `bad frame` and is not applied, so a JSON quit does not stop the process. `hello` and `state` are not written. `start`, `stop`, `reload`, `profile`, and `output` are not applied.
+The hook thread is `engine_win_hook_run`. The playback thread adopts a newer profile image, reads the foreground name the IPC thread published, and picks the live config. It waits the disarmed 16 ms slice until quit, then releases applied keys. It does not advance a runner and it does not query a window. The IPC thread creates `\\.\pipe\MacroUI` with the flags in `docs/engine/ipc-protocol.md`. It reads `--profile` before the pipe loop and queries the foreground image name on that thread. `command` `quit` writes the command ack, then sets the quit flag. A first byte of `{` gets `ack` `bad frame` and is not applied, so a JSON quit does not stop the process. `hello` and `state` are not written. `start`, `stop`, `reload`, `profile`, and `output` are not applied. A corrupt profile keeps the last good image, or an empty one, and stores the detail `the saved profile could not be read`. That error frame is still not written.
 
 The board scale uses the foreground dpi from the snapshot, and the system dpi when the window has none. Per-Monitor V2 can change that number relative to the unaware AHK process. If #53 shows a difference, record it there. The process stays Per-Monitor V2.
 
@@ -230,6 +230,10 @@ engine-native/
   src/core/output.c       applied diff, send plan, board plan
   src/core/runner.h
   src/core/runner.c       steps, the runner, publish before remove
+  src/core/json.h
+  src/core/json.c         profile JSON, AHK parse quirks
+  src/core/profile.h
+  src/core/profile.c      compile, live pick, image swap
   src/ipc/report.h
   src/ipc/report.c        156-byte report image
   src/win/win_entry.c     resident process, mutex, pipe, exit
@@ -248,11 +252,12 @@ engine-native/
   tests/runner_test.c     fake clock, the basic steps, run, goto, holdLoop, swapLoop, burst, ifShort, onceHeld, edgeHold, scanWait, and the pressHold expansion
   tests/process_test.c    args, boot order, exit order, quit frame
   tests/process_win_test.c mutex, a second instance, quit, key release
+  tests/profile_test.c    profile compile, live pick, corrupt file
 ```
 
 `engine/` stays the AHK engine until #54.
 
-`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. The clock math, the hook decision, the output plans, and the first runner steps are already there. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` holds the report image. The other frames stay in `docs/engine/ipc-protocol.md` until a later issue encodes them. The pipe call itself stays in `src/win`. `tests/clock_test.c` is the #43 clock check. `tests/hook_test.c` is the #44 hook check. `tests/output_test.c` is the #45 report check. `tests/runner_test.c` is the fake-clock harness and the first #46 steps. `bench/` is the trace corpus, which is the rest of #49. The language benches stay in `tools/bench/lang/`.
+`src/core` is the interpreter, the lookup, and the compiler. It includes no `windows.h`. The clock math, the hook decision, the output plans, the runner, and the profile compiler are there. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground query. `src/ipc` holds the report image. The other frames stay in `docs/engine/ipc-protocol.md` until a later issue encodes them. The pipe call itself stays in `src/win`. `tests/clock_test.c` is the #43 clock check. `tests/hook_test.c` is the #44 hook check. `tests/output_test.c` is the #45 report check. `tests/runner_test.c` is the fake-clock harness and the first #46 steps. `tests/profile_test.c` is the #47 profile check. `bench/` is the trace corpus, which is the rest of #49. The language benches stay in `tools/bench/lang/`.
 
 ## Build
 
@@ -269,7 +274,7 @@ Linux prints `macroui-engine 0` and exits 0. Windows does that for `--self-test`
 | #44 | Hooks, trigger bits, and the watchdog. `src/core/hook.c` and `src/win/hook_win.c`. |
 | #45 | Output. `src/ipc/report.c`, `src/core/output.c`, `src/win/output_win.c`, and `shell/ReportBoard.cs`. |
 | #46 | Block compiler and runner. `src/core/runner.c` runs the basic steps, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, `onceHeld`, `edgeHold`, and `scanWait`. Mute is on that runner. `pressHold` expands and is not a step. |
-| #47 | Profile loading, live config, and validation. |
+| #47 | Profile load is `src/core/json.c` and `src/core/profile.c`. The IPC thread reads `--profile`. Playback adopts the image and picks the live config. `hello` and `state` are still not written. `reload` is still not applied. |
 | #48 | Process lifecycle is the Windows entry in `src/win/win_entry.c`. Single instance is `Local\MacroUI.Engine`. Exit releases keys, then unhooks, then closes the timer, the pipe, and the mutex. The shell adopting the native pid is #50. |
 | #49 | Fake-clock harness is `tests/runner_test.c`. Windows CI runs the AHK `--self-test`. The trace corpus is still open. |
 | #54 | Native becomes the default, then AHK leaves. |
