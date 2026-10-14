@@ -1,0 +1,116 @@
+# MacroUI native pipe vectors. Version 1.
+# A # line is a comment. A blank line is ignored.
+# A record is 'name direction' then one line of uppercase hex bytes.
+# direction: engine, shell, json, reject.
+# engine and shell are frames. json is the AHK hello (first byte 7B).
+# reject is a pipe message a decoder must not accept.
+# Layout: docs/engine/ipc-protocol.md
+
+# armed 0
+hello-disarmed engine
+4D 55 49 31 01 00 01 00 01 00 00 00 00
+
+# armed 1
+hello-armed engine
+4D 55 49 31 01 00 01 00 01 00 00 00 01
+
+# armed, default, Game.exe, sprint-jump / Sprint jump, held space, window Game.exe / Game
+state-sample engine
+4D 55 49 31 01 00 02 00 4C 00 00 00 01 00 01 00 01 00 01 00 07 00 64 65 66 61 75 6C 74 08 00 47 61 6D 65 2E 65 78 65 0B 00 73 70 72 69 6E 74 2D 6A 75 6D 70 0B 00 53 70 72 69 6E 74 20 6A 75 6D 70 05 00 73 70 61 63 65 08 00 47 61 6D 65 2E 65 78 65 04 00 47 61 6D 65
+
+# command ok, no id
+ack-command engine
+4D 55 49 31 01 00 03 00 04 00 00 00 01 01 00 00
+
+# profile ok, no id
+ack-profile engine
+4D 55 49 31 01 00 03 00 04 00 00 00 01 02 00 00
+
+# malformed frame
+ack-bad-frame engine
+4D 55 49 31 01 00 03 00 0D 00 00 00 00 00 09 00 62 61 64 20 66 72 61 6D 65
+
+# version other than 1
+ack-bad-version engine
+4D 55 49 31 01 00 03 00 0F 00 00 00 00 00 0B 00 62 61 64 20 76 65 72 73 69 6F 6E
+
+# where engine, code profile-read
+error-profile-read engine
+4D 55 49 31 01 00 04 00 27 00 00 00 01 01 23 00 74 68 65 20 73 61 76 65 64 20 70 72 6F 66 69 6C 65 20 63 6F 75 6C 64 20 6E 6F 74 20 62 65 20 72 65 61 64
+
+# space down, dx 4, dy -3, wheel 1, dpi 96
+report-relative engine
+4D 55 49 31 01 00 05 00 9C 00 00 00 01 00 00 00 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 04 00 00 00 FD FF FF FF 01 00 00 00 00 00 00 00 00 00 00 00 60 00 00 00
+
+# LButton down, absolute ax 10 ay 20, dpi 120
+report-absolute engine
+4D 55 49 31 01 00 05 00 9C 00 00 00 01 00 01 00 01 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 0A 00 00 00 14 00 00 00 78 00 00 00
+
+# LButton, w, space down, dx 4, dy -3, dpi 96
+report-three-downs engine
+4D 55 49 31 01 00 05 00 9C 00 00 00 03 00 00 00 01 01 57 00 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 04 00 00 00 FD FF FF FF 00 00 00 00 00 00 00 00 00 00 00 00 60 00 00 00
+
+# space up, dpi 96
+report-up engine
+4D 55 49 31 01 00 05 00 9C 00 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 60 00 00 00
+
+# overflow flag, space down, dpi 96
+report-overflow engine
+4D 55 49 31 01 00 05 00 9C 00 00 00 01 00 02 00 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 60 00 00 00
+
+# missing-file document
+profile-empty shell
+4D 55 49 31 01 00 06 00 3D 00 00 00 39 00 00 00 7B 22 76 65 72 73 69 6F 6E 22 3A 31 2C 22 6E 61 6D 65 22 3A 22 44 65 66 61 75 6C 74 22 2C 22 76 61 72 69 61 62 6C 65 73 22 3A 7B 7D 2C 22 6D 61 63 72 6F 73 22 3A 5B 5D 7D
+
+# JSON array, valid frame, nothing applied
+profile-not-object shell
+4D 55 49 31 01 00 06 00 06 00 00 00 02 00 00 00 5B 5D
+
+# mode software
+output-software shell
+4D 55 49 31 01 00 07 00 01 00 00 00 00
+
+# mode rp2040
+output-rp2040 shell
+4D 55 49 31 01 00 07 00 01 00 00 00 01
+
+# mode rp2350
+output-rp2350 shell
+4D 55 49 31 01 00 07 00 01 00 00 00 02
+
+# start
+command-start shell
+4D 55 49 31 01 00 08 00 01 00 00 00 01
+
+# stop
+command-stop shell
+4D 55 49 31 01 00 08 00 01 00 00 00 02
+
+# reload
+command-reload shell
+4D 55 49 31 01 00 08 00 01 00 00 00 03
+
+# quit
+command-quit shell
+4D 55 49 31 01 00 08 00 01 00 00 00 04
+
+# unknown action, valid frame, ack ok
+command-unknown shell
+4D 55 49 31 01 00 08 00 01 00 00 00 00
+
+# AHK hello. First byte 7B. Trailing newline from SendRaw
+json-hello json
+7B 22 76 22 3A 31 2C 22 74 79 70 65 22 3A 22 68 65 6C 6C 6F 22 2C 22 61 72 6D 65 64 22 3A 66 61 6C 73 65 7D 0A
+
+# length 1 and no payload byte
+reject-short reject
+4D 55 49 31 01 00 01 00 01 00 00 00
+
+# one extra byte after a hello payload
+reject-trailing reject
+4D 55 49 31 01 00 01 00 01 00 00 00 00 00
+
+# magic is XUI1
+reject-magic reject
+58 55 49 31 01 00 01 00 01 00 00 00 00
+

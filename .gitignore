@@ -8,6 +8,9 @@ launcher/bin/
 launcher/publish/
 firmware/build/
 firmware/out/
+tools/bench/out/
+engine-native/build/
+shell/report-board-test/bin/
 profiles/*.json
 profiles/*.json.bak
 profiles/*.json.tmp
