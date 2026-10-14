@@ -207,17 +207,14 @@ static int map_name(const char *name, uint16_t *id)
     return 0;
 }
 
-int engine_key_id(const char *name, uint16_t *id)
+/* NormKey. 1 when the name survives. An unknown name can still survive. */
+static int norm_key(const char *name, char *canon, int cap)
 {
-    char canon[64];
     char lower[64];
     char fkey[64];
     const char *aliased;
-    uint16_t found = 0;
 
-    if (id)
-        *id = 0;
-    if (!name || !name[0] || strlen(name) >= sizeof canon)
+    if (!name || !name[0] || !canon || cap < 2 || strlen(name) >= 64)
         return 0;
 
     aliased = alias_to(name);
@@ -226,20 +223,31 @@ int engine_key_id(const char *name, uint16_t *id)
         aliased = alias_to(lower);
     }
     if (aliased) {
-        if (!safe_copy(aliased, canon, (int)sizeof canon))
+        if (!safe_copy(aliased, canon, cap))
             return 0;
     } else if (function_key(name, fkey, (int)sizeof fkey)) {
-        if (!safe_copy(fkey, canon, (int)sizeof canon))
+        if (!safe_copy(fkey, canon, cap))
             return 0;
     } else if (name[0] && !name[1]) {
         char one[4];
         lower_copy(name, one, (int)sizeof one);
-        if (!safe_copy(one, canon, (int)sizeof canon))
+        if (!safe_copy(one, canon, cap))
             return 0;
-    } else if (!safe_copy(name, canon, (int)sizeof canon)) {
+    } else if (!safe_copy(name, canon, cap)) {
         return 0;
     }
+    return canon[0] != '\0';
+}
 
+int engine_key_id(const char *name, uint16_t *id)
+{
+    char canon[64];
+    uint16_t found = 0;
+
+    if (id)
+        *id = 0;
+    if (!norm_key(name, canon, (int)sizeof canon))
+        return 0;
     if (!map_name(canon, &found))
         return 0;
     if (id)
@@ -429,6 +437,50 @@ int engine_basic_rewrite(uint16_t trigger, int trigger_is_key, int32_t gap_ms,
     out[3].type = ENGINE_STEP_WAIT;
     out[3].a = gap_ms;
     return 4;
+}
+
+int engine_expand_press_hold(const char *key, int32_t hold_ms, int omitted,
+                             const struct engine_step *children, uint32_t child_count,
+                             struct engine_step *out, int cap)
+{
+    char canon[64];
+    uint16_t id = 0;
+    int named;
+    int prefix;
+    uint32_t need;
+    uint32_t i;
+    int32_t ms;
+
+    named = norm_key(key, canon, (int)sizeof canon);
+    if (named)
+        engine_key_id(key, &id);
+    prefix = named && child_count == 0 ? 3 : 0;
+    if (child_count > 0 && !children)
+        return -1;
+    if (child_count > (uint32_t)INT32_MAX - 1u - (uint32_t)prefix)
+        return -1;
+    need = child_count + (uint32_t)prefix + 1u;
+    if (!out || cap < 0 || (uint32_t)cap < need)
+        return -1;
+
+    if (prefix) {
+        memset(out, 0, (size_t)prefix * sizeof *out);
+        out[0].type = ENGINE_STEP_KEY;
+        out[0].action = ENGINE_ACT_DOWN;
+        out[0].key = id;
+        out[1].type = ENGINE_STEP_WAIT;
+        out[1].a = 18;
+        out[2].type = ENGINE_STEP_KEY;
+        out[2].action = ENGINE_ACT_UP;
+        out[2].key = id;
+    }
+    for (i = 0; i < child_count; i++)
+        out[prefix + i] = children[i];
+    ms = omitted ? 200 : hold_ms;
+    memset(&out[prefix + child_count], 0, sizeof *out);
+    out[prefix + child_count].type = ENGINE_STEP_SCAN_WAIT;
+    out[prefix + child_count].a = ms;
+    return (int)need;
 }
 
 static int playing(const struct engine_play *play, const char *id);
