@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "name": "burst",
+  "variables": {},
+  "macros": [
+    {
+      "id": "burst",
+      "name": "Burst",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "advanced": true,
+      "trigger": { "kind": "key", "button": "b" },
+      "steps": [],
+      "blocks": [
+        {
+          "type": "then",
+          "forMs": 20,
+          "steps": [
+            { "type": "key", "action": "down", "key": "f" },
+            { "type": "wait", "ms": 4 },
+            { "type": "key", "action": "up", "key": "f" },
+            { "type": "wait", "ms": 4 }
+          ]
+        }
+      ]
+    }
+  ]
+}

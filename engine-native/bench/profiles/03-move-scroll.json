@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "name": "move",
+  "variables": {},
+  "macros": [
+    {
+      "id": "nudge",
+      "name": "Nudge",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "trigger": { "kind": "key", "button": "q" },
+      "steps": [
+        { "type": "move", "x": 4, "y": -3 },
+        { "type": "scroll", "dy": 2 }
+      ]
+    }
+  ]
+}

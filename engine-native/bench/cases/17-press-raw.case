@@ -1,0 +1,4 @@
+profile profiles/17-press-raw.json
+until 40
+0 finger b down
+0 start raw

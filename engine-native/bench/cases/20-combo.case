@@ -1,0 +1,4 @@
+profile profiles/20-combo.json
+until 35
+0 finger b down
+0 start combo

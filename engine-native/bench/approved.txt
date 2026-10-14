@@ -1,0 +1,2 @@
+# Cases listed here may differ from expected/<name>.out when AutoHotkey plays them.
+# An empty list means the AHK trace matches the native trace.

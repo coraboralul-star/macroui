@@ -248,11 +248,17 @@ engine-native/
   tests/runner_test.c     fake clock, the basic steps, run, goto, holdLoop, swapLoop, burst, ifShort, onceHeld, edgeHold, scanWait, and the pressHold expansion
   tests/process_test.c    args, boot order, exit order, quit frame
   tests/process_win_test.c mutex, a second instance, quit, key release
+  bench/trace.c           same profile and script, fake clock, no SendInput
+  bench/profiles/         one profile per block, combos, and a shaped profile
+  bench/cases/            the input script for each profile
+  bench/expected/         native output. Windows CI diffs AHK against it
+  bench/order.txt         case order
+  bench/approved.txt      stems that may differ. No stems means AHK must match
 ```
 
 `engine/` stays the AHK engine until #54.
 
-`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. The clock math, the hook decision, the output plans, and the first runner steps are already there. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` holds the report image. The other frames stay in `docs/engine/ipc-protocol.md` until a later issue encodes them. The pipe call itself stays in `src/win`. `tests/clock_test.c` is the #43 clock check. `tests/hook_test.c` is the #44 hook check. `tests/output_test.c` is the #45 report check. `tests/runner_test.c` is the fake-clock harness and the first #46 steps. `bench/` is the trace corpus, which is the rest of #49. The language benches stay in `tools/bench/lang/`.
+`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. The clock math, the hook decision, the output plans, and the first runner steps are already there. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` holds the report image. The other frames stay in `docs/engine/ipc-protocol.md` until a later issue encodes them. The pipe call itself stays in `src/win`. `tests/clock_test.c` is the #43 clock check. `tests/hook_test.c` is the #44 hook check. `tests/output_test.c` is the #45 report check. `tests/runner_test.c` is the fake-clock harness and the first #46 steps. `bench/` is the trace corpus. `engine-trace` plays it on the fake clock and does not call `SendInput`. Linux CI checks that output against `bench/expected`. Windows CI runs AHK `--trace` and diffs it. The diffs are empty. The language benches stay in `tools/bench/lang/`.
 
 ## Build
 
@@ -271,7 +277,7 @@ Linux prints `macroui-engine 0` and exits 0. Windows does that for `--self-test`
 | #46 | Block compiler and runner. `src/core/runner.c` runs the basic steps, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, `onceHeld`, `edgeHold`, and `scanWait`. Mute is on that runner. `pressHold` expands and is not a step. |
 | #47 | Profile loading, live config, and validation. |
 | #48 | Process lifecycle is the Windows entry in `src/win/win_entry.c`. Single instance is `Local\MacroUI.Engine`. Exit releases keys, then unhooks, then closes the timer, the pipe, and the mutex. The shell adopting the native pid is #50. |
-| #49 | Fake-clock harness is `tests/runner_test.c`. Windows CI runs the AHK `--self-test`. The trace corpus is still open. |
+| #49 | Fake-clock harness is `tests/runner_test.c`. Windows CI runs the AHK `--self-test`. The trace corpus is `bench/`. Diffs against AHK are empty. |
 | #54 | Native becomes the default, then AHK leaves. |
 
 Block ideas stay out. `priority` and `variables` stay stored and ignored.

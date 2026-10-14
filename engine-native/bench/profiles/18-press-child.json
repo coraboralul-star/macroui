@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "name": "press-child",
+  "variables": {},
+  "macros": [
+    {
+      "id": "child",
+      "name": "Child",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "advanced": true,
+      "trigger": { "kind": "key", "button": "b" },
+      "steps": [],
+      "blocks": [
+        {
+          "type": "pressHold",
+          "key": "q",
+          "holdMs": 20,
+          "steps": [
+            { "type": "key", "action": "down", "key": "x" },
+            { "type": "wait", "ms": 10 },
+            { "type": "key", "action": "up", "key": "x" }
+          ]
+        }
+      ]
+    }
+  ]
+}

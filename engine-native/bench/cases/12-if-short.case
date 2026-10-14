@@ -1,0 +1,4 @@
+profile profiles/12-if-short.json
+until 30
+0 finger b up
+0 start short

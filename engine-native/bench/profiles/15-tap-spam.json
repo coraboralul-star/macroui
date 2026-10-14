@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "name": "spam",
+  "variables": {},
+  "macros": [
+    {
+      "id": "spam",
+      "name": "Spam",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "whileHeld",
+      "advanced": true,
+      "trigger": { "kind": "side", "button": "XButton1" },
+      "steps": [],
+      "blocks": [
+        {
+          "type": "tapSpam",
+          "key": "z",
+          "watch": [],
+          "armMs": 5,
+          "gapMs": 80,
+          "holdMs": 18,
+          "restMs": 18,
+          "ignore": "off",
+          "ignoreMs": 0,
+          "pauseWatch": "off"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "press",
+  "variables": {},
+  "macros": [
+    {
+      "id": "raw",
+      "name": "Raw",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "advanced": true,
+      "trigger": { "kind": "key", "button": "b" },
+      "steps": [],
+      "blocks": [
+        { "type": "pressHold", "key": "q", "holdMs": 20, "steps": [] }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "name": "tap",
+  "variables": {},
+  "macros": [
+    {
+      "id": "tap",
+      "name": "Tap",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "whileHeld",
+      "advanced": true,
+      "trigger": { "kind": "side", "button": "XButton1" },
+      "steps": [],
+      "blocks": [
+        {
+          "type": "tapHold",
+          "key": "z",
+          "watch": ["t"],
+          "armMs": 5,
+          "gapMs": 80,
+          "ignore": "off",
+          "ignoreMs": 0,
+          "pauseWatch": "off"
+        }
+      ]
+    }
+  ]
+}

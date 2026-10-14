@@ -1,0 +1,6 @@
+profile profiles/14-tap-hold.json
+until 100
+0 finger XButton1 down
+0 finger t up
+0 start tap
+6 finger t down

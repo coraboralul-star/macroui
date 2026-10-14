@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "speed",
+  "variables": {},
+  "macros": [
+    {
+      "id": "slow",
+      "name": "Slow",
+      "enabled": true,
+      "priority": 0,
+      "speed": 2,
+      "playMode": "once",
+      "trigger": { "kind": "key", "button": "q" },
+      "steps": [
+        { "type": "wait", "ms": 10 },
+        { "type": "key", "action": "down", "key": "w" },
+        { "type": "wait", "ms": 10 }
+      ]
+    }
+  ]
+}

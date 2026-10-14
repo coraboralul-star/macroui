@@ -1,0 +1,22 @@
+# One script per block, then a mute pair, a while-held swap, and a multi-macro file.
+01-key
+02-mouse
+03-move-scroll
+04-wait-speed
+05-random
+06-repeat
+07-goto
+08-run
+09-hold
+10-swap
+11-burst
+12-if-short
+13-once-held
+14-tap-hold
+15-tap-spam
+16-scan
+17-press-raw
+18-press-child
+19-mute
+20-combo
+21-shaped

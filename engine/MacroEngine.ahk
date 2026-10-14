@@ -13,6 +13,7 @@ ListLines(false)
 A_HotkeyInterval := 0
 
 #Include JSON.ahk
+#Include TracePlay.ahk
 
 ; One process, no window. Macros advance from a high-resolution clock.
 ; SetTimer cannot keep a 5 ms wait at 5 ms on Windows.
@@ -20,6 +21,9 @@ A_HotkeyInterval := 0
 
 if (A_Args.Length && A_Args[1] = "--self-test")
     ExitApp(SelfTest())
+
+if (A_Args.Length >= 2 && A_Args[1] = "--trace")
+    ExitApp(TracePlay(A_Args[2], A_Args.Length >= 3 ? A_Args[3] : ""))
 
 ; The shell checks this before starting another copy. A second process would
 ; hit #SingleInstance Force, kill this one, and release every held key.

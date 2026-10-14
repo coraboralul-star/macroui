@@ -1,0 +1,7 @@
+profile profiles/19-mute.json
+until 25
+0 finger b down
+0 start shot
+10 finger n down
+10 start wall
+20 finger n up

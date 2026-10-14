@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "name": "key",
+  "variables": {},
+  "macros": [
+    {
+      "id": "tap-w",
+      "name": "Tap",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "repeatCount": 1,
+      "trigger": { "kind": "key", "button": "q" },
+      "steps": [
+        { "type": "key", "action": "down", "key": "w" },
+        { "type": "wait", "ms": 18 },
+        { "type": "key", "action": "up", "key": "w" }
+      ]
+    }
+  ]
+}

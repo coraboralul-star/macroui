@@ -55,6 +55,9 @@ target_link_libraries(engine-output-test PRIVATE engine_core)
 add_executable(engine-runner-test tests/runner_test.c)
 target_link_libraries(engine-runner-test PRIVATE engine_core)
 
+add_executable(engine-trace bench/trace.c)
+target_link_libraries(engine-trace PRIVATE engine_core)
+
 add_executable(engine-process-test tests/process_test.c)
 target_link_libraries(engine-process-test PRIVATE engine_core)
 

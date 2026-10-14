@@ -1,0 +1,4 @@
+profile profiles/05-random.json
+until 25
+roll 15
+0 start roll

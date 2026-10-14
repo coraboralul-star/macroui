@@ -1,0 +1,4 @@
+profile profiles/15-tap-spam.json
+until 40
+0 finger XButton1 down
+0 start spam
