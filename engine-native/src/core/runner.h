@@ -29,7 +29,8 @@
 #define ENGINE_ACT_DOWN 1
 #define ENGINE_ACT_UP 2
 
-/* Numbers stay fixed. Advance runs the first seven.
+/* Numbers stay fixed. The play tick runs key, mouse, move, scroll, wait,
+   randomWait, repeat, goto, and run.
    The rest are recognized so a later slice can fill them in.
    pressHold is not one of these: it expands to several steps. */
 #define ENGINE_STEP_KEY 1
@@ -49,11 +50,19 @@
 #define ENGINE_STEP_GOTO 15
 #define ENGINE_STEP_RUN 16
 
+/* goto where. Anything else, including an empty name, is screen. */
+#define ENGINE_WHERE_SCREEN 0
+#define ENGINE_WHERE_WINDOW 1
+#define ENGINE_WHERE_CLIENT 2
+
 /* key and mouse: action is down, up, or tap. Tap stores holdMs in a.
    wait stores ms in a. randomWait stores min in a and max in b.
    move stores x in a and y in b. scroll stores dy in a.
    repeat stores the count in a, the frame release stop in b, and the child
-   span in first and count. A negative repeat count becomes 0, which loops. */
+   span in first and count. A negative repeat count becomes 0, which loops.
+   goto stores x in a and y in b, where in action, and the duration in count.
+   0 does not wait. A missing duration is 15 when the step is built.
+   run stores the catalog index in a. A negative index is a missing target. */
 struct engine_step {
     uint8_t type;
     uint8_t action;
@@ -96,6 +105,10 @@ struct engine_runner {
     int32_t move_x;
     int32_t move_y;
     int32_t wheel;
+    int has_goto;
+    int did_goto;
+    int32_t goto_x;
+    int32_t goto_y;
     int mode;
     int release_stop;
     int stopping;
@@ -130,8 +143,25 @@ struct engine_macro {
 
 typedef int64_t (*engine_roll_fn)(int64_t lo, int64_t hi, void *ctx);
 
+/* Foreground snapshot for goto. The core does not query a window.
+   have_mouse 0 is a mouse at 0, 0. A missing window or client rect
+   makes that goto a no-op. */
+struct engine_pointer {
+    int have_mouse;
+    int32_t mouse_x;
+    int32_t mouse_y;
+    int have_window;
+    int32_t window_x;
+    int32_t window_y;
+    int have_client;
+    int32_t client_x;
+    int32_t client_y;
+};
+
 /* The play struct is large. Keep it off a deep stack.
-   freq 0 is stored as 1000 when a runner starts. dpi 0 is left 0. */
+   freq 0 is stored as 1000 when a runner starts. dpi 0 is left 0.
+   macros is the caller's catalog. run indexes it. The pointer is the
+   tick's mouse and window origin. */
 struct engine_play {
     struct engine_runner runners[ENGINE_RUNNER_CAP];
     int runner_count;
@@ -145,6 +175,10 @@ struct engine_play {
     uint32_t dpi;
     engine_roll_fn roll;
     void *roll_ctx;
+    const struct engine_macro *macros;
+    int macro_count;
+    struct engine_pointer pointer;
+    int have_pointer;
 };
 
 void engine_macro_init(struct engine_macro *macro);
@@ -155,6 +189,9 @@ int engine_key_id(const char *name, uint16_t *id);
 
 /* 0 for an unknown editor type, including pressHold. */
 int engine_step_kind(const char *name);
+
+/* window and client stay. A null, empty, or other name is screen. */
+int engine_goto_where(const char *name);
 
 /* 1 when a top-level step loops itself. Nested steps are the caller's count. */
 int engine_has_hold_loop(const struct engine_step *steps, uint32_t count);
@@ -171,6 +208,14 @@ int engine_basic_rewrite(uint16_t trigger, int trigger_is_key, int32_t gap_ms,
 void engine_play_init(struct engine_play *play);
 void engine_play_set_roll(struct engine_play *play, engine_roll_fn roll, void *ctx);
 
+/* The catalog stays with the caller. A null list or a count below 1 clears it.
+   run reads it during Advance. Indexes are resolved before the step is stored. */
+void engine_play_set_macros(struct engine_play *play, const struct engine_macro *macros,
+                            int count);
+
+/* Copies the snapshot. A null pointer clears it. */
+void engine_play_set_pointer(struct engine_play *play, const struct engine_pointer *pointer);
+
 /* mode_override below 0 keeps the macro mode. restart 0 leaves a live id alone.
    Returns 1 when a runner was queued. A full list queues nothing and stops nothing. */
 int engine_play_start(struct engine_play *play, const struct engine_macro *macro,
@@ -178,6 +223,10 @@ int engine_play_start(struct engine_play *play, const struct engine_macro *macro
 
 void engine_play_flush(struct engine_play *play);
 void engine_play_advance(struct engine_play *play, int64_t now);
+
+/* Runs one runner. run does nothing here: there is no catalog.
+   goto uses a screen point and a mouse at 0, 0.
+   engine_play_advance is the path that starts run and reads the pointer. */
 void engine_runner_advance(struct engine_runner *runner, int64_t now,
                            engine_roll_fn roll, void *roll_ctx);
 
@@ -186,8 +235,10 @@ int engine_play_desired(const struct engine_play *play, int64_t now,
                         uint16_t *out, int cap);
 
 /* Sums move and wheel from runners that are still in the list, including a
-   runner Advance just finished. Then writes one report. Returns 1 when the
-   image should be sent. Does not remove runners and does not call StopAll. */
+   runner Advance just finished. A goto replaces that sum with the absolute
+   point. The last goto in the list wins. Then writes one report. Returns 1
+   when the image should be sent. Does not remove runners and does not call
+   StopAll. */
 int engine_play_publish(struct engine_play *play, int64_t now);
 
 void engine_play_remove_done(struct engine_play *play);

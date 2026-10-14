@@ -8,15 +8,21 @@ The fake clock is the caller. `engine_runner_advance` takes `now` in the same un
 
 ## Ported
 
-`engine-runner-test` covers the self-test labels for the sprint fixture, the basic key, play-once, play-mode repeat, while-held, the zero-delay tap, and busy. It also covers move, scroll, an injected `randomWait`, `nextUp`, and `finish`.
+`engine-runner-test` covers the self-test labels for the sprint fixture, the basic key, play-once, play-mode repeat, while-held, the zero-delay tap, and busy. It also covers move, scroll, an injected `randomWait`, `nextUp`, `finish`, `goto`, and `run`.
 
 Windows CI runs the AHK `--self-test` as well. That script is still the whole 244-check spec. The native file is the part the runner can execute.
 
-The `repeat` step is in this slice because those first playback checks use it. `run` and `goto` are not.
+The `repeat` step is in this slice because those first playback checks use it.
+
+## run and goto
+
+`run` stores a catalog index in `a`. `engine_play_set_macros` is that catalog. A negative index, or an index past the catalog, does nothing. The target starts as `once` with `restart` false, so a live id is left alone. There is no cycle guard. The target is flushed before publish and does not advance until the next tick. `engine_runner_advance` has no catalog, so a `run` there does nothing.
+
+`goto` stores `x` in `a`, `y` in `b`, the where code in `action`, and the duration in `count`. `0` does not wait. The compiler stores `15` when the file omitted `ms`. `engine_goto_where` maps `window` and `client`. Any other name is `screen`. The screen point is the snapshot origin plus `x` and `y`. A missing window or client rect skips the step. The first goto of a runner clears the remembered point before the delta, including when that rect is missing. Later gotos on a board use the remembered point. Software uses the snapshot every time. Publish sends the absolute point and drops the relative sum from that tick. The wheel stays. The last goto in the runner list wins.
 
 ## Not executed yet
 
-`holdLoop`, `swapLoop`, `burst`, `ifShort`, `onceHeld`, `edgeHold`, `scanWait`, `goto`, and `run` have type numbers. `Advance` skips them. `whileHeld`, `swapAfter`, `then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to those numbers. `pressHold` does not: it still expands to several steps, and that expansion is not compiled yet.
+`holdLoop`, `swapLoop`, `burst`, `ifShort`, `onceHeld`, `edgeHold`, and `scanWait` have type numbers. `Advance` skips them. `whileHeld`, `swapAfter`, `then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to those numbers. `pressHold` does not: it still expands to several steps, and that expansion is not compiled yet.
 
 `priority` and `variables` are not read.
 
