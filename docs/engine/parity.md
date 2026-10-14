@@ -8,7 +8,7 @@ The fake clock is the caller. `engine_runner_advance` takes `now` in the same un
 
 ## Ported
 
-`engine-runner-test` covers the self-test labels for the sprint fixture, the basic key, play-once, play-mode repeat, while-held, the zero-delay tap, and busy. It also covers move, scroll, an injected `randomWait`, `nextUp`, `finish`, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, and `onceHeld`.
+`engine-runner-test` covers the self-test labels for the sprint fixture, the basic key, play-once, play-mode repeat, while-held, the zero-delay tap, and busy. It also covers move, scroll, an injected `randomWait`, `nextUp`, `finish`, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, `onceHeld`, and `edgeHold`.
 
 Windows CI runs the AHK `--self-test` as well. That script is still the whole 244-check spec. The native file is the part the runner can execute.
 
@@ -62,9 +62,27 @@ A held trigger waits out the gap before the children run again. The 1 ms poll du
 
 `cycles` increments once per finished pass. `ifShort` reads that count. `took_short` skips `onceHeld` on the top frame. `holdLoop` cycles still count.
 
+## edgeHold
+
+`tapHold` and `tapSpam` both map to `edgeHold`. `spam` is set only for `tapSpam`. The step stores the edge key, `armMs` in `a`, `gapMs` in `b`, `holdMs` in `d`, `restMs` in `e`, and `ignoreMs` in `f`. `c` stays `swapLoop` `afterMs`. The watch keys are a span in `first` and `count`. Those steps are not executed. The step builder stores key `z`, `armMs` 5, `gapMs` 80, `holdMs` 18, and `restMs` 18 when the file omitted them. At most 8 watch keys are copied. A later key in that span is not watched.
+
+The push holds the edge key, and the trigger when it is a different key, then waits 5 ms. That poll is not divided by speed. `stopping` or a trigger that is up marks a `tapHold` runner done, including during that wait. An empty trigger does not. A missing snapshot and a key that was never reported count as up. `engine_runner_advance` has no snapshot, so a non-empty trigger counts as up.
+
+A watched rising edge waits `armMs`, drops the edge key and the trigger hold, then waits `gapMs`. Both are divided by speed at the wait. `0` and a negative value still wait 1 ms. When the gap ends with the trigger still down, the edge key is held again. The trigger hold is not put back. A release during the gap marks the runner done and does not press the key again.
+
+`RepeatHold` sets an extra down on a keyboard key that is already held. The first wait is 400 ms and the repeat is 33 ms, the dry self-test numbers. They are not divided by speed. The runner does not call `SystemParametersInfo`. Mouse buttons are not repeated. The extra down is passed as the `extra` list to `engine_output_publish`. That is the report image from #45. This slice does not call `SendInput`.
+
+`tapSpam` toggles the edge key on `holdMs` and `restMs`. Those were divided by speed when the frame was built. A watched rising edge drops the key and waits `gapMs`. A release drops the holds, releases the pause-block mute, pops, and lets the next block run. `stopping` marks the runner done.
+
+`AcceptWatch` keeps `"macro"` and `"both"`. `"once"` and every other ignore name are off. `"both"` rejects a repeat of that watch key inside `ignoreMs`. `"macro"` rejects inside the window only when a live runner holds or pulses that key, or the key was sent at or after the lock time. A reject does not refresh the lock time. An accept stores `now`. `ignoreMs` is not divided by speed.
+
+`NormalizePause("once")` is off. Do not treat `"once"` as a lock. `"block"` mutes other catalog macros whose trigger is one of the watch keys, and pauses a runner that is already playing. The owner's own id is left out. At most 8 of those macros are muted. Releasing the frame unmutes them. The mute replay list does not include `edgeHold`.
+
+`took_short` skips `edgeHold` on the top frame. `engine_has_hold_loop` already includes it.
+
 ## Not executed yet
 
-`edgeHold` and `scanWait` have type numbers. `Advance` skips them. `then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to those numbers. `pressHold` does not: it still expands to several steps, and that expansion is not compiled yet.
+`scanWait` has a type number. `Advance` skips it. `then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to their numbers. `pressHold` does not: it still expands to several steps, and that expansion is not compiled yet.
 
 `priority` and `variables` are not read.
 
@@ -72,4 +90,4 @@ A name `engine_key_id` does not know is an empty key, and the step does nothing.
 
 Fractional milliseconds are not stored. The step record holds the integer the caller passed. The editor saves integers. A fraction in a raw file is #47's parse.
 
-The finger snapshot is the physical key for `holdLoop` and the trigger for `onceHeld`. `scanWait` is still skipped, so it does not read that snapshot yet. `NormalizePause("once")` stays off when that block is ported. Do not treat `"once"` as a lock.
+The finger snapshot is the physical key for `holdLoop`, the trigger for `onceHeld`, and the trigger and watch keys for `edgeHold`. `scanWait` is still skipped, so it does not read that snapshot yet.

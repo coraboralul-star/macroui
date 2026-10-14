@@ -33,8 +33,8 @@
 #define ENGINE_ACT_UP 2
 
 /* Numbers stay fixed. The play tick runs key, mouse, move, scroll, wait,
-   randomWait, repeat, goto, run, holdLoop, swapLoop, burst, ifShort, and
-   onceHeld. edgeHold and scanWait are recognized and still skipped.
+   randomWait, repeat, goto, run, holdLoop, swapLoop, burst, ifShort,
+   onceHeld, and edgeHold. scanWait is recognized and still skipped.
    pressHold is not one of these: it expands to several steps. */
 #define ENGINE_STEP_KEY 1
 #define ENGINE_STEP_MOUSE 2
@@ -87,9 +87,34 @@
    divided by speed when the frame is built. 0 and a negative a do not
    wait. A positive gap waits through the normal arm path. c stays
    swapLoop afterMs. onceHeld does not use it.
+   edgeHold stores the edge key in key. armMs is a. gapMs is b. holdMs is
+   d. restMs is e. ignoreMs is f. c stays swapLoop afterMs. action bit 0
+   is spam, set only for tapSpam. Bits 1 and 2 are the ignore mode. Bit 3
+   is pause block. first and count are the watch-key span. Those steps are
+   not executed. The step builder stores key z, armMs 5, gapMs 80, holdMs
+   18, and restMs 18 when the file omitted them. armMs and gapMs are
+   divided by speed at the wait. holdMs and restMs are divided by speed
+   when the frame is built. The 5 ms poll, the key delay, and the key
+   repeat are not. "once" is not an ignore mode and not a pause lock.
    A burst frame stores its deadline in burst_until. 0 means there is none.
    A onceHeld frame stores the phase, the first-pass flag, the scaled gap,
-   and the gap deadline. The gap deadline 0 means it has not been armed. */
+   and the gap deadline. The gap deadline 0 means it has not been armed.
+   An edgeHold frame stores the phase, the watch list, and the spam clock. */
+
+#define ENGINE_EDGE_WATCH_CAP 8
+#define ENGINE_EDGE_MUTE_CAP 8
+#define ENGINE_EDGE_PHASE_DOWN 0
+#define ENGINE_EDGE_PHASE_ARM 1
+#define ENGINE_EDGE_PHASE_GAP 2
+#define ENGINE_EDGE_PHASE_QUIET 3
+#define ENGINE_IGNORE_OFF 0
+#define ENGINE_IGNORE_MACRO 1
+#define ENGINE_IGNORE_BOTH 2
+#define ENGINE_EDGE_SPAM 0x01u
+#define ENGINE_EDGE_PAUSE_BLOCK 0x08u
+/* Dry self-test numbers. The OS keyboard delay is not read here. */
+#define ENGINE_KEY_DELAY_MS 400
+#define ENGINE_KEY_REPEAT_MS 33
 struct engine_step {
     uint8_t type;
     uint8_t action;
@@ -101,6 +126,9 @@ struct engine_step {
     uint16_t mute_at;
     uint16_t mute_n;
     int32_t c;
+    int32_t d;
+    int32_t e;
+    int32_t f;
 };
 
 struct engine_frame {
@@ -119,6 +147,27 @@ struct engine_frame {
     int once_first;
     int64_t once_gap;
     int64_t once_ready;
+    int edge_hold;
+    int edge_spam;
+    uint16_t edge_key;
+    int edge_phase;
+    int32_t edge_arm_ms;
+    int32_t edge_gap_ms;
+    int edge_ignore;
+    int32_t edge_ignore_ms;
+    uint16_t edge_watch[ENGINE_EDGE_WATCH_CAP];
+    uint8_t edge_prev[ENGINE_EDGE_WATCH_CAP];
+    int64_t edge_lock[ENGINE_EDGE_WATCH_CAP];
+    uint8_t edge_lock_set[ENGINE_EDGE_WATCH_CAP];
+    int edge_watch_n;
+    int64_t edge_repeat_at;
+    int64_t edge_hold_for;
+    int64_t edge_rest_for;
+    int edge_spam_on;
+    int64_t edge_spam_at;
+    int edge_mute_on;
+    int32_t edge_muted[ENGINE_EDGE_MUTE_CAP];
+    int edge_muted_n;
     uint16_t mute_at;
     uint16_t mute_n;
 };
@@ -142,6 +191,8 @@ struct engine_runner {
     int hold_count;
     struct engine_pulse pulses[ENGINE_HOLD_CAP];
     int pulse_count;
+    uint16_t echo[ENGINE_HOLD_CAP];
+    int echo_count;
     uint16_t pressed_now[ENGINE_HOLD_CAP];
     int pressed_count;
     int32_t move_x;
@@ -236,6 +287,8 @@ struct engine_play {
     int have_pointer;
     struct engine_fingers fingers;
     int have_fingers;
+    int64_t last_sent[ENGINE_KEY_ID_MAX + 1u];
+    uint8_t last_sent_ok[ENGINE_KEY_ID_MAX + 1u];
     int32_t mute_ids[ENGINE_MUTE_ID_CAP];
     uint32_t mute_count;
     char mute_slot_id[ENGINE_MUTE_SLOT_CAP][ENGINE_ID_CAP];
@@ -255,6 +308,15 @@ int engine_step_kind(const char *name);
 
 /* window and client stay. A null, empty, or other name is screen. */
 int engine_goto_where(const char *name);
+
+/* "macro" and "both" stay. "once" and every other name are off. */
+int engine_ignore_mode(const char *name);
+
+/* "block" stays, after trim and lower case. "once" is off. */
+int engine_pause_mode(const char *name);
+
+/* Packs spam, the ignore mode, and pause block into an edgeHold action. */
+uint8_t engine_edge_action(int spam, int ignore, int pause_block);
 
 /* 1 when a top-level step loops itself. Nested steps are the caller's count. */
 int engine_has_hold_loop(const struct engine_step *steps, uint32_t count);
@@ -313,9 +375,9 @@ void engine_play_advance(struct engine_play *play, int64_t now);
    goto uses a screen point and a mouse at 0, 0.
    holdLoop and swapLoop do nothing here: there is no mute list and no finger
    snapshot. engine_play_advance is the path that starts run, reads the pointer,
-   and runs those blocks. burst, ifShort, and onceHeld run here. There is no
-   finger, so burst does not wait, ifShort does not yield, and onceHeld counts
-   the trigger as up. */
+   and runs those blocks. burst, ifShort, onceHeld, and edgeHold run here.
+   There is no finger, so burst does not wait, ifShort does not yield,
+   onceHeld counts the trigger as up, and a non-empty edgeHold trigger is up. */
 void engine_runner_advance(struct engine_runner *runner, int64_t now,
                            engine_roll_fn roll, void *roll_ctx);
 
