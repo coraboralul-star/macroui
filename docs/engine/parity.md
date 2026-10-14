@@ -104,10 +104,24 @@ A steps entry that is not a map is not a native step. The count is the steps tha
 
 `then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to their numbers.
 
-`priority` and `variables` are not read.
+`priority` and `variables` are stored and ignored. See Profile load.
 
 A name `engine_key_id` does not know is an empty key, and the step does nothing. The ids are the #44 name table, the alias targets that table already names, and tab, escape, backspace, the arrows, insert, and delete. OEM punctuation is not an id yet. A raw profile that sends one of those keys is skipped until the table has a virtual key.
 
-Fractional milliseconds are not stored. The step record holds the integer the caller passed. The editor saves integers. A fraction in a raw file is #47's parse.
+A fractional millisecond is rounded half away from zero when the step is compiled. See Profile load.
 
 The finger snapshot is the physical key for `holdLoop`, the trigger for `onceHeld`, the trigger and watch keys for `edgeHold`, and the trigger for `scanWait`.
+
+## Profile load
+
+`engine_as_num` and `engine_as_bool` follow `Field`, `AsNum`, and `AsBool` in `engine/MacroEngine.ahk`. A missing field uses the caller's default. A present null is an empty string, so the number and bool helpers see that empty string. An empty string uses the numeric default and is not a bad-number note. A non-empty string that does not parse uses the default and is a note. Boolean true, numeric 1, and the strings `true` and `1` after trim and lower case are true.
+
+`priority` is stored on the extra record and ignored. `variables` is stored as a flag that the object was present and ignored. A missing file is the empty document `Default` with an empty variables object, in memory only. The file is not created. An empty existing file is a read error.
+
+Ids for `run`, mute, and the preferred config compare without case. The runner's own id compare stays case-sensitive. The compiler stores catalog indexes, so the runner does not compare those names again.
+
+A fractional millisecond is stored half away from zero in the int32 step field. Speed is applied later, so a fraction with a speed other than 1 can differ from AHK `Round(ms/speed)`. The editor saves integers. Repeat counts and `minCycles` use floor.
+
+`pressHold` is expanded at compile through `engine_expand_press_hold`. It is not a step. That happens only for a block. The same type in a raw `steps` array is an unknown step and is not executed.
+
+The trigger chain has 262 slots, `ENGINE_KEY_ID_MAX + 1`, so mouse ids 257 through 261 are included. Index 0 is empty. The links are 1-based and stay in profile order.

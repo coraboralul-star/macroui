@@ -20,6 +20,7 @@
 #include "hook_win.h"
 #include "output_win.h"
 #include "process.h"
+#include "profile.h"
 #include "version.h"
 #include "win_entry.h"
 
@@ -61,6 +62,13 @@ struct engine_resident {
     atomic_int hook_entered;
     atomic_int play_entered;
     int client;
+    struct engine_profile_slot profiles;
+    struct engine_state_slot state_slot;
+    char front[ENGINE_PROFILE_FOCUS_CAP];
+    char front_pub[ENGINE_PROFILE_FOCUS_CAP];
+    atomic_uint front_seq;
+    char prefer[ENGINE_ID_CAP];
+    uint64_t prefer_seq;
 };
 
 static struct engine_resident g;
@@ -260,10 +268,157 @@ static int open_session_window(void)
     return 0;
 }
 
+static void publish_front_name(const char *name)
+{
+    unsigned seq = atomic_load_explicit(&g.front_seq, memory_order_relaxed);
+
+    atomic_store_explicit(&g.front_seq, seq + 1u, memory_order_relaxed);
+    atomic_thread_fence(memory_order_release);
+    snprintf(g.front_pub, sizeof g.front_pub, "%s", name ? name : "");
+    atomic_store_explicit(&g.front_seq, seq + 2u, memory_order_release);
+}
+
+static void read_front_name(char *dst, size_t cap)
+{
+    int tries;
+
+    if (!dst || cap == 0)
+        return;
+    for (tries = 0; tries < 8; tries++) {
+        unsigned seq = atomic_load_explicit(&g.front_seq, memory_order_acquire);
+        char tmp[ENGINE_PROFILE_FOCUS_CAP];
+
+        if (seq & 1u)
+            continue;
+        memcpy(tmp, g.front_pub, sizeof tmp);
+        tmp[sizeof tmp - 1u] = '\0';
+        atomic_thread_fence(memory_order_acquire);
+        if (atomic_load_explicit(&g.front_seq, memory_order_relaxed) != seq)
+            continue;
+        snprintf(dst, cap, "%s", tmp);
+        return;
+    }
+}
+
+static void copy_image_base(const wchar_t *path, char *dst, size_t cap)
+{
+    const wchar_t *base = path ? path : L"";
+    const wchar_t *p;
+    int n;
+
+    for (p = base; *p; p++) {
+        if (*p == L'\\' || *p == L'/')
+            base = p + 1;
+    }
+    n = WideCharToMultiByte(CP_UTF8, 0, base, -1, dst, (int)cap, NULL, NULL);
+    if (n <= 0 && cap > 0)
+        dst[0] = '\0';
+}
+
+/* Foreground image name for PickLive. This stays on the IPC thread. */
+static void refresh_front(void)
+{
+    HWND hwnd;
+    DWORD pid = 0;
+    HANDLE proc;
+    wchar_t wide[1024];
+    DWORD n = (DWORD)(sizeof wide / sizeof wide[0]);
+    char name[ENGINE_PROFILE_FOCUS_CAP];
+
+    name[0] = '\0';
+    hwnd = GetForegroundWindow();
+    if (hwnd && GetWindowThreadProcessId(hwnd, &pid) && pid) {
+        proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (proc) {
+            if (QueryFullProcessImageNameW(proc, 0, wide, &n))
+                copy_image_base(wide, name, sizeof name);
+            CloseHandle(proc);
+        }
+    }
+    publish_front_name(name);
+}
+
+static void load_resident_profile(void)
+{
+    wchar_t wide[ENGINE_PROFILE_CAP];
+    HANDLE file;
+    LARGE_INTEGER size;
+    char *buf;
+    DWORD got = 0;
+    int chars;
+
+    /* No --profile is the empty document. There is no relative default. */
+    if (!g.args.profile[0]) {
+        engine_profile_slot_load_missing(&g.profiles);
+        return;
+    }
+    chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, g.args.profile, -1, wide,
+                                ENGINE_PROFILE_CAP);
+    if (chars <= 0) {
+        engine_profile_slot_fail(&g.profiles);
+        return;
+    }
+    file = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        DWORD err = GetLastError();
+
+        if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+            engine_profile_slot_load_missing(&g.profiles);
+        else
+            engine_profile_slot_fail(&g.profiles);
+        return;
+    }
+    if (!GetFileSizeEx(file, &size) || size.QuadPart < 0 ||
+        (unsigned long long)size.QuadPart > ENGINE_PROFILE_TEXT_MAX) {
+        CloseHandle(file);
+        engine_profile_slot_fail(&g.profiles);
+        return;
+    }
+    buf = (char *)malloc((size_t)size.QuadPart + 1u);
+    if (!buf) {
+        CloseHandle(file);
+        engine_profile_slot_fail(&g.profiles);
+        return;
+    }
+    if (size.QuadPart > 0 &&
+        (!ReadFile(file, buf, (DWORD)size.QuadPart, &got, NULL) || got != (DWORD)size.QuadPart)) {
+        CloseHandle(file);
+        free(buf);
+        engine_profile_slot_fail(&g.profiles);
+        return;
+    }
+    CloseHandle(file);
+    buf[got] = '\0';
+    engine_profile_slot_load_text(&g.profiles, buf, got);
+    free(buf);
+}
+
+static void adopt_profile(void)
+{
+    const struct engine_profile_image *image;
+    struct engine_live_config live;
+    uint64_t seq;
+
+    image = engine_profile_slot_adopt(&g.profiles);
+    seq = image ? image->sequence : 0;
+    if (seq != g.prefer_seq) {
+        g.prefer_seq = seq;
+        snprintf(g.prefer, sizeof g.prefer, "%s", image ? image->active_id : "");
+    }
+    read_front_name(g.front, sizeof g.front);
+    engine_profile_pick(image, g.front, g.prefer, &live);
+    snprintf(g.prefer, sizeof g.prefer, "%s", live.prefer);
+    /* hello and state frames stay unwritten. The snapshot still carries activeId. */
+    engine_state_publish(&g.state_slot, 0, live.active_id, g.front);
+}
+
 static DWORD WINAPI ipc_thread(LPVOID param)
 {
     (void)param;
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    load_resident_profile();
+    refresh_front();
     g.pipe_buf = (unsigned char *)malloc(ENGINE_PIPE_BYTES);
     if (!g.pipe_buf)
         atomic_store_explicit(&g.fail, 1, memory_order_release);
@@ -282,6 +437,7 @@ static DWORD WINAPI ipc_thread(LPVOID param)
     atomic_store_explicit(&g.ipc_entered, 1, memory_order_release);
     while (!atomic_load_explicit(&g.quit, memory_order_acquire)) {
         pump_window();
+        refresh_front();
         if (g.pipe)
             poll_pipe();
         if (g.ipc_wake)
@@ -293,6 +449,7 @@ static DWORD WINAPI ipc_thread(LPVOID param)
     }
     if (g.release_pipe)
         WaitForSingleObject(g.release_pipe, ENGINE_JOIN_MS);
+    engine_profile_slot_shutdown(&g.profiles);
     close_pipe();
     free(g.pipe_buf);
     g.pipe_buf = NULL;
@@ -325,8 +482,10 @@ static DWORD WINAPI playback_thread(LPVOID param)
             request_quit();
             break;
         }
-        /* Disarmed, nothing running. The 16 ms slice also waits on the IPC wake.
-           This thread does not advance a runner. */
+        /* Adopt first, then read the foreground name the IPC thread published.
+           This tick does not allocate, does not query a window, and does not
+           advance a runner. The 16 ms slice also waits on the IPC wake. */
+        adopt_profile();
         if (engine_win_clock_slice(&g.clock, &slice, g.hook.wake, g.ipc_wake, &reason) != 0) {
             atomic_store_explicit(&g.fail, 1, memory_order_release);
             request_quit();
@@ -443,9 +602,11 @@ static int run_resident(const struct engine_args *args)
     atomic_init(&g.ipc_entered, 0);
     atomic_init(&g.hook_entered, 0);
     atomic_init(&g.play_entered, 0);
+    atomic_init(&g.front_seq, 0);
     if (args)
         g.args = *args;
-    /* #47 reads the path. This process does not open it and has no relative default. */
+    engine_profile_slot_init(&g.profiles);
+    engine_state_slot_init(&g.state_slot);
     engine_hook_init(&g.hooks);
     engine_output_init(&g.output);
 
