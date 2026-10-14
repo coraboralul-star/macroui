@@ -35,7 +35,7 @@
 /* Numbers stay fixed. The play tick runs key, mouse, move, scroll, wait,
    randomWait, repeat, goto, run, holdLoop, swapLoop, burst, ifShort,
    onceHeld, edgeHold, and scanWait.
-   pressHold is not one of these: it expands to several steps. */
+   pressHold is not one of these. engine_expand_press_hold writes the steps. */
 #define ENGINE_STEP_KEY 1
 #define ENGINE_STEP_MOUSE 2
 #define ENGINE_STEP_MOVE 3
@@ -105,7 +105,12 @@
    trigger that the finger snapshot says is up marks the runner done.
    An empty trigger does not. While scan_wait is set, stopping or a trigger
    finger that is up ends the runner during the wait. scan_wait is set only
-   when the step runs, and it is cleared after the wait finishes. */
+   when the step runs, and it is cleared after the wait finishes.
+   pressHold does not get a step number. Child steps are copied through.
+   A non-empty key with no children writes key down, wait 18, key up.
+   scanWait is always appended. holdMs defaults to 200 when it was omitted.
+   That default is not the editor's 80. 0 and a negative holdMs are stored.
+   The wait of 18 and holdMs are divided later, on the wait arm path. */
 
 #define ENGINE_EDGE_WATCH_CAP 8
 #define ENGINE_EDGE_MUTE_CAP 8
@@ -309,7 +314,7 @@ void engine_macro_init(struct engine_macro *macro);
    Alias and SafeKey run here. Advance does not look up a name. */
 int engine_key_id(const char *name, uint16_t *id);
 
-/* 0 for an unknown editor type, including pressHold. */
+/* 0 for an unknown editor type. pressHold is 0 because it expands. */
 int engine_step_kind(const char *name);
 
 /* window and client stay. A null, empty, or other name is screen. */
@@ -335,6 +340,18 @@ int engine_top_repeats(int mode, int32_t repeat_count, int hold_loop);
    Left and right click are left alone. gap below 0 becomes 0. The hold is 18. */
 int engine_basic_rewrite(uint16_t trigger, int trigger_is_key, int32_t gap_ms,
                          struct engine_step *out, int cap);
+
+/* Expands a pressHold block. It does not allocate.
+   A missing steps array is an empty list: child_count 0.
+   Children are copied in order. out must not overlap them.
+   When NormKey keeps the key and there are no children, it writes key down, wait 18, key up.
+   The key id is engine_key_id. An unknown name still expands, with id 0.
+   An empty name does not. scanWait is always last. omitted uses 200.
+   Otherwise hold_ms is stored, including 0 and a negative value.
+   Returns the number written, or -1 when out cannot hold it. */
+int engine_expand_press_hold(const char *key, int32_t hold_ms, int omitted,
+                             const struct engine_step *children, uint32_t child_count,
+                             struct engine_step *out, int cap);
 
 void engine_play_init(struct engine_play *play);
 void engine_play_set_roll(struct engine_play *play, engine_roll_fn roll, void *ctx);
