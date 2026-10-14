@@ -95,13 +95,13 @@ In order:
 5. Otherwise resolve the key id, enqueue, and wake if playback asked.
 6. The keyboard hook returns 1 when the published map says swallow. Every other path calls `CallNextHookEx`. The mouse hook never returns 1.
 
-Side keys are resolved here. Generic shift, ctrl, alt, and win become the left or right virtual key from the scan code and the extended bit. Right shift is scan `0x36`. Numpad Enter is virtual key `0x0D` with the extended bit, and its key id is 256. Every other key id is the virtual key, 1 through 255.
+Side keys are resolved here. Generic shift, ctrl, alt, and win become the left or right virtual key from the scan code and the extended bit. Right shift is scan `0x36`. Numpad Enter is virtual key `0x0D` with the extended bit, and its key id is 256. Every other key id is the virtual key, 1 through 255. Mouse buttons use the name-table ids 257 through 261. Those ids are not virtual keys.
 
 There is no `RegisterHotKey`. Software swallow and board swallow are both the return from this callback. The pass count is a bit in the same map, published with it.
 
 The hook thread is the thread that installed the hooks, and it is the thread that reinstalls them. Reinstall runs between messages, not inside the callback. Unhook first. A handle Windows has already removed still looks valid.
 
-The watchdog rules in the analysis stay. Idle does not re-raise. The stamps live on the hook thread. The decision runs in step 4.
+The watchdog rules in the analysis stay. Idle does not re-raise. The stamps live on the hook thread. The decision runs in step 4. That decision is `engine_hook_watch` in `engine-native/src/core/hook.c`. The hook thread reads the raise flags between messages and unhooks before it installs. `engine-native/src/win/hook_win.c` is that install. `main` does not call it.
 
 ## Playback priority
 
@@ -206,20 +206,26 @@ engine-native/
   src/core/version.c      portable, Linux CI compiles this
   src/core/clock.h
   src/core/clock.c        pace, half-away rounding, tick deltas
-  src/win/win_entry.c     Windows only; hooks, SendInput, pipe, mutex later
+  src/core/hook.h
+  src/core/hook.c         events, echo, swallow map, watchdog decision
+  src/win/win_entry.c     Windows only; SendInput, pipe, mutex later
   src/win/clock_win.h
   src/win/clock_win.c     high-res wait
+  src/win/hook_win.h
+  src/win/hook_win.c      low-level hooks
   tests/clock_test.c      portable clock checks
   tests/clock_wait_test.c Windows wait check
+  tests/hook_test.c       portable hook checks
+  tests/hook_win_test.c   Windows hook struct and install check
 ```
 
 `engine/` stays the AHK engine until #54.
 
-`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. The clock math is already there. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` is the later home of the portable message image. The bytes are in `docs/engine/ipc-protocol.md`. The pipe call itself stays in `src/win`. `tests/clock_test.c` is the #43 clock check. The fake-clock harness for blocks stays #49. `bench/` arrives with that harness. The language benches stay in `tools/bench/lang/`.
+`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. The clock math and the hook decision are already there. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` is the later home of the portable message image. The bytes are in `docs/engine/ipc-protocol.md`. The pipe call itself stays in `src/win`. `tests/clock_test.c` is the #43 clock check. `tests/hook_test.c` is the #44 hook check. The fake-clock harness for blocks stays #49. `bench/` arrives with that harness. The language benches stay in `tools/bench/lang/`.
 
 ## Build
 
-C17, CMake, x64, one executable, `macroui-engine`. MSVC uses the static CRT. Windows CI is MSVC on `windows-latest`. Linux CI is the image C compiler and builds `src/main.c` plus `src/core`. It does not build `src/win`. clang-cl is not required.
+C17, CMake, x64, one executable, `macroui-engine`. MSVC uses the static CRT and `/experimental:c11atomics`, because that is what turns on `stdatomic.h`. Windows CI is MSVC on `windows-latest`. Linux CI is the image C compiler and builds `src/main.c` plus `src/core`. It does not build `src/win`. clang-cl is not required.
 
 The program prints `macroui-engine 0` and exits 0. That string is the version until a later issue replaces this entry with the resident process.
 
@@ -229,7 +235,8 @@ The program prints `macroui-engine 0` and exits 0. That string is the version un
 |---|---|
 | #42 | Frame bytes, hello handshake, hex vectors. Written in `docs/engine/ipc-protocol.md`. The port stays in the shell. |
 | #43 | Timing loop and clock. `src/core/clock.c` and `src/win/clock_win.c`. |
-| #44 onward | Hooks, output, compiler, runner. |
+| #44 | Hooks, trigger bits, and the watchdog. `src/core/hook.c` and `src/win/hook_win.c`. |
+| #45 onward | Output, compiler, runner. |
 | #49 | Fake-clock harness, before the first block port. The clock checks are already in `tests/`. |
 | #54 | Native becomes the default, then AHK leaves. |
 

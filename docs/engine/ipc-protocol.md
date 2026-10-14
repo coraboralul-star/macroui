@@ -147,7 +147,7 @@ Windows follow today's walk: distinct exe in `WinGetList` order, then the foregr
 | 260 | `XButton1` |
 | 261 | `XButton2` |
 
-Any other id uses the name table #44 fills. Until that table has a name, the id is omitted from `held`. The shell does not invent a second spelling.
+Any other id uses the name table #44 fills. Until that table has a name, the id is omitted from `held`. The shell does not invent a second spelling. The table is `engine_key_name` in `engine-native/src/core/hook.c`.
 
 ## ack
 

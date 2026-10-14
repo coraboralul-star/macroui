@@ -79,4 +79,4 @@ The #49 fake-clock harness lands before the first block port in #46. The trace c
 
 ## Next step
 
-The timing loop and the clock are #43. The pace table and the half-away line are `engine-native/src/core/clock.c`. The high-res wait is `engine-native/src/win/clock_win.c`. #44 is next: the hooks. The runner stays #46. No shell code. The language stays C17. MMCSS stays off. `timeBeginPeriod` stays off. Playback priority is the table in `docs/engine/architecture.md`. The language-bench pin stays a measurement.
+The hooks are #44. The callback, the swallow map, the echo list, and the watchdog decision are `engine-native/src/core/hook.c`. The install and the procs are `engine-native/src/win/hook_win.c`. `main` does not call them. #45 is next: output. Software is one `SendInput` from the report image. The shell writes the `K` / `M` lines from that same image and keeps the port. The runner stays #46. The language stays C17. MMCSS stays off. `timeBeginPeriod` stays off. Playback priority is the table in `docs/engine/architecture.md`. The language-bench pin stays a measurement.

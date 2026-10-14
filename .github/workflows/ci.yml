@@ -66,6 +66,8 @@ jobs:
         run: test "$(engine-native/build/macroui-engine)" = "macroui-engine 0"
       - name: Clock
         run: engine-native/build/engine-clock-test
+      - name: Hooks
+        run: engine-native/build/engine-hook-test
 
   engine-windows:
     name: Native engine
@@ -87,4 +89,8 @@ jobs:
           & "engine-native/build/engine-clock-test.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "engine-native/build/engine-clock-wait-test.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "engine-native/build/engine-hook-test.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "engine-native/build/engine-hook-win-test.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

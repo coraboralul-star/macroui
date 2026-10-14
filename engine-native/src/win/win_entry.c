@@ -1,5 +1,6 @@
-/* Hooks, SendInput, the pipe, and the mutex land later.
-   The high-res wait is clock_win.c. See docs/engine/architecture.md. */
+/* SendInput, the pipe, and the mutex land later.
+   The high-res wait is clock_win.c. The hooks are hook_win.c.
+   This file stays the presence check. See docs/engine/architecture.md. */
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
