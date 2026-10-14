@@ -9,6 +9,11 @@
 #define ENGINE_ADV_WAIT 1
 #define ENGINE_ADV_AGAIN 2
 
+/* onceHeld phases. run is 0 so a fresh frame starts there. */
+#define ENGINE_ONCE_RUN 0
+#define ENGINE_ONCE_DECIDE 1
+#define ENGINE_ONCE_GAP 2
+
 static int same_id(const char *a, const char *b)
 {
     if (!a || !b)
@@ -525,12 +530,17 @@ static void pulse_drop_due(struct engine_runner *runner, int64_t now)
     }
 }
 
-static int arm_ms(struct engine_runner *runner, int64_t now, double ms, double speed)
+static int64_t wait_deadline(const struct engine_runner *runner, int64_t now, double ms, double speed)
 {
     int64_t scaled = engine_scale_wait_ms(ms, speed);
     int64_t delta = engine_ms_to_ticks(scaled, runner->freq);
 
-    runner->wait_until = engine_arm_deadline(now, delta);
+    return engine_arm_deadline(now, delta);
+}
+
+static int arm_ms(struct engine_runner *runner, int64_t now, double ms, double speed)
+{
+    runner->wait_until = wait_deadline(runner, now, ms, speed);
     return ENGINE_ADV_WAIT;
 }
 
@@ -903,7 +913,116 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
             return ENGINE_ADV_WAIT;
         return ENGINE_ADV_CONT;
     }
+    if (step->type == ENGINE_STEP_ONCE_HELD) {
+        struct engine_frame *frame;
+
+        /* stopping skips the block before the frame is pushed. */
+        if (runner->stopping)
+            return ENGINE_ADV_CONT;
+        if (!push_frame(runner, play, step->first, step->count, 1, ENGINE_STOP_NONE))
+            return ENGINE_ADV_WAIT;
+        frame = &runner->stack[runner->stack_count - 1];
+        frame->once_held = 1;
+        frame->once_phase = ENGINE_ONCE_RUN;
+        frame->once_first = 1;
+        /* gapMs / speed, rounded. 0 and below do not wait. A positive gap is
+           at least 1 ms. Later waits use this number with speed 1. */
+        frame->once_gap = step->a > 0 ? engine_scale_wait_ms((double)step->a, runner->speed) : 0;
+        return ENGINE_ADV_CONT;
+    }
     return ENGINE_ADV_CONT;
+}
+
+static int trigger_is_up(const struct engine_runner *runner, const struct engine_play *play)
+{
+    if (!runner || runner->stopping || runner->trigger == 0)
+        return 1;
+    return !finger_down(play, runner->trigger);
+}
+
+/* 0 stops this tick. 1 keeps walking.
+   once_ready is the armed gap. A release keeps that deadline. */
+static int finish_gap(struct engine_runner *runner, struct engine_frame *frame, int64_t now)
+{
+    int64_t armed;
+
+    if (frame->once_gap <= 0 || now >= frame->once_ready) {
+        runner->stack_count--;
+        return 1;
+    }
+    armed = wait_deadline(runner, now, (double)frame->once_gap, 1.0);
+    if (armed == frame->once_ready)
+        arm_ms(runner, now, (double)frame->once_gap, 1.0);
+    else
+        runner->wait_until = frame->once_ready;
+    return 0;
+}
+
+static int yield_once(struct engine_runner *runner, int64_t now)
+{
+    /* Empty children and a same-tick up. Not divided by speed. */
+    arm_ms(runner, now, 1.0, 1.0);
+    return 0;
+}
+
+/* 0 stops this tick. 1 keeps walking. */
+static int finish_once(struct engine_runner *runner, struct engine_play *play, int64_t now)
+{
+    struct engine_frame *frame;
+    int up;
+
+    if (!runner || runner->stack_count <= 0)
+        return 0;
+    frame = &runner->stack[runner->stack_count - 1];
+    up = trigger_is_up(runner, play);
+    if (frame->once_phase == ENGINE_ONCE_GAP)
+        return finish_gap(runner, frame, now);
+    if (frame->once_phase == ENGINE_ONCE_DECIDE) {
+        if (up) {
+            frame->once_phase = ENGINE_ONCE_GAP;
+            return finish_gap(runner, frame, now);
+        }
+        if (now >= frame->once_ready) {
+            frame->once_phase = ENGINE_ONCE_RUN;
+            frame->once_first = 0;
+            frame->index = 0;
+            if (frame->count == 0)
+                return yield_once(runner, now);
+            return 1;
+        }
+        return yield_once(runner, now);
+    }
+    if (runner->cycles < INT32_MAX)
+        runner->cycles++;
+    if (frame->once_gap > 0)
+        frame->once_ready = wait_deadline(runner, now, (double)frame->once_gap, 1.0);
+    else
+        frame->once_ready = engine_arm_deadline(now, 0);
+    if (frame->once_first) {
+        frame->once_first = 0;
+        if (up) {
+            frame->once_phase = ENGINE_ONCE_GAP;
+            return finish_gap(runner, frame, now);
+        }
+        if (frame->once_gap <= 0) {
+            frame->once_phase = ENGINE_ONCE_RUN;
+            frame->index = 0;
+            if (frame->count == 0 || runner->released_now)
+                return yield_once(runner, now);
+            return 1;
+        }
+        frame->once_phase = ENGINE_ONCE_DECIDE;
+        return yield_once(runner, now);
+    }
+    if (up) {
+        frame->once_phase = ENGINE_ONCE_GAP;
+        return finish_gap(runner, frame, now);
+    }
+    frame->once_phase = ENGINE_ONCE_RUN;
+    frame->index = 0;
+    if (frame->count == 0 || runner->released_now)
+        return yield_once(runner, now);
+    return 1;
 }
 
 static void advance_runner(struct engine_runner *runner, struct engine_play *play, int64_t now,
@@ -948,6 +1067,11 @@ static void advance_runner(struct engine_runner *runner, struct engine_play *pla
         }
         frame = &runner->stack[runner->stack_count - 1];
         if (frame->index >= frame->count) {
+            if (frame->once_held) {
+                if (!finish_once(runner, play, now))
+                    return;
+                continue;
+            }
             if (frame->hold_loop) {
                 if (!finish_hold(runner, play, now))
                     return;

@@ -1535,17 +1535,16 @@ static void check_hold_loop(void)
            "block play full still presses the later down");
 
     memset(skip_steps, 0, sizeof skip_steps);
-    skip_steps[0].type = ENGINE_STEP_ONCE_HELD;
-    skip_steps[1].type = ENGINE_STEP_EDGE_HOLD;
-    skip_steps[2].type = ENGINE_STEP_SCAN_WAIT;
+    skip_steps[0].type = ENGINE_STEP_EDGE_HOLD;
+    skip_steps[1].type = ENGINE_STEP_SCAN_WAIT;
     engine_macro_init(&loop);
     set_id(&loop, "rest");
     loop.steps = skip_steps;
-    loop.step_count = 3;
+    loop.step_count = 2;
     fresh();
     engine_play_start(&play, &loop, -1, 1);
     engine_play_tick(&play, 0);
-    expect(live_id(&play, "rest") == NULL, "onceHeld, edgeHold, and scanWait are still skipped");
+    expect(live_id(&play, "rest") == NULL, "edgeHold and scanWait are still skipped");
 }
 
 static void check_swap_loop(void)
@@ -2373,6 +2372,414 @@ static void check_if_short(void)
            "ifShort on the bare runner does not yield");
 }
 
+static void check_once_held(void)
+{
+    struct engine_fingers fingers;
+    struct engine_step steps[8];
+    struct engine_macro shot;
+    struct engine_runner *runner;
+    uint16_t n = kid("n");
+    uint16_t o = kid("o");
+    uint16_t nine = kid("9");
+    uint16_t x = kid("x");
+    uint16_t y = kid("y");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_ONCE_HELD;
+    steps[0].first = 2;
+    steps[0].count = 3;
+    steps[0].a = 70;
+    steps[1].type = ENGINE_STEP_BURST;
+    steps[1].first = 5;
+    steps[1].count = 2;
+    steps[2].type = ENGINE_STEP_KEY;
+    steps[2].action = ENGINE_ACT_DOWN;
+    steps[2].key = o;
+    steps[3].type = ENGINE_STEP_WAIT;
+    steps[3].a = 10;
+    steps[4].type = ENGINE_STEP_KEY;
+    steps[4].action = ENGINE_ACT_UP;
+    steps[4].key = o;
+    steps[5].type = ENGINE_STEP_KEY;
+    steps[5].action = ENGINE_ACT_DOWN;
+    steps[5].key = nine;
+    steps[6].type = ENGINE_STEP_WAIT;
+    steps[6].a = 10;
+    engine_macro_init(&shot);
+    set_id(&shot, "edit-shot");
+    shot.steps = steps;
+    shot.step_count = 7;
+    shot.top_count = 2;
+    shot.mode = ENGINE_MODE_WHILE_HELD;
+    shot.trigger = n;
+    shot.speed = 1.0;
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, o) && has_id(&play, 0, nine) == 0,
+           "one press starts with the chord");
+    press(&fingers, &play, n, 0);
+    engine_play_tick(&play, 10);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->cycles == 1 && has_id(&play, 10, nine) == 0,
+           "a fast release keeps the runner and does not shoot yet");
+    engine_play_tick(&play, 40);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->cycles == 1 && has_id(&play, 40, nine) == 0,
+           "the shot waits out the gap after one chord");
+    engine_play_tick(&play, 80);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->cycles == 1 && has_id(&play, 80, nine),
+           "a fast press shoots 70 ms after the chord");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    expect(has_id(&play, 10, nine) == 0, "holding through the chord does not shoot");
+    press(&fingers, &play, n, 0);
+    engine_play_tick(&play, 50);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->cycles == 1 && has_id(&play, 50, nine) == 0,
+           "letting go during the gap does not shoot early");
+    engine_play_tick(&play, 80);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->cycles == 1 && has_id(&play, 80, nine),
+           "a press released during the gap still waits the full 70 ms");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    engine_play_tick(&play, 80);
+    expect(has_id(&play, 80, o) && has_id(&play, 80, nine) == 0,
+           "still holding when the gap ends edits again");
+    press(&fingers, &play, n, 0);
+    engine_play_tick(&play, 90);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->cycles == 2 && has_id(&play, 90, nine) == 0,
+           "release after a hold finishes that pass before the shot");
+    engine_play_tick(&play, 160);
+    expect(has_id(&play, 160, nine), "a hold shoots 70 ms after the last pass");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    engine_play_tick(&play, 80);
+    engine_play_tick(&play, 90);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->cycles == 2 && has_id(&play, 90, nine) == 0,
+           "a hold finishes the second cycle without shooting");
+    engine_play_tick(&play, 91);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->cycles == 2 && has_id(&play, 91, o),
+           "a hold starts the next cycle without waiting another 70 ms");
+
+    shot.speed = 2.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->wait_until == 5 && has_id(&play, 0, o),
+           "the chord wait is divided by speed");
+    press(&fingers, &play, n, 0);
+    engine_play_tick(&play, 5);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->wait_until == 40 && has_id(&play, 5, nine) == 0,
+           "gapMs is divided by speed");
+    engine_play_tick(&play, 40);
+    expect(has_id(&play, 40, nine), "the sped gap shoots at gapMs over speed");
+
+    shot.speed = 1.0;
+    steps[0].a = 0;
+    steps[0].count = 3;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->wait_until == 11 && has_id(&play, 10, nine) == 0,
+           "a gap of 0 does not wait");
+    engine_play_tick(&play, 11);
+    expect(has_id(&play, 11, o), "a gap of 0 starts the next chord on the next tick");
+
+    steps[0].a = -4;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->wait_until == 11,
+           "a negative gap does not wait");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_ONCE_HELD;
+    steps[0].first = 3;
+    steps[0].count = 0;
+    steps[0].a = 0;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = y;
+    steps[2].type = ENGINE_STEP_WAIT;
+    steps[2].a = 1000;
+    engine_macro_init(&shot);
+    set_id(&shot, "empty");
+    shot.steps = steps;
+    shot.step_count = 3;
+    shot.top_count = 3;
+    shot.mode = ENGINE_MODE_WHILE_HELD;
+    shot.trigger = n;
+    shot.speed = 2.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "empty");
+    expect(runner != NULL && runner->wait_until == 1 && runner->cycles == 1 &&
+               has_id(&play, 0, y) == 0,
+           "an empty onceHeld waits 1 ms");
+    engine_play_tick(&play, 1);
+    runner = live_id(&play, "empty");
+    expect(runner != NULL && runner->cycles == 2 && runner->wait_until == 2 &&
+               has_id(&play, 1, y) == 0,
+           "an empty onceHeld keeps yielding while the trigger is down");
+    press(&fingers, &play, n, 0);
+    engine_play_tick(&play, 2);
+    expect(has_id(&play, 2, y), "an empty onceHeld pops when the trigger comes up");
+
+    steps[0].a = 70;
+    steps[0].count = 3;
+    steps[0].first = 2;
+    steps[1].type = ENGINE_STEP_BURST;
+    steps[1].first = 5;
+    steps[1].count = 2;
+    steps[2].type = ENGINE_STEP_KEY;
+    steps[2].action = ENGINE_ACT_DOWN;
+    steps[2].key = o;
+    steps[3].type = ENGINE_STEP_WAIT;
+    steps[3].a = 10;
+    steps[4].type = ENGINE_STEP_KEY;
+    steps[4].action = ENGINE_ACT_UP;
+    steps[4].key = o;
+    steps[5].type = ENGINE_STEP_KEY;
+    steps[5].action = ENGINE_ACT_DOWN;
+    steps[5].key = nine;
+    steps[6].type = ENGINE_STEP_WAIT;
+    steps[6].a = 10;
+    engine_macro_init(&shot);
+    set_id(&shot, "edit-shot");
+    shot.steps = steps;
+    shot.step_count = 7;
+    shot.top_count = 2;
+    shot.trigger = 0;
+    shot.speed = 1.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->wait_until == 80 && has_id(&play, 10, nine) == 0,
+           "an empty trigger counts as up");
+    engine_play_tick(&play, 80);
+    expect(has_id(&play, 80, nine), "an empty trigger shoots after the gap");
+
+    shot.trigger = n;
+    fresh();
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->wait_until == 80,
+           "a missing snapshot counts as up");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    engine_play_set_fingers(&play, &fingers);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    runner = live_id(&play, "edit-shot");
+    expect(runner != NULL && runner->wait_until == 80,
+           "a key that was never reported counts as up");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_ONCE_HELD;
+    steps[0].first = 3;
+    steps[0].count = 1;
+    steps[0].a = 70;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = y;
+    steps[2].type = ENGINE_STEP_WAIT;
+    steps[2].a = 1000;
+    steps[3].type = ENGINE_STEP_KEY;
+    steps[3].action = ENGINE_ACT_DOWN;
+    steps[3].key = x;
+    engine_macro_init(&shot);
+    set_id(&shot, "stop");
+    shot.steps = steps;
+    shot.step_count = 4;
+    shot.top_count = 3;
+    shot.trigger = n;
+    shot.release_stop = ENGINE_STOP_FINISH;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_flush(&play);
+    engine_play_ask_stop(&play, "stop");
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, y) && has_id(&play, 0, x) == 0,
+           "stopping skips onceHeld before the frame is pushed");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_IF_SHORT;
+    steps[0].first = 3;
+    steps[0].count = 1;
+    steps[0].a = 150;
+    steps[0].b = 1;
+    steps[1].type = ENGINE_STEP_ONCE_HELD;
+    steps[1].first = 4;
+    steps[1].count = 1;
+    steps[1].a = 70;
+    steps[2].type = ENGINE_STEP_BURST;
+    steps[2].first = 5;
+    steps[2].count = 2;
+    steps[3].type = ENGINE_STEP_KEY;
+    steps[3].action = ENGINE_ACT_DOWN;
+    steps[3].key = o;
+    steps[4].type = ENGINE_STEP_KEY;
+    steps[4].action = ENGINE_ACT_DOWN;
+    steps[4].key = x;
+    steps[5].type = ENGINE_STEP_KEY;
+    steps[5].action = ENGINE_ACT_DOWN;
+    steps[5].key = nine;
+    steps[6].type = ENGINE_STEP_WAIT;
+    steps[6].a = 10;
+    engine_macro_init(&shot);
+    set_id(&shot, "short");
+    shot.steps = steps;
+    shot.step_count = 7;
+    shot.top_count = 3;
+    shot.trigger = n;
+    shot.speed = 1.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 0);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "short");
+    expect(runner != NULL && runner->took_short && has_id(&play, 0, o) &&
+               has_id(&play, 0, x) == 0 && has_id(&play, 0, nine),
+           "tookShort skips onceHeld and still runs burst");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_ONCE_HELD;
+    steps[0].first = 2;
+    steps[0].count = 3;
+    steps[0].a = 0;
+    steps[1].type = ENGINE_STEP_IF_SHORT;
+    steps[1].first = 5;
+    steps[1].count = 2;
+    steps[1].a = 150;
+    steps[1].b = 3;
+    steps[2].type = ENGINE_STEP_KEY;
+    steps[2].action = ENGINE_ACT_DOWN;
+    steps[2].key = o;
+    steps[3].type = ENGINE_STEP_WAIT;
+    steps[3].a = 10;
+    steps[4].type = ENGINE_STEP_KEY;
+    steps[4].action = ENGINE_ACT_UP;
+    steps[4].key = o;
+    steps[5].type = ENGINE_STEP_KEY;
+    steps[5].action = ENGINE_ACT_DOWN;
+    steps[5].key = x;
+    steps[6].type = ENGINE_STEP_WAIT;
+    steps[6].a = 10;
+    engine_macro_init(&shot);
+    set_id(&shot, "cycles");
+    shot.steps = steps;
+    shot.step_count = 7;
+    shot.top_count = 2;
+    shot.trigger = n;
+    shot.speed = 1.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 0);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    runner = live_id(&play, "cycles");
+    expect(runner != NULL && runner->cycles == 1 && runner->took_short &&
+               has_id(&play, 10, x) && runner->stack_count == 2 &&
+               runner->stack[1].repeats_left == 2,
+           "onceHeld cycles top up a later ifShort");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_ONCE_HELD;
+    steps[0].first = 1;
+    steps[0].count = 3;
+    steps[0].a = 70;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = x;
+    steps[2].type = ENGINE_STEP_WAIT;
+    steps[2].a = 10;
+    steps[3].type = ENGINE_STEP_KEY;
+    steps[3].action = ENGINE_ACT_UP;
+    steps[3].key = x;
+    engine_macro_init(&shot);
+    set_id(&shot, "bare");
+    shot.steps = steps;
+    shot.step_count = 4;
+    shot.top_count = 1;
+    shot.trigger = n;
+    shot.speed = 1.0;
+    fresh();
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_flush(&play);
+    engine_runner_advance(&play.runners[0], 0, NULL, NULL);
+    expect(has_id(&play, 0, x) && play.runners[0].done == 0, "onceHeld runs on the bare runner");
+    engine_runner_advance(&play.runners[0], 10, NULL, NULL);
+    expect(play.runners[0].done == 0 && play.runners[0].cycles == 1 &&
+               play.runners[0].wait_until == 80 && has_id(&play, 10, x) == 0,
+           "onceHeld on the bare runner counts a missing finger as up");
+
+    play.freq = 10000000;
+    fresh();
+    play.freq = 10000000;
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, n, 0);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "bare");
+    expect(runner != NULL && runner->wait_until == 100000 && has_id(&play, 0, x),
+           "onceHeld keeps the chord wait at a fast clock");
+    engine_play_tick(&play, 100000);
+    runner = live_id(&play, "bare");
+    expect(runner != NULL && runner->wait_until == 800000 && has_id(&play, 100000, x) == 0,
+           "gapMs uses the arm conversion at a fast clock");
+}
+
 int main(void)
 {
     check_names();
@@ -2395,6 +2802,7 @@ int main(void)
     check_swap_loop();
     check_burst();
     check_if_short();
+    check_once_held();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

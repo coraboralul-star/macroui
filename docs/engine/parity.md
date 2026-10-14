@@ -8,7 +8,7 @@ The fake clock is the caller. `engine_runner_advance` takes `now` in the same un
 
 ## Ported
 
-`engine-runner-test` covers the self-test labels for the sprint fixture, the basic key, play-once, play-mode repeat, while-held, the zero-delay tap, and busy. It also covers move, scroll, an injected `randomWait`, `nextUp`, `finish`, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, and `ifShort`.
+`engine-runner-test` covers the self-test labels for the sprint fixture, the basic key, play-once, play-mode repeat, while-held, the zero-delay tap, and busy. It also covers move, scroll, an injected `randomWait`, `nextUp`, `finish`, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, and `onceHeld`.
 
 Windows CI runs the AHK `--self-test` as well. That script is still the whole 244-check spec. The native file is the part the runner can execute.
 
@@ -50,11 +50,21 @@ A positive duration sets `burst_until` on the frame from the moment the block st
 
 A reported down that is still under `underMs` waits 1 ms. Once the hold has reached `underMs`, the children are skipped and `took_short` stays clear, so later steps still run. A release before `underMs` sets `took_short` and pushes the children for `minCycles - cycles` repeats. Fewer than 1 repeat pushes nothing, and `took_short` is still set. `took_short` skips later top-frame steps except `burst` and `ifShort`. Steps inside the short children still run.
 
-An empty trigger, a key that was never reported, and a missing snapshot are not down. `engine_runner_advance` has no snapshot, so it does not yield. `cycles` counts finished `holdLoop` passes. A short tap tops the short block up to `minCycles`. A long hold skips that block.
+An empty trigger, a key that was never reported, and a missing snapshot are not down. `engine_runner_advance` has no snapshot, so it does not yield. `cycles` counts finished `holdLoop` passes and finished `onceHeld` passes. A short tap tops the short block up to `minCycles`. A long hold skips that block.
+
+## onceHeld
+
+`onceHeld` stores the child span in `first` and `count`, and `gapMs` in `a`. The step builder stores `70` when the file omitted `gapMs`. `gapMs` is divided by speed when the frame is built. `0` and a negative `a` do not wait. A positive gap waits through the normal arm path. `c` stays `swapLoop` `afterMs`.
+
+`stopping` skips the step before the frame is pushed. The children run first. An empty trigger, a key that was never reported, and a missing snapshot count as up. `engine_runner_advance` has no snapshot, so the trigger counts as up.
+
+A held trigger waits out the gap before the children run again. The 1 ms poll during that wait is not divided by speed. A release during the gap finishes the gap, then pops. The next block then runs. A hold that is still down when the gap ends starts the next pass without another gap. An empty child list waits 1 ms. `releasedNow` waits 1 ms before the next down. Those yields are not divided by speed.
+
+`cycles` increments once per finished pass. `ifShort` reads that count. `took_short` skips `onceHeld` on the top frame. `holdLoop` cycles still count.
 
 ## Not executed yet
 
-`onceHeld`, `edgeHold`, and `scanWait` have type numbers. `Advance` skips them. `then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to those numbers. `pressHold` does not: it still expands to several steps, and that expansion is not compiled yet.
+`edgeHold` and `scanWait` have type numbers. `Advance` skips them. `then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to those numbers. `pressHold` does not: it still expands to several steps, and that expansion is not compiled yet.
 
 `priority` and `variables` are not read.
 
@@ -62,4 +72,4 @@ A name `engine_key_id` does not know is an empty key, and the step does nothing.
 
 Fractional milliseconds are not stored. The step record holds the integer the caller passed. The editor saves integers. A fraction in a raw file is #47's parse.
 
-The finger snapshot is the physical key for `holdLoop`. `scanWait` is still skipped, so it does not read that snapshot yet. `NormalizePause("once")` stays off when that block is ported. Do not treat `"once"` as a lock.
+The finger snapshot is the physical key for `holdLoop` and the trigger for `onceHeld`. `scanWait` is still skipped, so it does not read that snapshot yet. `NormalizePause("once")` stays off when that block is ported. Do not treat `"once"` as a lock.

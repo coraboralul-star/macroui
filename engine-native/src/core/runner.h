@@ -33,8 +33,8 @@
 #define ENGINE_ACT_UP 2
 
 /* Numbers stay fixed. The play tick runs key, mouse, move, scroll, wait,
-   randomWait, repeat, goto, run, holdLoop, swapLoop, burst, and ifShort.
-   onceHeld, edgeHold, and scanWait are recognized and still skipped.
+   randomWait, repeat, goto, run, holdLoop, swapLoop, burst, ifShort, and
+   onceHeld. edgeHold and scanWait are recognized and still skipped.
    pressHold is not one of these: it expands to several steps. */
 #define ENGINE_STEP_KEY 1
 #define ENGINE_STEP_MOUSE 2
@@ -82,7 +82,14 @@
    skip the children. The step builder stores 150 and 3 when the file
    omitted them. took_short then skips later top-frame steps except burst
    and ifShort. c stays swapLoop afterMs. burst and ifShort do not use it.
-   A burst frame stores its deadline in burst_until. 0 means there is none. */
+   onceHeld stores the child span in first and count, and gapMs in a.
+   The step builder stores 70 when the file omitted gapMs. gapMs is
+   divided by speed when the frame is built. 0 and a negative a do not
+   wait. A positive gap waits through the normal arm path. c stays
+   swapLoop afterMs. onceHeld does not use it.
+   A burst frame stores its deadline in burst_until. 0 means there is none.
+   A onceHeld frame stores the phase, the first-pass flag, the scaled gap,
+   and the gap deadline. The gap deadline 0 means it has not been armed. */
 struct engine_step {
     uint8_t type;
     uint8_t action;
@@ -107,6 +114,11 @@ struct engine_frame {
     int mute_on;
     int32_t swap_after_ms;
     int64_t burst_until;
+    int once_held;
+    int once_phase;
+    int once_first;
+    int64_t once_gap;
+    int64_t once_ready;
     uint16_t mute_at;
     uint16_t mute_n;
 };
@@ -301,8 +313,9 @@ void engine_play_advance(struct engine_play *play, int64_t now);
    goto uses a screen point and a mouse at 0, 0.
    holdLoop and swapLoop do nothing here: there is no mute list and no finger
    snapshot. engine_play_advance is the path that starts run, reads the pointer,
-   and runs those blocks. burst and ifShort run here. There is no finger, so
-   burst does not wait and ifShort does not yield. */
+   and runs those blocks. burst, ifShort, and onceHeld run here. There is no
+   finger, so burst does not wait, ifShort does not yield, and onceHeld counts
+   the trigger as up. */
 void engine_runner_advance(struct engine_runner *runner, int64_t now,
                            engine_roll_fn roll, void *roll_ctx);
 
