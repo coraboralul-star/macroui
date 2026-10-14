@@ -8,7 +8,7 @@ The fake clock is the caller. `engine_runner_advance` takes `now` in the same un
 
 ## Ported
 
-`engine-runner-test` covers the self-test labels for the sprint fixture, the basic key, play-once, play-mode repeat, while-held, the zero-delay tap, and busy. It also covers move, scroll, an injected `randomWait`, `nextUp`, `finish`, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, `onceHeld`, `edgeHold`, and `scanWait`.
+`engine-runner-test` covers the self-test labels for the sprint fixture, the basic key, play-once, play-mode repeat, while-held, the zero-delay tap, and busy. It also covers move, scroll, an injected `randomWait`, `nextUp`, `finish`, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, `onceHeld`, `edgeHold`, `scanWait`, and the `pressHold` expansion.
 
 Windows CI runs the AHK `--self-test` as well. That script is still the whole 244-check spec. The native file is the part the runner can execute.
 
@@ -90,9 +90,19 @@ While `scan_wait` is set, `stopping` or a trigger finger that is up ends the run
 
 `took_short` skips `scanWait` on the top frame. There is no extra case for it.
 
+## pressHold
+
+`pressHold` expands. `engine_step_kind("pressHold")` stays 0. `engine_expand_press_hold` writes the steps. It does not allocate.
+
+Child steps are copied through, in order. A missing `steps` array is an empty list. When `NormKey` keeps the key and there are no children, the expansion writes key down, wait 18, key up. The step type is `key`, including when the name is a mouse button. The id is `engine_key_id`. An unknown name still expands, and the id is 0, so that key step does nothing. An empty name does not write those three steps.
+
+`scanWait` is always appended. `holdMs` is stored in `a`. Omitted `holdMs` is 200. That default is not the editor's 80. `0` and a negative value are stored as given. The wait of 18 and `holdMs` are not divided here. The wait arm path divides them.
+
+A steps entry that is not a map is not a native step. The count is the steps that are copied. An array whose entries are all non-maps is an empty list here, so a non-empty key still expands. AHK still sees a length above 0 and skips the key triple. The editor does not write that file.
+
 ## Not executed yet
 
-`pressHold` still expands to several steps, and that expansion is not compiled yet. `then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to their numbers.
+`then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to their numbers.
 
 `priority` and `variables` are not read.
 

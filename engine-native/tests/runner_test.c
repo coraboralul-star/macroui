@@ -106,7 +106,8 @@ static void check_names(void)
     expect(engine_step_kind("steps") == ENGINE_STEP_REPEAT, "steps is a repeat");
     expect(engine_step_kind("whileHeld") == ENGINE_STEP_HOLD_LOOP, "while held kind");
     expect(engine_step_kind("tapSpam") == ENGINE_STEP_EDGE_HOLD, "spam kind");
-    expect(engine_step_kind("pressHold") == 0 && engine_step_kind("nope") == 0, "unknown kind");
+    expect(engine_step_kind("pressHold") == 0, "pressHold expands and is not a step");
+    expect(engine_step_kind("nope") == 0, "unknown kind");
     expect(engine_goto_where("Client") == ENGINE_WHERE_CLIENT, "goto client");
     expect(engine_goto_where("") == ENGINE_WHERE_SCREEN, "goto screen default");
     expect(engine_goto_where(" window ") == ENGINE_WHERE_WINDOW, "goto window trims");
@@ -3574,6 +3575,136 @@ static void check_scan_wait(void)
     expect(runner != NULL && runner->wait_until == 800000, "scan wait uses the fast clock");
 }
 
+static void check_press_hold(void)
+{
+    struct engine_step built[8];
+    struct engine_step child[2];
+    struct engine_step dirty[4];
+    struct engine_fingers fingers;
+    struct engine_macro macro;
+    struct engine_runner *runner;
+    uint16_t q = kid("q");
+    uint16_t b = kid("b");
+    uint16_t x = kid("x");
+
+    expect(engine_expand_press_hold("q", 80, 1, NULL, 0, built, 4) == 4,
+           "a key with no children expands to four steps");
+    expect(built[0].type == ENGINE_STEP_KEY && built[0].action == ENGINE_ACT_DOWN &&
+               built[0].key == q,
+           "pressHold starts with key down");
+    expect(built[1].type == ENGINE_STEP_WAIT && built[1].a == 18, "pressHold waits 18");
+    expect(built[2].type == ENGINE_STEP_KEY && built[2].action == ENGINE_ACT_UP &&
+               built[2].key == q,
+           "pressHold releases that key");
+    expect(built[3].type == ENGINE_STEP_SCAN_WAIT && built[3].a == 200,
+           "a missing holdMs is 200, not the editor 80");
+
+    expect(engine_expand_press_hold("Q", 0, 0, NULL, 0, built, 4) == 4 &&
+               built[0].key == q && built[3].a == 0,
+           "holdMs 0 is stored as 0");
+    expect(engine_expand_press_hold("q", -4, 0, NULL, 0, built, 4) == 4 && built[3].a == -4,
+           "a negative holdMs is stored");
+    expect(engine_expand_press_hold("q", 80, 0, NULL, 0, built, 4) == 4 && built[3].a == 80,
+           "an explicit holdMs is kept");
+
+    expect(engine_expand_press_hold("", 0, 1, NULL, 0, built, 4) == 1 &&
+               built[0].type == ENGINE_STEP_SCAN_WAIT && built[0].a == 200,
+           "an empty key only scans");
+    expect(engine_expand_press_hold(NULL, 0, 1, NULL, 0, built, 4) == 1 &&
+               built[0].type == ENGINE_STEP_SCAN_WAIT,
+           "a missing key only scans");
+    expect(engine_expand_press_hold(" ", 0, 1, NULL, 0, built, 4) == 1 &&
+               built[0].type == ENGINE_STEP_SCAN_WAIT,
+           "a blank key only scans");
+    expect(engine_expand_press_hold("nope", 0, 1, NULL, 0, built, 4) == 4 &&
+               built[0].type == ENGINE_STEP_KEY && built[0].key == 0 && built[1].a == 18 &&
+               built[3].type == ENGINE_STEP_SCAN_WAIT,
+           "an unknown key still expands");
+    expect(engine_expand_press_hold("LButton", 0, 1, NULL, 0, built, 4) == 4 &&
+               built[0].type == ENGINE_STEP_KEY && built[0].key == ENGINE_KEY_LBUTTON &&
+               built[2].type == ENGINE_STEP_KEY,
+           "pressHold writes a key step for a mouse button");
+
+    memset(child, 0, sizeof child);
+    child[0].type = ENGINE_STEP_KEY;
+    child[0].action = ENGINE_ACT_DOWN;
+    child[0].key = x;
+    child[0].first = 4;
+    child[0].count = 2;
+    child[0].mute_at = 3;
+    child[1].type = ENGINE_STEP_WAIT;
+    child[1].a = 7;
+    expect(engine_expand_press_hold("q", 50, 0, child, 2, built, 8) == 3, "children are copied through");
+    expect(built[0].type == ENGINE_STEP_KEY && built[0].key == x && built[0].first == 4 &&
+               built[0].count == 2 && built[0].mute_at == 3 && built[1].type == ENGINE_STEP_WAIT &&
+               built[1].a == 7 && built[2].type == ENGINE_STEP_SCAN_WAIT && built[2].a == 50,
+           "a key with children does not add the 18 ms hold");
+
+    memset(dirty, 0xAB, sizeof dirty);
+    expect(engine_expand_press_hold("q", 0, 1, NULL, 0, dirty, 3) == -1, "a short buffer is refused");
+    expect(((unsigned char *)dirty)[0] == 0xAB, "a short buffer writes nothing");
+    expect(engine_expand_press_hold("q", 0, 1, NULL, 0, NULL, 4) == -1, "a missing buffer is refused");
+    expect(engine_expand_press_hold("q", 0, 1, NULL, 1, built, 4) == -1, "children need a list");
+    expect(engine_expand_press_hold("q", 0, 0, child, 0xFFFFFFFFu, built, 4) == -1,
+           "a huge child list does not expand");
+
+    expect(engine_expand_press_hold("q", 80, 1, NULL, 0, built, 4) == 4, "pressHold expands again");
+    engine_macro_init(&macro);
+    set_id(&macro, "press");
+    macro.steps = built;
+    macro.step_count = 4;
+    macro.top_count = 4;
+    macro.trigger = b;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &macro, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "press");
+    expect(runner != NULL && runner->scan_wait == 0 && runner->wait_until == 18 &&
+               has_id(&play, 0, q) && has_id(&play, 0, x) == 0,
+           "pressHold holds the key before the scan");
+    engine_play_tick(&play, 18);
+    runner = live_id(&play, "press");
+    expect(runner != NULL && runner->scan_wait && runner->wait_until == 218 &&
+               has_id(&play, 18, q) == 0,
+           "pressHold scans after the 18 ms hold");
+    press(&fingers, &play, b, 0);
+    engine_play_tick(&play, 19);
+    expect(live_id(&play, "press") == NULL && has_id(&play, 19, q) == 0,
+           "pressHold ends when the trigger comes up");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &macro, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 18);
+    engine_play_tick(&play, 217);
+    expect(live_id(&play, "press") != NULL, "pressHold is still scanning before holdMs");
+    engine_play_tick(&play, 218);
+    expect(live_id(&play, "press") == NULL && has_id(&play, 218, q) == 0,
+           "pressHold finishes the scan while the trigger stays down");
+
+    expect(engine_expand_press_hold("q", 40, 0, child, 1, built, 4) == 2, "one child expands");
+    engine_macro_init(&macro);
+    set_id(&macro, "child");
+    macro.steps = built;
+    macro.step_count = 2;
+    macro.top_count = 2;
+    macro.trigger = b;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &macro, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "child");
+    expect(runner != NULL && runner->scan_wait && runner->wait_until == 40 &&
+               has_id(&play, 0, x) && has_id(&play, 0, q) == 0,
+           "pressHold runs the children and then scans");
+    expect(engine_step_kind("pressHold") == 0, "pressHold stays uncompiled");
+}
+
 int main(void)
 {
     check_names();
@@ -3599,6 +3730,7 @@ int main(void)
     check_once_held();
     check_edge_hold();
     check_scan_wait();
+    check_press_hold();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;
