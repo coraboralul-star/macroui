@@ -534,6 +534,26 @@ static int arm_ms(struct engine_runner *runner, int64_t now, double ms, double s
     return ENGINE_ADV_WAIT;
 }
 
+static int64_t held_ticks(const struct engine_runner *runner, int64_t now)
+{
+    if (!runner || runner->started_at < 0 || now <= runner->started_at)
+        return 0;
+    return now - runner->started_at;
+}
+
+/* forMs / speed, in ticks. Truncates. Does not use the wait minimum of 1. */
+static int64_t burst_ticks(double ms, int64_t freq)
+{
+    double ticks;
+
+    if (!isfinite(ms) || ms <= 0.0 || freq <= 0)
+        return 0;
+    ticks = (ms * (double)freq) / 1000.0;
+    if (!isfinite(ticks) || ticks >= 9223372036854775808.0)
+        return INT64_MAX;
+    return (int64_t)ticks;
+}
+
 static int32_t clamp_move(int32_t value)
 {
     if (value > ENGINE_REPORT_MOVE_LIMIT)
@@ -663,6 +683,11 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
 {
     uint16_t id;
     int32_t count;
+
+    /* A short tap skips later top-frame steps. burst and ifShort still run. */
+    if (runner->took_short && runner->stack_count == 1 &&
+        step->type != ENGINE_STEP_BURST && step->type != ENGINE_STEP_IF_SHORT)
+        return ENGINE_ADV_CONT;
 
     if (step->type == ENGINE_STEP_RANDOM_WAIT) {
         struct engine_span span = engine_wait_span((double)step->a, (double)step->b);
@@ -830,6 +855,54 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
             return ENGINE_ADV_WAIT;
         return ENGINE_ADV_CONT;
     }
+    if (step->type == ENGINE_STEP_BURST) {
+        double scaled = 0.0;
+        int64_t freq;
+        int64_t ticks;
+        struct engine_frame *frame;
+
+        /* No snapshot means the trigger is not down, so the children run. */
+        if (runner->trigger != 0 && finger_down(play, runner->trigger)) {
+            arm_ms(runner, now, 1.0, 1.0);
+            return ENGINE_ADV_AGAIN;
+        }
+        if (step->a > 0 && isfinite(runner->speed) && runner->speed > 0.0)
+            scaled = (double)step->a / runner->speed;
+        if (!push_frame(runner, play, step->first, step->count, 1, ENGINE_STOP_NONE))
+            return ENGINE_ADV_WAIT;
+        freq = runner->freq > 0 ? runner->freq : 1000;
+        ticks = burst_ticks(scaled, freq);
+        if (ticks > 0) {
+            frame = &runner->stack[runner->stack_count - 1];
+            frame->burst_until = engine_arm_deadline(now, ticks);
+        }
+        return ENGINE_ADV_CONT;
+    }
+    if (step->type == ENGINE_STEP_IF_SHORT) {
+        int64_t freq = runner->freq > 0 ? runner->freq : 1000;
+        int64_t held = held_ticks(runner, now);
+        int64_t under = step->a > 0 ? engine_ms_to_ticks(step->a, freq) : 0;
+        int still = runner->trigger != 0 && finger_down(play, runner->trigger);
+        int64_t left;
+
+        /* underMs is wall time. The 1 ms yield is not divided by speed. */
+        if (still && held < under) {
+            arm_ms(runner, now, 1.0, 1.0);
+            return ENGINE_ADV_AGAIN;
+        }
+        if (held >= under)
+            return ENGINE_ADV_CONT;
+        runner->took_short = 1;
+        left = (int64_t)step->b - (int64_t)runner->cycles;
+        if (left < 1)
+            return ENGINE_ADV_CONT;
+        if (left > INT32_MAX)
+            left = INT32_MAX;
+        if (!push_frame(runner, play, step->first, step->count, (int32_t)left,
+                        ENGINE_STOP_NONE))
+            return ENGINE_ADV_WAIT;
+        return ENGINE_ADV_CONT;
+    }
     return ENGINE_ADV_CONT;
 }
 
@@ -878,6 +951,11 @@ static void advance_runner(struct engine_runner *runner, struct engine_play *pla
             if (frame->hold_loop) {
                 if (!finish_hold(runner, play, now))
                     return;
+                continue;
+            }
+            /* The current pass finishes. A deadline still ahead starts it again. */
+            if (frame->burst_until != 0 && now < frame->burst_until) {
+                frame->index = 0;
                 continue;
             }
             if (!finish_frame(runner, play))

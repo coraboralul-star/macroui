@@ -33,9 +33,9 @@
 #define ENGINE_ACT_UP 2
 
 /* Numbers stay fixed. The play tick runs key, mouse, move, scroll, wait,
-   randomWait, repeat, goto, run, holdLoop, and swapLoop.
-   burst, ifShort, onceHeld, edgeHold, and scanWait are recognized and still
-   skipped. pressHold is not one of these: it expands to several steps. */
+   randomWait, repeat, goto, run, holdLoop, swapLoop, burst, and ifShort.
+   onceHeld, edgeHold, and scanWait are recognized and still skipped.
+   pressHold is not one of these: it expands to several steps. */
 #define ENGINE_STEP_KEY 1
 #define ENGINE_STEP_MOUSE 2
 #define ENGINE_STEP_MOVE 3
@@ -72,7 +72,17 @@
    mute table. Those entries are catalog indexes.
    swapLoop stores the same fields, and afterMs in c. 0 afterMs does not
    wait. The step builder stores 150 when the file omitted afterMs.
-   afterMs is not divided by speed. */
+   afterMs is not divided by speed.
+   burst stores the child span in first and count, and forMs in a.
+   0 and a negative a run the children once. A positive a is divided by
+   speed, then converted to ticks with truncation. It is not forced up to
+   1 ms. The step builder stores 0 when the file omitted forMs.
+   ifShort stores the child span in first and count, underMs in a, and
+   minCycles in b. underMs is not divided by speed. 0 and a negative a
+   skip the children. The step builder stores 150 and 3 when the file
+   omitted them. took_short then skips later top-frame steps except burst
+   and ifShort. c stays swapLoop afterMs. burst and ifShort do not use it.
+   A burst frame stores its deadline in burst_until. 0 means there is none. */
 struct engine_step {
     uint8_t type;
     uint8_t action;
@@ -96,6 +106,7 @@ struct engine_frame {
     int drain;
     int mute_on;
     int32_t swap_after_ms;
+    int64_t burst_until;
     uint16_t mute_at;
     uint16_t mute_n;
 };
@@ -137,6 +148,7 @@ struct engine_runner {
     int done;
     int paused;
     int32_t cycles;
+    int took_short;
     uint16_t trigger;
 };
 
@@ -289,7 +301,8 @@ void engine_play_advance(struct engine_play *play, int64_t now);
    goto uses a screen point and a mouse at 0, 0.
    holdLoop and swapLoop do nothing here: there is no mute list and no finger
    snapshot. engine_play_advance is the path that starts run, reads the pointer,
-   and runs those blocks. */
+   and runs those blocks. burst and ifShort run here. There is no finger, so
+   burst does not wait and ifShort does not yield. */
 void engine_runner_advance(struct engine_runner *runner, int64_t now,
                            engine_roll_fn roll, void *roll_ctx);
 

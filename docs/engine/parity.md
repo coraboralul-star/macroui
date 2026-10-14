@@ -8,7 +8,7 @@ The fake clock is the caller. `engine_runner_advance` takes `now` in the same un
 
 ## Ported
 
-`engine-runner-test` covers the self-test labels for the sprint fixture, the basic key, play-once, play-mode repeat, while-held, the zero-delay tap, and busy. It also covers move, scroll, an injected `randomWait`, `nextUp`, `finish`, `goto`, `run`, `holdLoop`, and `swapLoop`.
+`engine-runner-test` covers the self-test labels for the sprint fixture, the basic key, play-once, play-mode repeat, while-held, the zero-delay tap, and busy. It also covers move, scroll, an injected `randomWait`, `nextUp`, `finish`, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, and `ifShort`.
 
 Windows CI runs the AHK `--self-test` as well. That script is still the whole 244-check spec. The native file is the part the runner can execute.
 
@@ -36,9 +36,25 @@ Mute is a count on the play struct. The first count pauses that runner and remem
 
 `stopping` skips the step. A reported key that is up skips it. An empty trigger skips it. A key that was never reported skips it. A missing snapshot is not a finger, so the step is skipped. A reported key that is down waits until `afterMs`, then pushes the same hold frame as `holdLoop`. Mute, `swapAfterMs`, drain, and an empty body stay on that frame. A release before `afterMs` skips the loop and runs the next step.
 
+## burst
+
+`burst` stores the child span in `first` and `count`, and `forMs` in `a`. `0` and a negative `a` run the children once. A positive `a` is divided by speed. The tick count truncates toward zero. It is not forced up to 1 ms. The step builder stores `0` when the file omitted `forMs`. `c` stays `swapLoop` `afterMs`.
+
+The finger snapshot is the trigger. A reported down waits 1 ms, and that yield is not divided by speed. The children run when the trigger is up. An empty trigger, a key that was never reported, and a missing snapshot are not down, so the children run. `engine_runner_advance` has no snapshot, so it does not wait.
+
+A positive duration sets `burst_until` on the frame from the moment the block starts. The children restart while that time is still ahead. The check is at the end of the frame, so the current pass finishes. An empty body hits the 64-step yield until the time is up.
+
+## ifShort
+
+`ifShort` stores the child span in `first` and `count`, `underMs` in `a`, and `minCycles` in `b`. `underMs` is compared to time since the runner started and is not divided by speed. The 1 ms yield is not divided by speed either. `0` and a negative `a` skip the children. The step builder stores `150` and `3` when the file omitted them. `c` stays `swapLoop` `afterMs`.
+
+A reported down that is still under `underMs` waits 1 ms. Once the hold has reached `underMs`, the children are skipped and `took_short` stays clear, so later steps still run. A release before `underMs` sets `took_short` and pushes the children for `minCycles - cycles` repeats. Fewer than 1 repeat pushes nothing, and `took_short` is still set. `took_short` skips later top-frame steps except `burst` and `ifShort`. Steps inside the short children still run.
+
+An empty trigger, a key that was never reported, and a missing snapshot are not down. `engine_runner_advance` has no snapshot, so it does not yield. `cycles` counts finished `holdLoop` passes. A short tap tops the short block up to `minCycles`. A long hold skips that block.
+
 ## Not executed yet
 
-`burst`, `ifShort`, `onceHeld`, `edgeHold`, and `scanWait` have type numbers. `Advance` skips them. `then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to those numbers. `pressHold` does not: it still expands to several steps, and that expansion is not compiled yet.
+`onceHeld`, `edgeHold`, and `scanWait` have type numbers. `Advance` skips them. `then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to those numbers. `pressHold` does not: it still expands to several steps, and that expansion is not compiled yet.
 
 `priority` and `variables` are not read.
 

@@ -156,6 +156,8 @@ The same half-away rule is used where the analysis calls `Round` on a coordinate
 
 These are not divided by `speed`: `ifShort` `underMs`, `swapLoop` `afterMs`, `move`, `scroll`, the OS key delay and repeat, the 5 ms edge poll, and the 1 ms yield. A wait that comes from those constants still uses the `delta` line, with `scaled` already known.
 
+`burst` `forMs` is divided by speed. The duration becomes ticks with truncation toward zero. It does not use the wait minimum of 1. `0` or less runs the children once.
+
 `randomWait` is inside the inclusive min and max after the bounds are swapped and clamped at 0. The test injects the roll. It is not an exact-interval check.
 
 ## Data
@@ -227,7 +229,7 @@ engine-native/
   tests/hook_win_test.c   Windows hook struct and install check
   tests/output_test.c     portable report, diff, and line plan
   tests/output_win_test.c Windows SendInput fill
-  tests/runner_test.c     fake clock, the basic steps, run, goto, holdLoop, and swapLoop
+  tests/runner_test.c     fake clock, the basic steps, run, goto, holdLoop, swapLoop, burst, and ifShort
 ```
 
 `engine/` stays the AHK engine until #54.
@@ -248,7 +250,7 @@ The program prints `macroui-engine 0` and exits 0. That string is the version un
 | #43 | Timing loop and clock. `src/core/clock.c` and `src/win/clock_win.c`. |
 | #44 | Hooks, trigger bits, and the watchdog. `src/core/hook.c` and `src/win/hook_win.c`. |
 | #45 | Output. `src/ipc/report.c`, `src/core/output.c`, `src/win/output_win.c`, and `shell/ReportBoard.cs`. |
-| #46 | Block compiler and runner. `src/core/runner.c` runs the basic steps, `goto`, `run`, `holdLoop`, and `swapLoop`. Mute is on that runner. `burst`, `ifShort`, `onceHeld`, `edgeHold`, and `scanWait` are still open. |
+| #46 | Block compiler and runner. `src/core/runner.c` runs the basic steps, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, and `ifShort`. Mute is on that runner. `onceHeld`, `edgeHold`, and `scanWait` are still open. |
 | #47 | Profile loading, live config, and validation. |
 | #48 | Process lifecycle, single instance, and exit. |
 | #49 | Fake-clock harness is `tests/runner_test.c`. Windows CI runs the AHK `--self-test`. The trace corpus is still open. |

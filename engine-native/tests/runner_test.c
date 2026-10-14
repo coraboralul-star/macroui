@@ -1205,7 +1205,7 @@ static void check_hold_loop(void)
     struct engine_step plain_steps[1];
     struct engine_step swap_steps[6];
     struct engine_step drain_steps[7];
-    struct engine_step skip_steps[5];
+    struct engine_step skip_steps[3];
     struct engine_macro loop;
     struct engine_macro shot;
     struct engine_macro wall;
@@ -1535,19 +1535,17 @@ static void check_hold_loop(void)
            "block play full still presses the later down");
 
     memset(skip_steps, 0, sizeof skip_steps);
-    skip_steps[0].type = ENGINE_STEP_BURST;
-    skip_steps[1].type = ENGINE_STEP_IF_SHORT;
-    skip_steps[2].type = ENGINE_STEP_ONCE_HELD;
-    skip_steps[3].type = ENGINE_STEP_EDGE_HOLD;
-    skip_steps[4].type = ENGINE_STEP_SCAN_WAIT;
+    skip_steps[0].type = ENGINE_STEP_ONCE_HELD;
+    skip_steps[1].type = ENGINE_STEP_EDGE_HOLD;
+    skip_steps[2].type = ENGINE_STEP_SCAN_WAIT;
     engine_macro_init(&loop);
     set_id(&loop, "rest");
     loop.steps = skip_steps;
-    loop.step_count = 5;
+    loop.step_count = 3;
     fresh();
     engine_play_start(&play, &loop, -1, 1);
     engine_play_tick(&play, 0);
-    expect(live_id(&play, "rest") == NULL, "the other hold blocks are still skipped");
+    expect(live_id(&play, "rest") == NULL, "onceHeld, edgeHold, and scanWait are still skipped");
 }
 
 static void check_swap_loop(void)
@@ -1832,6 +1830,549 @@ static void check_swap_loop(void)
            "swap loop pauses the other macro and leaves itself out");
 }
 
+static void check_burst(void)
+{
+    struct engine_play *state = fresh();
+    struct engine_fingers fingers;
+    struct engine_step steps[6];
+    struct engine_macro burst;
+    uint16_t b = kid("b");
+    uint16_t x = kid("x");
+    uint16_t y = kid("y");
+    uint16_t seven = kid("7");
+    struct engine_runner *runner;
+
+    engine_fingers_clear(&fingers);
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_BURST;
+    steps[0].first = 3;
+    steps[0].count = 2;
+    steps[0].a = 100;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = y;
+    steps[2].type = ENGINE_STEP_WAIT;
+    steps[2].a = 10;
+    steps[3].type = ENGINE_STEP_KEY;
+    steps[3].action = ENGINE_ACT_DOWN;
+    steps[3].key = x;
+    steps[4].type = ENGINE_STEP_WAIT;
+    steps[4].a = 10;
+    engine_macro_init(&burst);
+    set_id(&burst, "after");
+    burst.steps = steps;
+    burst.step_count = 5;
+    burst.top_count = 3;
+    burst.trigger = b;
+    burst.speed = 2.0;
+    press(&fingers, state, b, 1);
+    engine_play_start(state, &burst, -1, 1);
+    engine_play_tick(state, 0);
+    runner = live_id(state, "after");
+    expect(runner != NULL && runner->wait_until == 1 && has_id(state, 0, x) == 0 &&
+               has_id(state, 0, y) == 0,
+           "burst waits 1 ms while the trigger is down");
+    engine_play_tick(state, 50);
+    runner = live_id(state, "after");
+    expect(runner != NULL && has_id(state, 50, x) == 0, "burst stays held past forMs");
+    press(&fingers, state, b, 0);
+    engine_play_tick(state, 51);
+    runner = live_id(state, "after");
+    expect(runner != NULL && has_id(state, 51, x) && has_id(state, 51, y) == 0 &&
+               runner->wait_until == 56,
+           "a release runs the burst once and scales the child wait");
+
+    steps[0].a = 0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 0);
+    engine_play_start(&play, &burst, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, x) && has_id(&play, 0, y) == 0, "forMs 0 runs the children once");
+
+    steps[0].a = -5;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 0);
+    engine_play_start(&play, &burst, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, x) && live_id(&play, "after") != NULL,
+           "a negative forMs runs the children once");
+
+    steps[0].a = 1;
+    burst.speed = 2.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 0);
+    engine_play_start(&play, &burst, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "after");
+    expect(runner != NULL && runner->wait_until == 5 && has_id(&play, 0, x) &&
+               runner->stack_count == 2 && runner->stack[1].burst_until == 0,
+           "forMs that truncates to 0 ticks runs once");
+
+    play.freq = 10000000;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 0);
+    play.freq = 10000000;
+    engine_play_start(&play, &burst, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "after");
+    expect(runner != NULL && runner->stack_count == 2 &&
+               runner->stack[1].burst_until == 5000 && has_id(&play, 0, x),
+           "half a millisecond of forMs keeps a burst deadline");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_BURST;
+    steps[0].first = 1;
+    steps[0].count = 2;
+    steps[0].a = 25;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = x;
+    steps[2].type = ENGINE_STEP_WAIT;
+    steps[2].a = 10;
+    engine_macro_init(&burst);
+    set_id(&burst, "loop");
+    burst.steps = steps;
+    burst.step_count = 3;
+    burst.top_count = 1;
+    burst.trigger = b;
+    burst.speed = 1.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 0);
+    engine_play_start(&play, &burst, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    engine_play_tick(&play, 20);
+    runner = live_id(&play, "loop");
+    expect(runner != NULL && has_id(&play, 20, x) && runner->wait_until == 30,
+           "burst repeats the children until forMs");
+    engine_play_tick(&play, 30);
+    expect(live_id(&play, "loop") == NULL, "burst ends once forMs has passed");
+
+    steps[0].a = 40;
+    burst.speed = 2.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 0);
+    engine_play_start(&play, &burst, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "loop");
+    expect(runner != NULL && has_id(&play, 0, x) && runner->wait_until == 5,
+           "forMs is divided by speed");
+    engine_play_tick(&play, 5);
+    engine_play_tick(&play, 10);
+    engine_play_tick(&play, 15);
+    runner = live_id(&play, "loop");
+    expect(runner != NULL && has_id(&play, 15, x), "the sped burst is still inside forMs");
+    engine_play_tick(&play, 20);
+    expect(live_id(&play, "loop") == NULL, "the sped burst ends at forMs over speed");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_BURST;
+    steps[0].first = 2;
+    steps[0].count = 0;
+    steps[0].a = 30;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = y;
+    steps[2].type = ENGINE_STEP_WAIT;
+    steps[2].a = 10;
+    engine_macro_init(&burst);
+    set_id(&burst, "empty");
+    burst.steps = steps;
+    burst.step_count = 3;
+    burst.top_count = 3;
+    burst.trigger = b;
+    burst.speed = 1.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 0);
+    engine_play_start(&play, &burst, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "empty");
+    expect(runner != NULL && runner->wait_until == 1 && has_id(&play, 0, y) == 0,
+           "an empty burst yields until forMs");
+    engine_play_tick(&play, 29);
+    expect(has_id(&play, 29, y) == 0 && live_id(&play, "empty") != NULL,
+           "an empty burst is still waiting inside forMs");
+    engine_play_tick(&play, 30);
+    expect(has_id(&play, 30, y) && live_id(&play, "empty") != NULL,
+           "an empty burst runs the next step at forMs");
+
+    burst.trigger = 0;
+    steps[0].a = 0;
+    steps[0].count = 0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &burst, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, y), "an empty trigger does not hold burst");
+
+    burst.trigger = b;
+    fresh();
+    engine_play_start(&play, &burst, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, y), "a missing snapshot does not hold burst");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    engine_play_set_fingers(&play, &fingers);
+    engine_play_start(&play, &burst, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, y), "a key that was never reported does not hold burst");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_KEY;
+    steps[0].action = ENGINE_ACT_DOWN;
+    steps[0].key = seven;
+    steps[1].type = ENGINE_STEP_BURST;
+    steps[1].first = 2;
+    steps[1].count = 1;
+    steps[1].a = 55;
+    steps[2].type = ENGINE_STEP_KEY;
+    steps[2].action = ENGINE_ACT_UP;
+    steps[2].key = seven;
+    engine_macro_init(&burst);
+    set_id(&burst, "seven");
+    burst.steps = steps;
+    burst.step_count = 3;
+    burst.top_count = 2;
+    burst.trigger = b;
+    burst.speed = 1.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &burst, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 100);
+    runner = live_id(&play, "seven");
+    expect(runner != NULL && has_id(&play, 100, seven),
+           "after release does not send the up while the trigger is held");
+    press(&fingers, &play, b, 0);
+    engine_play_tick(&play, 101);
+    runner = live_id(&play, "seven");
+    expect(runner != NULL && has_id(&play, 101, seven) == 0 && runner->stack_count == 2 &&
+               runner->stack[1].burst_until == 156,
+           "after release sends the up when the trigger comes up");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_BURST;
+    steps[0].first = 2;
+    steps[0].count = 2;
+    steps[0].a = 100;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = y;
+    steps[2].type = ENGINE_STEP_KEY;
+    steps[2].action = ENGINE_ACT_DOWN;
+    steps[2].key = x;
+    steps[3].type = ENGINE_STEP_WAIT;
+    steps[3].a = 10;
+    engine_macro_init(&burst);
+    set_id(&burst, "bare");
+    burst.steps = steps;
+    burst.step_count = 4;
+    burst.top_count = 2;
+    burst.trigger = b;
+    fresh();
+    engine_play_start(&play, &burst, -1, 1);
+    engine_play_flush(&play);
+    engine_runner_advance(&play.runners[0], 0, NULL, NULL);
+    expect(has_id(&play, 0, x) && has_id(&play, 0, y) == 0 && play.runners[0].done == 0,
+           "burst on the bare runner does not wait");
+}
+
+static void check_if_short(void)
+{
+    struct engine_play *state = fresh();
+    struct engine_fingers fingers;
+    struct engine_step steps[9];
+    struct engine_macro tap;
+    uint16_t b = kid("b");
+    uint16_t x = kid("x");
+    uint16_t y = kid("y");
+    uint16_t z = kid("z");
+    uint16_t o = kid("o");
+    uint16_t nine = kid("9");
+    struct engine_runner *runner;
+
+    engine_fingers_clear(&fingers);
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_IF_SHORT;
+    steps[0].first = 3;
+    steps[0].count = 1;
+    steps[0].a = 40;
+    steps[0].b = 3;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = y;
+    steps[2].type = ENGINE_STEP_WAIT;
+    steps[2].a = 10;
+    steps[3].type = ENGINE_STEP_KEY;
+    steps[3].action = ENGINE_ACT_DOWN;
+    steps[3].key = x;
+    engine_macro_init(&tap);
+    set_id(&tap, "under");
+    tap.steps = steps;
+    tap.step_count = 4;
+    tap.top_count = 3;
+    tap.trigger = b;
+    tap.speed = 2.0;
+    press(&fingers, state, b, 1);
+    engine_play_start(state, &tap, -1, 1);
+    engine_play_tick(state, 0);
+    runner = live_id(state, "under");
+    expect(runner != NULL && runner->wait_until == 1 && has_id(state, 0, x) == 0 &&
+               has_id(state, 0, y) == 0 && runner->took_short == 0,
+           "ifShort waits 1 ms while the hold is still short");
+    engine_play_tick(state, 30);
+    runner = live_id(state, "under");
+    expect(runner != NULL && runner->wait_until == 31 && has_id(state, 30, x) == 0 &&
+               has_id(state, 30, y) == 0,
+           "underMs is not divided by speed");
+    engine_play_tick(state, 40);
+    runner = live_id(state, "under");
+    expect(runner != NULL && has_id(state, 40, y) && has_id(state, 40, x) == 0 &&
+               runner->took_short == 0 && runner->wait_until == 45,
+           "a long hold skips ifShort and still runs the next step");
+
+    steps[0].a = 0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "under");
+    expect(runner != NULL && has_id(&play, 0, y) && has_id(&play, 0, x) == 0 &&
+               runner->took_short == 0,
+           "underMs 0 skips the short children");
+
+    steps[0].a = -4;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, y) && has_id(&play, 0, x) == 0,
+           "a negative underMs skips the short children");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_HOLD_LOOP;
+    steps[0].first = 5;
+    steps[0].count = 1;
+    steps[1].type = ENGINE_STEP_IF_SHORT;
+    steps[1].first = 6;
+    steps[1].count = 1;
+    steps[1].a = 150;
+    steps[1].b = 3;
+    steps[2].type = ENGINE_STEP_BURST;
+    steps[2].first = 7;
+    steps[2].count = 2;
+    steps[5].type = ENGINE_STEP_WAIT;
+    steps[5].a = 26;
+    steps[6].type = ENGINE_STEP_WAIT;
+    steps[6].a = 26;
+    steps[7].type = ENGINE_STEP_KEY;
+    steps[7].action = ENGINE_ACT_DOWN;
+    steps[7].key = nine;
+    steps[8].type = ENGINE_STEP_WAIT;
+    steps[8].a = 10;
+    engine_macro_init(&tap);
+    set_id(&tap, "short");
+    tap.steps = steps;
+    tap.step_count = 9;
+    tap.top_count = 3;
+    tap.trigger = b;
+    tap.speed = 1.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 26);
+    press(&fingers, &play, b, 0);
+    engine_play_tick(&play, 52);
+    runner = live_id(&play, "short");
+    expect(runner != NULL && runner->cycles == 2 && has_id(&play, 52, nine) == 0 &&
+               runner->took_short,
+           "a short hold counts two cycles and tops up ifShort");
+    engine_play_tick(&play, 78);
+    runner = live_id(&play, "short");
+    expect(runner != NULL && has_id(&play, 78, nine) && runner->cycles == 2,
+           "burst runs after the short tap is topped up");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 160);
+    runner = live_id(&play, "short");
+    expect(runner != NULL && runner->cycles == 1 && has_id(&play, 160, nine) == 0,
+           "a long hold is still inside the loop at 160 ms");
+    press(&fingers, &play, b, 0);
+    engine_play_tick(&play, 186);
+    runner = live_id(&play, "short");
+    expect(runner != NULL && runner->cycles == 2 && has_id(&play, 186, nine) &&
+               runner->took_short == 0,
+           "a long hold skips the extra cycles and runs burst");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_IF_SHORT;
+    steps[0].first = 3;
+    steps[0].count = 2;
+    steps[0].a = 130;
+    steps[0].b = 1;
+    steps[1].type = ENGINE_STEP_HOLD_LOOP;
+    steps[1].first = 5;
+    steps[1].count = 2;
+    steps[2].type = ENGINE_STEP_BURST;
+    steps[2].first = 7;
+    steps[2].count = 2;
+    steps[3].type = ENGINE_STEP_KEY;
+    steps[3].action = ENGINE_ACT_DOWN;
+    steps[3].key = o;
+    steps[4].type = ENGINE_STEP_WAIT;
+    steps[4].a = 10;
+    steps[5].type = ENGINE_STEP_KEY;
+    steps[5].action = ENGINE_ACT_DOWN;
+    steps[5].key = x;
+    steps[6].type = ENGINE_STEP_WAIT;
+    steps[6].a = 10;
+    steps[7].type = ENGINE_STEP_KEY;
+    steps[7].action = ENGINE_ACT_DOWN;
+    steps[7].key = z;
+    steps[8].type = ENGINE_STEP_WAIT;
+    steps[8].a = 10;
+    engine_macro_init(&tap);
+    set_id(&tap, "split");
+    tap.steps = steps;
+    tap.step_count = 9;
+    tap.top_count = 3;
+    tap.trigger = b;
+    tap.speed = 1.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 0);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "split");
+    expect(runner != NULL && has_id(&play, 0, o) && has_id(&play, 0, x) == 0 &&
+               has_id(&play, 0, z) == 0 && runner->took_short,
+           "a quick tap takes ifShort and does not start the hold");
+    engine_play_tick(&play, 10);
+    expect(has_id(&play, 10, o) && has_id(&play, 10, z) && has_id(&play, 10, x) == 0,
+           "tookShort skips the hold and still runs burst");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, o) == 0 && has_id(&play, 0, x) == 0, "a held trigger waits out underMs");
+    engine_play_tick(&play, 130);
+    runner = live_id(&play, "split");
+    expect(runner != NULL && has_id(&play, 130, x) && has_id(&play, 130, o) == 0 &&
+               has_id(&play, 130, z) == 0 && runner->took_short == 0,
+           "holding past underMs starts the hold and skips ifShort");
+    press(&fingers, &play, b, 0);
+    engine_play_tick(&play, 140);
+    expect(has_id(&play, 140, x) && has_id(&play, 140, z) && has_id(&play, 140, o) == 0,
+           "the hold lets go into burst");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_IF_SHORT;
+    steps[0].first = 3;
+    steps[0].count = 1;
+    steps[0].a = 150;
+    steps[0].b = 0;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = y;
+    steps[2].type = ENGINE_STEP_BURST;
+    steps[2].first = 4;
+    steps[2].count = 2;
+    steps[3].type = ENGINE_STEP_KEY;
+    steps[3].action = ENGINE_ACT_DOWN;
+    steps[3].key = x;
+    steps[4].type = ENGINE_STEP_KEY;
+    steps[4].action = ENGINE_ACT_DOWN;
+    steps[4].key = z;
+    steps[5].type = ENGINE_STEP_WAIT;
+    steps[5].a = 10;
+    engine_macro_init(&tap);
+    set_id(&tap, "none");
+    tap.steps = steps;
+    tap.step_count = 6;
+    tap.top_count = 3;
+    tap.trigger = b;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 0);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "none");
+    expect(runner != NULL && runner->took_short && has_id(&play, 0, z) &&
+               has_id(&play, 0, y) == 0 && has_id(&play, 0, x) == 0,
+           "minCycles below 1 still sets tookShort and runs burst");
+
+    tap.trigger = 0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, z) && has_id(&play, 0, x) == 0,
+           "an empty trigger takes the short path");
+
+    tap.trigger = b;
+    fresh();
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, z) && has_id(&play, 0, x) == 0,
+           "a missing snapshot takes the short path");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    engine_play_set_fingers(&play, &fingers);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, z), "a key that was never reported takes the short path");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_IF_SHORT;
+    steps[0].first = 2;
+    steps[0].count = 2;
+    steps[0].a = 150;
+    steps[0].b = 1;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = y;
+    steps[2].type = ENGINE_STEP_KEY;
+    steps[2].action = ENGINE_ACT_DOWN;
+    steps[2].key = x;
+    steps[3].type = ENGINE_STEP_WAIT;
+    steps[3].a = 10;
+    engine_macro_init(&tap);
+    set_id(&tap, "bare");
+    tap.steps = steps;
+    tap.step_count = 4;
+    tap.top_count = 2;
+    tap.trigger = b;
+    fresh();
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_flush(&play);
+    engine_runner_advance(&play.runners[0], 0, NULL, NULL);
+    expect(has_id(&play, 0, x) && has_id(&play, 0, y) == 0 && play.runners[0].took_short &&
+               play.runners[0].done == 0,
+           "ifShort on the bare runner does not yield");
+}
+
 int main(void)
 {
     check_names();
@@ -1852,6 +2393,8 @@ int main(void)
     check_run();
     check_hold_loop();
     check_swap_loop();
+    check_burst();
+    check_if_short();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;
