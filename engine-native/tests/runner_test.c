@@ -1220,7 +1220,6 @@ static void check_hold_loop(void)
     struct engine_step plain_steps[1];
     struct engine_step swap_steps[6];
     struct engine_step drain_steps[7];
-    struct engine_step skip_steps[3];
     struct engine_macro loop;
     struct engine_macro shot;
     struct engine_macro wall;
@@ -1548,17 +1547,6 @@ static void check_hold_loop(void)
     engine_play_tick(&play, 50);
     expect(live_id(&play, "full") != NULL && has_id(&play, 50, z),
            "block play full still presses the later down");
-
-    memset(skip_steps, 0, sizeof skip_steps);
-    skip_steps[0].type = ENGINE_STEP_SCAN_WAIT;
-    engine_macro_init(&loop);
-    set_id(&loop, "rest");
-    loop.steps = skip_steps;
-    loop.step_count = 1;
-    fresh();
-    engine_play_start(&play, &loop, -1, 1);
-    engine_play_tick(&play, 0);
-    expect(live_id(&play, "rest") == NULL, "scanWait is still skipped");
 }
 
 static void check_swap_loop(void)
@@ -3354,6 +3342,238 @@ static void check_edge_hold(void)
     expect(report_has(&play, z), "the key repeat uses the fast clock");
 }
 
+static void check_scan_wait(void)
+{
+    struct engine_fingers fingers;
+    struct engine_step steps[6];
+    struct engine_macro scan;
+    uint16_t b = kid("b");
+    uint16_t o = kid("o");
+    uint16_t x = kid("x");
+    struct engine_runner *runner;
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_KEY;
+    steps[0].action = ENGINE_ACT_DOWN;
+    steps[0].key = o;
+    steps[1].type = ENGINE_STEP_WAIT;
+    steps[1].a = 10;
+    steps[2].type = ENGINE_STEP_KEY;
+    steps[2].action = ENGINE_ACT_UP;
+    steps[2].key = o;
+    steps[3].type = ENGINE_STEP_SCAN_WAIT;
+    steps[3].a = 80;
+    steps[4].type = ENGINE_STEP_KEY;
+    steps[4].action = ENGINE_ACT_DOWN;
+    steps[4].key = x;
+    steps[5].type = ENGINE_STEP_WAIT;
+    steps[5].a = 10;
+    engine_macro_init(&scan);
+    set_id(&scan, "scan-hold");
+    scan.steps = steps;
+    scan.step_count = 6;
+    scan.top_count = 6;
+    scan.trigger = b;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "scan-hold");
+    expect(runner != NULL && runner->scan_wait == 0 && has_id(&play, 0, o) &&
+               has_id(&play, 0, x) == 0,
+           "scan wait runs the keys first");
+    engine_play_tick(&play, 10);
+    runner = live_id(&play, "scan-hold");
+    expect(runner != NULL && runner->scan_wait && runner->wait_until == 90 &&
+               has_id(&play, 10, o) == 0 && has_id(&play, 10, x) == 0,
+           "scan wait starts after those keys");
+    press(&fingers, &play, b, 0);
+    engine_play_tick(&play, 40);
+    expect(live_id(&play, "scan-hold") == NULL && has_id(&play, 40, x) == 0,
+           "scan wait exits if the trigger lets go");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    engine_play_tick(&play, 90);
+    runner = live_id(&play, "scan-hold");
+    expect(runner != NULL && runner->scan_wait == 0 && has_id(&play, 90, x),
+           "scan wait continues after the hold");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_SCAN_WAIT;
+    steps[0].a = 80;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = x;
+    steps[2].type = ENGINE_STEP_WAIT;
+    steps[2].a = 10;
+    engine_macro_init(&scan);
+    set_id(&scan, "scan-only");
+    scan.steps = steps;
+    scan.step_count = 3;
+    scan.top_count = 3;
+    scan.trigger = b;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "scan-only");
+    expect(runner != NULL && runner->scan_wait && has_id(&play, 0, x) == 0,
+           "scan wait can run with no keys around it");
+    engine_play_tick(&play, 80);
+    expect(has_id(&play, 80, x), "scan wait continues after the sleep");
+
+    scan.speed = 2.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "scan-only");
+    expect(runner != NULL && runner->wait_until == 40, "scan wait is divided by speed");
+
+    steps[0].a = 0;
+    scan.speed = 1.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "scan-only");
+    expect(runner != NULL && runner->wait_until == 1 && has_id(&play, 0, x) == 0,
+           "a scan wait of 0 still waits 1 ms");
+    engine_play_tick(&play, 1);
+    expect(has_id(&play, 1, x), "a scan wait of 0 presses the next key after that wait");
+
+    steps[0].a = -5;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "scan-only");
+    expect(runner != NULL && runner->wait_until == 1, "a negative scan wait still waits 1 ms");
+
+    steps[0].a = 80;
+    scan.trigger = 0;
+    set_id(&scan, "empty");
+    fresh();
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "empty");
+    expect(runner != NULL && runner->scan_wait && runner->wait_until == 80,
+           "an empty trigger does not stop the scan");
+    engine_play_tick(&play, 80);
+    expect(has_id(&play, 80, x), "an empty trigger runs the next key after the scan");
+
+    scan.trigger = b;
+    set_id(&scan, "missing");
+    fresh();
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(live_id(&play, "missing") == NULL && has_id(&play, 0, x) == 0,
+           "a missing snapshot stops the scan");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    engine_play_set_fingers(&play, &fingers);
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(live_id(&play, "missing") == NULL && has_id(&play, 0, x) == 0,
+           "a key that was never reported stops the scan");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 0);
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(live_id(&play, "missing") == NULL && has_id(&play, 0, x) == 0,
+           "a trigger that is already up stops the scan");
+
+    set_id(&scan, "stop");
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_ask_stop(&play, "stop");
+    engine_play_tick(&play, 1);
+    expect(live_id(&play, "stop") == NULL && has_id(&play, 1, x) == 0,
+           "stopping ends a scan wait");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_IF_SHORT;
+    steps[0].a = 150;
+    steps[0].b = 0;
+    steps[1].type = ENGINE_STEP_SCAN_WAIT;
+    steps[1].a = 80;
+    steps[2].type = ENGINE_STEP_BURST;
+    steps[2].first = 3;
+    steps[2].count = 2;
+    steps[3].type = ENGINE_STEP_KEY;
+    steps[3].action = ENGINE_ACT_DOWN;
+    steps[3].key = x;
+    steps[4].type = ENGINE_STEP_WAIT;
+    steps[4].a = 40;
+    engine_macro_init(&scan);
+    set_id(&scan, "short");
+    scan.steps = steps;
+    scan.step_count = 5;
+    scan.top_count = 3;
+    scan.trigger = b;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 0);
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "short");
+    expect(runner != NULL && runner->took_short && has_id(&play, 0, x),
+           "took_short skips scanWait and still runs burst");
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_SCAN_WAIT;
+    steps[0].a = 80;
+    engine_macro_init(&scan);
+    set_id(&scan, "bare");
+    scan.steps = steps;
+    scan.step_count = 1;
+    scan.top_count = 1;
+    scan.trigger = b;
+    fresh();
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_flush(&play);
+    engine_runner_advance(&play.runners[0], 0, NULL, NULL);
+    expect(play.runners[0].done, "scanWait on the bare runner counts a missing finger as up");
+
+    scan.trigger = 0;
+    set_id(&scan, "bare-empty");
+    fresh();
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_flush(&play);
+    engine_runner_advance(&play.runners[0], 0, NULL, NULL);
+    expect(play.runners[0].done == 0 && play.runners[0].scan_wait &&
+               play.runners[0].wait_until == 80,
+           "an empty trigger waits on the bare runner");
+
+    play.freq = 10000000;
+    fresh();
+    play.freq = 10000000;
+    scan.trigger = b;
+    set_id(&scan, "clock");
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &scan, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "clock");
+    expect(runner != NULL && runner->wait_until == 800000, "scan wait uses the fast clock");
+}
+
 int main(void)
 {
     check_names();
@@ -3378,6 +3598,7 @@ int main(void)
     check_if_short();
     check_once_held();
     check_edge_hold();
+    check_scan_wait();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

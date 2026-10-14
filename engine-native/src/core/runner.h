@@ -34,7 +34,7 @@
 
 /* Numbers stay fixed. The play tick runs key, mouse, move, scroll, wait,
    randomWait, repeat, goto, run, holdLoop, swapLoop, burst, ifShort,
-   onceHeld, and edgeHold. scanWait is recognized and still skipped.
+   onceHeld, edgeHold, and scanWait.
    pressHold is not one of these: it expands to several steps. */
 #define ENGINE_STEP_KEY 1
 #define ENGINE_STEP_MOUSE 2
@@ -99,7 +99,13 @@
    A burst frame stores its deadline in burst_until. 0 means there is none.
    A onceHeld frame stores the phase, the first-pass flag, the scaled gap,
    and the gap deadline. The gap deadline 0 means it has not been armed.
-   An edgeHold frame stores the phase, the watch list, and the spam clock. */
+   An edgeHold frame stores the phase, the watch list, and the spam clock.
+   scanWait stores ms in a, the same field as wait. ms is divided by speed
+   when the wait is armed. 0 and a negative a still wait 1 ms. A non-empty
+   trigger that the finger snapshot says is up marks the runner done.
+   An empty trigger does not. While scan_wait is set, stopping or a trigger
+   finger that is up ends the runner during the wait. scan_wait is set only
+   when the step runs, and it is cleared after the wait finishes. */
 
 #define ENGINE_EDGE_WATCH_CAP 8
 #define ENGINE_EDGE_MUTE_CAP 8
@@ -375,9 +381,10 @@ void engine_play_advance(struct engine_play *play, int64_t now);
    goto uses a screen point and a mouse at 0, 0.
    holdLoop and swapLoop do nothing here: there is no mute list and no finger
    snapshot. engine_play_advance is the path that starts run, reads the pointer,
-   and runs those blocks. burst, ifShort, onceHeld, and edgeHold run here.
-   There is no finger, so burst does not wait, ifShort does not yield,
-   onceHeld counts the trigger as up, and a non-empty edgeHold trigger is up. */
+   and runs those blocks. burst, ifShort, onceHeld, edgeHold, and scanWait run
+   here. There is no finger, so burst does not wait, ifShort does not yield,
+   onceHeld counts the trigger as up, and a non-empty edgeHold or scanWait
+   trigger is up. */
 void engine_runner_advance(struct engine_runner *runner, int64_t now,
                            engine_roll_fn roll, void *roll_ctx);
 
