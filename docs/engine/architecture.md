@@ -122,7 +122,7 @@ Integrity level stays where the process started. No kernel driver.
 
 ## Clock
 
-The wait is an unnamed `CreateWaitableTimerExW` with `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`, no completion routine. Playback waits on that handle, the hook wake, and the IPC wake. It does not run a message loop. A message loop on this thread would let a send re-enter the tick.
+The wait is an unnamed `CreateWaitableTimerExW` with `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`, no completion routine. Playback waits on that handle and the IPC wake. It also waits on the hook wake when the table says input wakes playback. It does not run a message loop. A message loop on this thread would let a send re-enter the tick.
 
 The hook thread is already pumping, so an overdue runner does not have to spin the message queue. It still must not busy-spin. After every tick:
 
@@ -136,7 +136,7 @@ A deadline that is already due still waits 1 ms. The longest slice is 8 ms.
 
 A requested 1 ms wait landed near 1.52 ms in the language measurement. The clock will not schedule a 1 ms edge as 1 ms. The AHK 5 ms self-test band is an AHK check. It is not a promise that the native tick matches that float.
 
-Deadlines are absolute QPC ticks. The core compares integers the caller passes in.
+Deadlines are absolute QPC ticks. The core compares integers the caller passes in. The pace decision and the rounding line are `engine-native/src/core/clock.c`. The wait is `engine-native/src/win/clock_win.c`. The hook handle is waited only when the table says input wakes playback. The IPC handle is waited on every slice, including the 16 ms disarmed slice.
 
 ## Rounding
 
@@ -204,16 +204,22 @@ engine-native/
   src/main.c              version printer, no Win32
   src/core/version.h
   src/core/version.c      portable, Linux CI compiles this
-  src/win/win_entry.c     Windows only; timer, hooks, SendInput, pipe, mutex later
+  src/core/clock.h
+  src/core/clock.c        pace, half-away rounding, tick deltas
+  src/win/win_entry.c     Windows only; hooks, SendInput, pipe, mutex later
+  src/win/clock_win.h
+  src/win/clock_win.c     high-res wait
+  tests/clock_test.c      portable clock checks
+  tests/clock_wait_test.c Windows wait check
 ```
 
 `engine/` stays the AHK engine until #54.
 
-`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` is the later home of the portable message image. The bytes are in `docs/engine/ipc-protocol.md`. The pipe call itself stays in `src/win`. `tests/` and `bench/` arrive with the harness. The language benches stay in `tools/bench/lang/`.
+`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. The clock math is already there. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` is the later home of the portable message image. The bytes are in `docs/engine/ipc-protocol.md`. The pipe call itself stays in `src/win`. `tests/clock_test.c` is the #43 clock check. The fake-clock harness for blocks stays #49. `bench/` arrives with that harness. The language benches stay in `tools/bench/lang/`.
 
 ## Build
 
-C17, CMake, x64, one executable, `macroui-engine`. MSVC uses the static CRT. Windows CI is MSVC on `windows-latest`. Linux CI is the image C compiler and builds the core with `src/main.c` only. clang-cl is not required.
+C17, CMake, x64, one executable, `macroui-engine`. MSVC uses the static CRT. Windows CI is MSVC on `windows-latest`. Linux CI is the image C compiler and builds `src/main.c` plus `src/core`. It does not build `src/win`. clang-cl is not required.
 
 The program prints `macroui-engine 0` and exits 0. That string is the version until a later issue replaces this entry with the resident process.
 
@@ -222,8 +228,9 @@ The program prints `macroui-engine 0` and exits 0. That string is the version un
 | Issue | Owns |
 |---|---|
 | #42 | Frame bytes, hello handshake, hex vectors. Written in `docs/engine/ipc-protocol.md`. The port stays in the shell. |
-| #43 onward | Compiler, runner, real clock, hooks, output. |
-| #49 | Fake-clock harness, before the first block port. |
+| #43 | Timing loop and clock. `src/core/clock.c` and `src/win/clock_win.c`. |
+| #44 onward | Hooks, output, compiler, runner. |
+| #49 | Fake-clock harness, before the first block port. The clock checks are already in `tests/`. |
 | #54 | Native becomes the default, then AHK leaves. |
 
 Block ideas stay out. `priority` and `variables` stay stored and ignored.

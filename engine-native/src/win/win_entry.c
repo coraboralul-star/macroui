@@ -1,5 +1,5 @@
-/* Timer, hooks, SendInput, the pipe, and the mutex land in this file.
-   This issue only links it. See docs/engine/architecture.md. */
+/* Hooks, SendInput, the pipe, and the mutex land later.
+   The high-res wait is clock_win.c. See docs/engine/architecture.md. */
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>

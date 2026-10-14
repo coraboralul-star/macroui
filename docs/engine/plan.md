@@ -79,4 +79,4 @@ The #49 fake-clock harness lands before the first block port in #46. The trace c
 
 ## Next step
 
-The protocol spec and the hex vectors are #42. The serial port stays in the shell. #43 is next: the timing loop and the clock. No shell code in #42. The language stays C17. MMCSS stays off. Playback priority is the table in `docs/engine/architecture.md`. The language-bench pin stays a measurement.
+The timing loop and the clock are #43. The pace table and the half-away line are `engine-native/src/core/clock.c`. The high-res wait is `engine-native/src/win/clock_win.c`. #44 is next: the hooks. The runner stays #46. No shell code. The language stays C17. MMCSS stays off. `timeBeginPeriod` stays off. Playback priority is the table in `docs/engine/architecture.md`. The language-bench pin stays a measurement.

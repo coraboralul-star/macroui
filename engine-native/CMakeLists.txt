@@ -27,12 +27,24 @@ else()
   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 endif()
 
-add_library(engine_core STATIC src/core/version.c)
+add_library(engine_core STATIC src/core/version.c src/core/clock.c)
 target_include_directories(engine_core PUBLIC src/core)
+if(NOT MSVC)
+  target_link_libraries(engine_core PUBLIC m)
+endif()
 
 add_executable(macroui-engine src/main.c)
 target_link_libraries(macroui-engine PRIVATE engine_core)
 
+add_executable(engine-clock-test tests/clock_test.c)
+target_link_libraries(engine-clock-test PRIVATE engine_core)
+
 if(WIN32)
-  target_sources(macroui-engine PRIVATE src/win/win_entry.c)
+  add_library(engine_win STATIC src/win/win_entry.c src/win/clock_win.c)
+  target_include_directories(engine_win PUBLIC src/win)
+  target_link_libraries(engine_win PUBLIC engine_core)
+  target_link_libraries(macroui-engine PRIVATE engine_win)
+
+  add_executable(engine-clock-wait-test tests/clock_wait_test.c)
+  target_link_libraries(engine-clock-wait-test PRIVATE engine_win)
 endif()

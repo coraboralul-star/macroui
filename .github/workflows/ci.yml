@@ -64,6 +64,8 @@ jobs:
         run: cmake --build engine-native/build
       - name: Version
         run: test "$(engine-native/build/macroui-engine)" = "macroui-engine 0"
+      - name: Clock
+        run: engine-native/build/engine-clock-test
 
   engine-windows:
     name: Native engine
@@ -82,3 +84,7 @@ jobs:
             Write-Error "version was [$line]"
             exit 1
           }
+          & "engine-native/build/engine-clock-test.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "engine-native/build/engine-clock-wait-test.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
