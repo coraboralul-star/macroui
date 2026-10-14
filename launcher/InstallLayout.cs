@@ -91,6 +91,7 @@ static class InstallLayout
         && File.Exists(Path.Combine(root, "ui", "dist", "index.html"))
         && File.Exists(Path.Combine(root, "engine", "MacroEngine.ahk"))
         && File.Exists(Path.Combine(root, "engine", "JSON.ahk"))
+        && File.Exists(Path.Combine(root, "engine", "TracePlay.ahk"))
         && File.Exists(Path.Combine(root, "setup", "EnsureRuntime.ps1"));
 
     static void Extract(string zipPath, string root, CancellationToken cancel)
