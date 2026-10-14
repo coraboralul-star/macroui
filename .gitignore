@@ -16,3 +16,11 @@ shell/bin/**/runtimes/linux-*/
 shell/bin/**/runtimes/maccatalyst-*/
 shell/bin/**/runtimes/osx-*/
 shell/bin/**/runtimes/unix/
+
+# Build output. A dev launch rebuilds ui/dist and shell/bin when they are missing.
+ui/dist/
+shell/bin/
+shell/obj/
+launcher/obj/
+H&le.exe
+handoff.md
