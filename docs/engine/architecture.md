@@ -2,7 +2,7 @@
 
 #41. The language is C17, from `docs/engine/decision-language.md`. That choice stays closed. MMCSS stays off. The measurement pin in that doc is not the playback priority.
 
-Behaviour the port must match is in `docs/engine/plan.md` and `docs/engine/ahk-analysis.md`. This file is the threads, the ordering, the clock, and the tree. It does not port the runner. The byte layout of pipe messages is #42.
+Behaviour the port must match is in `docs/engine/plan.md` and `docs/engine/ahk-analysis.md`. This file is the threads, the ordering, the clock, and the tree. It does not port the runner. The byte layout of pipe messages is `docs/engine/ipc-protocol.md`.
 
 `engine-native/` from this issue prints its version and exits. It does not take the mutex, install a hook, or open the pipe.
 
@@ -31,7 +31,7 @@ message pump                   tick, then the high-res wait    pipe, parse, wind
 
 The core is the playback work that is plain C: the step walk, the key array, the waits as integer ticks. The playback thread calls into that core and passes `now` in. The core does not read the clock and does not include Win32. Linux CI compiles that core. A later fake clock is a caller that passes ticks.
 
-The serial port stays in the shell today. Playback emits one report image per publish. #42 decides whether that image stays on the pipe or the engine opens the port. This file does not move the port.
+The serial port stays in the shell. Playback emits one report image per publish. On a board, that image is the `report` frame in `docs/engine/ipc-protocol.md`. The engine does not open the port.
 
 ## How they share state
 
@@ -179,7 +179,7 @@ Key id 0 is empty. Ids 1..255 are the virtual key after side resolution. Id 256 
 
 `applied` stores key ids. The IPC thread turns them into the names on the state message. The playback thread does not format that text. The name table is filled once at startup.
 
-The report image is fixed and little-endian. Its fields are #42. One publish produces one image. On the software path that image becomes one `SendInput` call.
+The report image is fixed and little-endian. Its fields are the `report` payload in `docs/engine/ipc-protocol.md`. One publish produces one image. On the software path that image becomes one `SendInput` call and is not written to the pipe.
 
 ## Process
 
@@ -209,7 +209,7 @@ engine-native/
 
 `engine/` stays the AHK engine until #54.
 
-`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` is the later home of the portable message image (#42). The pipe call itself stays in `src/win`. `tests/` and `bench/` arrive with the harness. The language benches stay in `tools/bench/lang/`.
+`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` is the later home of the portable message image. The bytes are in `docs/engine/ipc-protocol.md`. The pipe call itself stays in `src/win`. `tests/` and `bench/` arrive with the harness. The language benches stay in `tools/bench/lang/`.
 
 ## Build
 
@@ -221,7 +221,7 @@ The program prints `macroui-engine 0` and exits 0. That string is the version un
 
 | Issue | Owns |
 |---|---|
-| #42 | Frame bytes, hello handshake, hex vectors. No shell code. The serial-port question. |
+| #42 | Frame bytes, hello handshake, hex vectors. Written in `docs/engine/ipc-protocol.md`. The port stays in the shell. |
 | #43 onward | Compiler, runner, real clock, hooks, output. |
 | #49 | Fake-clock harness, before the first block port. |
 | #54 | Native becomes the default, then AHK leaves. |

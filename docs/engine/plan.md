@@ -30,7 +30,7 @@ No open issue in this rewrite is a leftover bug from that list. Block ideas (#15
 | 3 Integration | rest of #49, then #50-#53 | Trace diffs are empty or listed. Shell can switch engines. Performance report is in. |
 | 4 Cutover | #54 | Native is the default, then AHK is removed after a tagged release that still has it. |
 
-Phase 0 owns #41 (architecture and an empty project). Phase 1 is #42 only: the protocol spec and test vectors. The shell code for that spec is #50.
+Phase 0 owns #41 (architecture and an empty project). Phase 1 is #42: `docs/engine/ipc-protocol.md` and `docs/engine/ipc-vectors.txt`. The shell code for that spec is #50.
 
 The #49 fake-clock harness lands before the first block port in #46. The trace corpus finishes in phase 3. Neither issue waits for the other to be fully closed.
 
@@ -73,9 +73,10 @@ The #49 fake-clock harness lands before the first block port in #46. The trace c
 | #39 baseline numbers | Done on this PC. `docs/engine/benchmarks.md`. |
 | #40 language micro-benchmarks | Done on this PC. `docs/engine/decision-language.md`. C17. |
 | #41 architecture and empty project | No. `docs/engine/architecture.md`. CI builds `engine-native/`. |
+| #42 protocol spec | No. `docs/engine/ipc-protocol.md`. |
 | #53 comparison | Yes, same PC, same harness. |
 | Hooks, SendInput, and the board | Yes. Linux CI covers the core with a fake clock. |
 
 ## Next step
 
-The architecture doc and the empty `engine-native/` program are #41. #42 is next: `docs/engine/ipc-protocol.md` and the hex vectors. No shell code. The language stays C17. MMCSS stays off. Playback priority is the table in `docs/engine/architecture.md`. The language-bench pin stays a measurement.
+The protocol spec and the hex vectors are #42. The serial port stays in the shell. #43 is next: the timing loop and the clock. No shell code in #42. The language stays C17. MMCSS stays off. Playback priority is the table in `docs/engine/architecture.md`. The language-bench pin stays a measurement.
