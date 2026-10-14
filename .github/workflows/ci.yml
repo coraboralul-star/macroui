@@ -76,6 +76,8 @@ jobs:
         run: engine-native/build/engine-runner-test
       - name: Process
         run: engine-native/build/engine-process-test
+      - name: Profile
+        run: engine-native/build/engine-profile-test
       - name: Trace
         run: engine-native/build/engine-trace engine-native/bench
 
@@ -111,6 +113,8 @@ jobs:
           & "engine-native/build/engine-runner-test.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "engine-native/build/engine-process-test.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "engine-native/build/engine-profile-test.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "engine-native/build/engine-process-win-test.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

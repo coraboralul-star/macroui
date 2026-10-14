@@ -34,6 +34,8 @@ add_library(engine_core STATIC
   src/core/output.c
   src/core/process.c
   src/core/runner.c
+  src/core/json.c
+  src/core/profile.c
   src/ipc/report.c)
 target_include_directories(engine_core PUBLIC src/core src/ipc)
 if(NOT MSVC)
@@ -60,6 +62,9 @@ target_link_libraries(engine-trace PRIVATE engine_core)
 
 add_executable(engine-process-test tests/process_test.c)
 target_link_libraries(engine-process-test PRIVATE engine_core)
+
+add_executable(engine-profile-test tests/profile_test.c)
+target_link_libraries(engine-profile-test PRIVATE engine_core)
 
 if(WIN32)
   add_library(engine_win STATIC src/win/win_entry.c src/win/clock_win.c src/win/hook_win.c src/win/output_win.c)
