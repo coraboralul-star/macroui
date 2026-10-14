@@ -1,4 +1,5 @@
 node_modules/
+handoff.md
 obj/
 .webview2/
 *.user

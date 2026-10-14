@@ -72,6 +72,8 @@ jobs:
         run: engine-native/build/engine-hook-test
       - name: Output
         run: engine-native/build/engine-output-test
+      - name: Runner
+        run: engine-native/build/engine-runner-test
 
   engine-windows:
     name: Native engine
@@ -101,4 +103,17 @@ jobs:
           & "engine-native/build/engine-output-test.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "engine-native/build/engine-output-win-test.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "engine-native/build/engine-runner-test.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: AHK self-test
+        shell: pwsh
+        run: |
+          $dest = Join-Path $env:RUNNER_TEMP "ahk"
+          $zip = Join-Path $env:RUNNER_TEMP "ahk.zip"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/AutoHotkey/AutoHotkey/releases/download/v2.0.26/AutoHotkey_2.0.26.zip" -OutFile $zip
+          Expand-Archive -LiteralPath $zip -DestinationPath $dest
+          $exe = Get-ChildItem -LiteralPath $dest -Filter AutoHotkey64.exe -Recurse | Select-Object -First 1
+          if (-not $exe) { Write-Error "AutoHotkey64.exe was not in the zip"; exit 1 }
+          & $exe.FullName (Join-Path (Get-Location) "engine\MacroEngine.ahk") "--self-test"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

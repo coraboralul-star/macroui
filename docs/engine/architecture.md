@@ -2,7 +2,7 @@
 
 #41. The language is C17, from `docs/engine/decision-language.md`. That choice stays closed. MMCSS stays off. The measurement pin in that doc is not the playback priority.
 
-Behaviour the port must match is in `docs/engine/plan.md` and `docs/engine/ahk-analysis.md`. This file is the threads, the ordering, the clock, and the tree. It does not port the runner. The byte layout of pipe messages is `docs/engine/ipc-protocol.md`.
+Behaviour the port must match is in `docs/engine/plan.md` and `docs/engine/ahk-analysis.md`. This file is the threads, the ordering, the clock, and the tree. The runner for the first steps is `engine-native/src/core/runner.c`. The byte layout of pipe messages is `docs/engine/ipc-protocol.md`.
 
 `engine-native/` from this issue prints its version and exits. It does not take the mutex, install a hook, or open the pipe.
 
@@ -210,6 +210,8 @@ engine-native/
   src/core/hook.c         events, echo, swallow map, watchdog decision
   src/core/output.h
   src/core/output.c       applied diff, send plan, board plan
+  src/core/runner.h
+  src/core/runner.c       steps, the runner, publish before remove
   src/ipc/report.h
   src/ipc/report.c        156-byte report image
   src/win/win_entry.c     Windows only; pipe and mutex later
@@ -225,11 +227,12 @@ engine-native/
   tests/hook_win_test.c   Windows hook struct and install check
   tests/output_test.c     portable report, diff, and line plan
   tests/output_win_test.c Windows SendInput fill
+  tests/runner_test.c     fake clock and the first runner steps
 ```
 
 `engine/` stays the AHK engine until #54.
 
-`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. The clock math, the hook decision, and the output plans are already there. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` holds the report image. The other frames stay in `docs/engine/ipc-protocol.md` until a later issue encodes them. The pipe call itself stays in `src/win`. `tests/clock_test.c` is the #43 clock check. `tests/hook_test.c` is the #44 hook check. `tests/output_test.c` is the #45 report check. The fake-clock harness for blocks stays #49. `bench/` arrives with that harness. The language benches stay in `tools/bench/lang/`.
+`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. The clock math, the hook decision, the output plans, and the first runner steps are already there. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` holds the report image. The other frames stay in `docs/engine/ipc-protocol.md` until a later issue encodes them. The pipe call itself stays in `src/win`. `tests/clock_test.c` is the #43 clock check. `tests/hook_test.c` is the #44 hook check. `tests/output_test.c` is the #45 report check. `tests/runner_test.c` is the fake-clock harness and the first #46 steps. `bench/` is the trace corpus, which is the rest of #49. The language benches stay in `tools/bench/lang/`.
 
 ## Build
 
@@ -245,10 +248,10 @@ The program prints `macroui-engine 0` and exits 0. That string is the version un
 | #43 | Timing loop and clock. `src/core/clock.c` and `src/win/clock_win.c`. |
 | #44 | Hooks, trigger bits, and the watchdog. `src/core/hook.c` and `src/win/hook_win.c`. |
 | #45 | Output. `src/ipc/report.c`, `src/core/output.c`, `src/win/output_win.c`, and `shell/ReportBoard.cs`. |
-| #46 | Block compiler and runner. The fake-clock harness in #49 lands before the first block port. |
+| #46 | Block compiler and runner. The first steps are `src/core/runner.c`. `run`, `goto`, and the hold blocks are still open. |
 | #47 | Profile loading, live config, and validation. |
 | #48 | Process lifecycle, single instance, and exit. |
-| #49 | Fake-clock harness, before the first block port. The clock checks are already in `tests/`. |
+| #49 | Fake-clock harness is `tests/runner_test.c`. Windows CI runs the AHK `--self-test`. The trace corpus is still open. |
 | #54 | Native becomes the default, then AHK leaves. |
 
 Block ideas stay out. `priority` and `variables` stay stored and ignored.
