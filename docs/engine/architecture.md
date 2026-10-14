@@ -179,7 +179,7 @@ Key id 0 is empty. Ids 1..255 are the virtual key after side resolution. Id 256 
 
 `applied` stores key ids. The IPC thread turns them into the names on the state message. The playback thread does not format that text. The name table is filled once at startup.
 
-The report image is fixed and little-endian. Its fields are the `report` payload in `docs/engine/ipc-protocol.md`. One publish produces one image. On the software path that image becomes one `SendInput` call and is not written to the pipe.
+The report image is fixed and little-endian. Its fields are the `report` payload in `docs/engine/ipc-protocol.md`. One publish produces one image. The bytes are `engine-native/src/ipc/report.c`. The diff that fills it is `engine-native/src/core/output.c`. On the software path that image becomes one `SendInput` call in `engine-native/src/win/output_win.c` and is not written to the pipe. A board mode is the same image. The shell writes the `K` / `M` lines. `main` does not call any of this.
 
 ## Process
 
@@ -208,24 +208,32 @@ engine-native/
   src/core/clock.c        pace, half-away rounding, tick deltas
   src/core/hook.h
   src/core/hook.c         events, echo, swallow map, watchdog decision
-  src/win/win_entry.c     Windows only; SendInput, pipe, mutex later
+  src/core/output.h
+  src/core/output.c       applied diff, send plan, board plan
+  src/ipc/report.h
+  src/ipc/report.c        156-byte report image
+  src/win/win_entry.c     Windows only; pipe and mutex later
   src/win/clock_win.h
   src/win/clock_win.c     high-res wait
   src/win/hook_win.h
   src/win/hook_win.c      low-level hooks
+  src/win/output_win.h
+  src/win/output_win.c    one SendInput from the report image
   tests/clock_test.c      portable clock checks
   tests/clock_wait_test.c Windows wait check
   tests/hook_test.c       portable hook checks
   tests/hook_win_test.c   Windows hook struct and install check
+  tests/output_test.c     portable report, diff, and line plan
+  tests/output_win_test.c Windows SendInput fill
 ```
 
 `engine/` stays the AHK engine until #54.
 
-`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. The clock math and the hook decision are already there. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` is the later home of the portable message image. The bytes are in `docs/engine/ipc-protocol.md`. The pipe call itself stays in `src/win`. `tests/clock_test.c` is the #43 clock check. `tests/hook_test.c` is the #44 hook check. The fake-clock harness for blocks stays #49. `bench/` arrives with that harness. The language benches stay in `tools/bench/lang/`.
+`src/core` is the interpreter, the lookup, and the compiler once those exist. It includes no `windows.h`. The clock math, the hook decision, and the output plans are already there. `src/win` is the timer, the hooks, `SendInput`, the pipe, the mutex, and the foreground queries. `src/ipc` holds the report image. The other frames stay in `docs/engine/ipc-protocol.md` until a later issue encodes them. The pipe call itself stays in `src/win`. `tests/clock_test.c` is the #43 clock check. `tests/hook_test.c` is the #44 hook check. `tests/output_test.c` is the #45 report check. The fake-clock harness for blocks stays #49. `bench/` arrives with that harness. The language benches stay in `tools/bench/lang/`.
 
 ## Build
 
-C17, CMake, x64, one executable, `macroui-engine`. MSVC uses the static CRT and `/experimental:c11atomics`, because that is what turns on `stdatomic.h`. Windows CI is MSVC on `windows-latest`. Linux CI is the image C compiler and builds `src/main.c` plus `src/core`. It does not build `src/win`. clang-cl is not required.
+C17, CMake, x64, one executable, `macroui-engine`. MSVC uses the static CRT and `/experimental:c11atomics`, because that is what turns on `stdatomic.h`. Windows CI is MSVC on `windows-latest`. Linux CI is the image C compiler and builds `src/main.c`, `src/core`, and `src/ipc`. It does not build `src/win`. clang-cl is not required.
 
 The program prints `macroui-engine 0` and exits 0. That string is the version until a later issue replaces this entry with the resident process.
 
@@ -236,7 +244,10 @@ The program prints `macroui-engine 0` and exits 0. That string is the version un
 | #42 | Frame bytes, hello handshake, hex vectors. Written in `docs/engine/ipc-protocol.md`. The port stays in the shell. |
 | #43 | Timing loop and clock. `src/core/clock.c` and `src/win/clock_win.c`. |
 | #44 | Hooks, trigger bits, and the watchdog. `src/core/hook.c` and `src/win/hook_win.c`. |
-| #45 onward | Output, compiler, runner. |
+| #45 | Output. `src/ipc/report.c`, `src/core/output.c`, `src/win/output_win.c`, and `shell/ReportBoard.cs`. |
+| #46 | Block compiler and runner. The fake-clock harness in #49 lands before the first block port. |
+| #47 | Profile loading, live config, and validation. |
+| #48 | Process lifecycle, single instance, and exit. |
 | #49 | Fake-clock harness, before the first block port. The clock checks are already in `tests/`. |
 | #54 | Native becomes the default, then AHK leaves. |
 

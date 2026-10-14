@@ -45,6 +45,7 @@ public partial class MainWindow : Window
     DispatcherTimer? _quitTimer;
     EventHandler? _quitTick;
     readonly Queue<string> _hidPending = new();
+    readonly Queue<byte[]> _reportPending = new();
     int _inputGen;
     string _closeMode = "tray";
     bool _allowClose;
@@ -891,13 +892,76 @@ public partial class MainWindow : Window
         }
         try
         {
-            while (_hidPending.Count > 0)
-                WriteHidLocked(_hidPending.Dequeue());
+            FlushBoardPending();
             WriteHidLocked(down, up, dx, dy, wheel, abs, ax, ay);
         }
         finally
         {
             _boardLock.Release();
+        }
+    }
+
+    void FlushBoardPending()
+    {
+        while (_hidPending.Count > 0)
+            WriteHidLocked(_hidPending.Dequeue());
+        while (_reportPending.Count > 0)
+            WriteReportLocked(_reportPending.Dequeue());
+    }
+
+    /* The report payload. AHK still arrives as hid JSON. This is the native image.
+       An up waits 1500 ms. A down that misses the wait is queued, cap 16. */
+    internal void WriteReport(ReadOnlySpan<byte> image)
+    {
+        if (!ReportBoard.Active(image))
+            return;
+        var copy = image.ToArray();
+        var up = copy[1] != 0;
+        var keyed = copy[0] != 0 || copy[1] != 0;
+        var wheel = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(copy.AsSpan(140));
+        if (!_boardLock.Wait(up ? 1500 : 40))
+        {
+            if (keyed || wheel != 0)
+            {
+                _reportPending.Enqueue(copy);
+                while (_reportPending.Count > 16)
+                    _reportPending.Dequeue();
+            }
+            return;
+        }
+        try
+        {
+            FlushBoardPending();
+            WriteReportLocked(copy);
+        }
+        finally
+        {
+            _boardLock.Release();
+        }
+    }
+
+    void WriteReportLocked(byte[] image)
+    {
+        try
+        {
+            if (_board is not { IsOpen: true })
+                return;
+            var serial = _board;
+            serial.ReadTimeout = 80;
+            var ops = new List<BoardOp>();
+            var bits = ReportBoard.Apply(image, _swapClicks, _mouseBits, ops);
+            foreach (var op in ops)
+            {
+                if (op.Steer)
+                    SteerMouse(serial, op.Bits, op.Ax, op.Ay);
+                else if (op.Line != null)
+                    BoardLine(serial, op.Line);
+            }
+            _mouseBits = bits;
+        }
+        catch
+        {
+            CloseBoard();
         }
     }
 

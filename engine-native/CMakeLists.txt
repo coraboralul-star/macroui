@@ -27,8 +27,13 @@ else()
   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 endif()
 
-add_library(engine_core STATIC src/core/version.c src/core/clock.c src/core/hook.c)
-target_include_directories(engine_core PUBLIC src/core)
+add_library(engine_core STATIC
+  src/core/version.c
+  src/core/clock.c
+  src/core/hook.c
+  src/core/output.c
+  src/ipc/report.c)
+target_include_directories(engine_core PUBLIC src/core src/ipc)
 if(NOT MSVC)
   target_link_libraries(engine_core PUBLIC m)
 endif()
@@ -42,8 +47,11 @@ target_link_libraries(engine-clock-test PRIVATE engine_core)
 add_executable(engine-hook-test tests/hook_test.c)
 target_link_libraries(engine-hook-test PRIVATE engine_core)
 
+add_executable(engine-output-test tests/output_test.c)
+target_link_libraries(engine-output-test PRIVATE engine_core)
+
 if(WIN32)
-  add_library(engine_win STATIC src/win/win_entry.c src/win/clock_win.c src/win/hook_win.c)
+  add_library(engine_win STATIC src/win/win_entry.c src/win/clock_win.c src/win/hook_win.c src/win/output_win.c)
   target_include_directories(engine_win PUBLIC src/win)
   target_link_libraries(engine_win PUBLIC engine_core user32)
   target_link_libraries(macroui-engine PRIVATE engine_win)
@@ -53,4 +61,7 @@ if(WIN32)
 
   add_executable(engine-hook-win-test tests/hook_win_test.c)
   target_link_libraries(engine-hook-win-test PRIVATE engine_win)
+
+  add_executable(engine-output-win-test tests/output_win_test.c)
+  target_link_libraries(engine-output-win-test PRIVATE engine_win)
 endif()

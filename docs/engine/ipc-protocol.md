@@ -228,7 +228,7 @@ The serial port stays in the shell. The engine does not open it.
 
 #39 measured the board line at about 0.13 ms median (`docs/engine/benchmarks.md`). The profile acks on that pipe were about 394 to 591 ms, and that time is `JSON.Parse` plus the window list. Those two already run off the playback thread. The report frame removes the hid JSON parse from the board hop. The 0.13 ms line is the serial reply, and it remains whoever writes the line.
 
-Opening the port in the engine would put the 1500 ms up-wait on playback, or it would add another queue on the IPC thread and move port discovery, the `?` identity check, and the Settings page out of the shell. Two processes would have to stay off the port. The measured line does not pay for that. #45 implements `SendInput` from this image and the `K` / `M` lines from this image. It records a hop time in `docs/engine/decision-board-path.md` if it measures one. It does not open the port.
+Opening the port in the engine would put the 1500 ms up-wait on playback, or it would add another queue on the IPC thread and move port discovery, the `?` identity check, and the Settings page out of the shell. Two processes would have to stay off the port. The measured line does not pay for that. #45 turns this image into one `SendInput` and into the `K` / `M` lines. The decision is `docs/engine/decision-board-path.md`. It does not open the port.
 
 The shell keeps the lock rule from #13: a report that includes an up waits up to 1500 ms, a report with no up waits 40 ms, and a down that misses the wait is queued, cap 16, oldest dropped. It keeps the firmware `hid-busy` retry from #17. `SteerMouse` stays the absolute move.
 
@@ -375,4 +375,4 @@ Shell to engine, from the page messages that already exist:
 | `json-hello` | AHK `{"v":1,"type":"hello","armed":false}` plus the newline `SendRaw` appends |
 | `reject-short`, `reject-trailing`, `reject-magic` | Length with no payload, an extra trailing byte, a bad magic |
 
-The portable encode and decode of these bytes belongs in `engine-native/src/ipc` when a later issue adds that code. The pipe calls stay in `src/win`. This issue does not add those files.
+The report image is `engine-native/src/ipc/report.c`. The other frames are still this file and `docs/engine/ipc-vectors.txt`. The pipe calls stay in `src/win`.

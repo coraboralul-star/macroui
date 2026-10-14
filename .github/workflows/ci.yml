@@ -52,6 +52,8 @@ jobs:
         run: dotnet build shell/MacroShell.csproj
       - name: Build launcher
         run: dotnet build launcher/Vendetta.csproj
+      - name: Report lines
+        run: dotnet run --project shell/report-board-test/ReportBoardTest.csproj -c Release
 
   engine-linux:
     name: Native engine core
@@ -68,6 +70,8 @@ jobs:
         run: engine-native/build/engine-clock-test
       - name: Hooks
         run: engine-native/build/engine-hook-test
+      - name: Output
+        run: engine-native/build/engine-output-test
 
   engine-windows:
     name: Native engine
@@ -93,4 +97,8 @@ jobs:
           & "engine-native/build/engine-hook-test.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "engine-native/build/engine-hook-win-test.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "engine-native/build/engine-output-test.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "engine-native/build/engine-output-win-test.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
