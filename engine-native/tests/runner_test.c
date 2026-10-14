@@ -583,7 +583,30 @@ static void check_yield_and_skip(void)
         engine_runner_advance(&play.runners[0], 0, NULL, NULL);
         expect(play.runners[0].done == 1, "a hold loop on the bare runner does nothing");
     }
+
+    fresh();
+    {
+        struct engine_step later[2];
+
+        memset(later, 0, sizeof later);
+        later[0].type = ENGINE_STEP_SWAP_LOOP;
+        later[0].first = 1;
+        later[0].count = 1;
+        later[0].c = 40;
+        later[1].type = ENGINE_STEP_WAIT;
+        later[1].a = 10;
+        macro.steps = later;
+        macro.step_count = 2;
+        macro.top_count = 1;
+        macro.trigger = kid("b");
+        set_id(&macro, "later-swap");
+        engine_play_start(&play, &macro, -1, 1);
+        engine_play_flush(&play);
+        engine_runner_advance(&play.runners[0], 0, NULL, NULL);
+        expect(play.runners[0].done == 1, "a swap loop on the bare runner does nothing");
+    }
     macro.top_count = 0;
+    macro.trigger = 0;
 
     fresh();
     follow[0].type = ENGINE_STEP_KEY;
@@ -1182,7 +1205,7 @@ static void check_hold_loop(void)
     struct engine_step plain_steps[1];
     struct engine_step swap_steps[6];
     struct engine_step drain_steps[7];
-    struct engine_step skip_steps[6];
+    struct engine_step skip_steps[5];
     struct engine_macro loop;
     struct engine_macro shot;
     struct engine_macro wall;
@@ -1512,20 +1535,301 @@ static void check_hold_loop(void)
            "block play full still presses the later down");
 
     memset(skip_steps, 0, sizeof skip_steps);
-    skip_steps[0].type = ENGINE_STEP_SWAP_LOOP;
-    skip_steps[1].type = ENGINE_STEP_BURST;
-    skip_steps[2].type = ENGINE_STEP_IF_SHORT;
-    skip_steps[3].type = ENGINE_STEP_ONCE_HELD;
-    skip_steps[4].type = ENGINE_STEP_EDGE_HOLD;
-    skip_steps[5].type = ENGINE_STEP_SCAN_WAIT;
+    skip_steps[0].type = ENGINE_STEP_BURST;
+    skip_steps[1].type = ENGINE_STEP_IF_SHORT;
+    skip_steps[2].type = ENGINE_STEP_ONCE_HELD;
+    skip_steps[3].type = ENGINE_STEP_EDGE_HOLD;
+    skip_steps[4].type = ENGINE_STEP_SCAN_WAIT;
     engine_macro_init(&loop);
     set_id(&loop, "rest");
     loop.steps = skip_steps;
-    loop.step_count = 6;
+    loop.step_count = 5;
     fresh();
     engine_play_start(&play, &loop, -1, 1);
     engine_play_tick(&play, 0);
     expect(live_id(&play, "rest") == NULL, "the other hold blocks are still skipped");
+}
+
+static void check_swap_loop(void)
+{
+    struct engine_play *state = fresh();
+    struct engine_fingers fingers;
+    struct engine_step gate_steps[5];
+    struct engine_step chain_steps[10];
+    struct engine_step exit_steps[4];
+    struct engine_step shot_steps[3];
+    struct engine_step mute_steps[2];
+    struct engine_macro gate;
+    struct engine_macro shot;
+    struct engine_macro catalog[2];
+    int32_t mutes[2];
+    uint16_t b = kid("b");
+    uint16_t n = kid("n");
+    uint16_t a = kid("a");
+    uint16_t x = kid("x");
+    uint16_t y = kid("y");
+    struct engine_runner *runner;
+
+    engine_fingers_clear(&fingers);
+    memset(gate_steps, 0, sizeof gate_steps);
+    gate_steps[0].type = ENGINE_STEP_SWAP_LOOP;
+    gate_steps[0].first = 3;
+    gate_steps[0].count = 2;
+    gate_steps[0].c = 40;
+    gate_steps[1].type = ENGINE_STEP_KEY;
+    gate_steps[1].action = ENGINE_ACT_DOWN;
+    gate_steps[1].key = y;
+    gate_steps[2].type = ENGINE_STEP_WAIT;
+    gate_steps[2].a = 1000;
+    gate_steps[3].type = ENGINE_STEP_KEY;
+    gate_steps[3].action = ENGINE_ACT_DOWN;
+    gate_steps[3].key = x;
+    gate_steps[4].type = ENGINE_STEP_WAIT;
+    gate_steps[4].a = 10;
+    engine_macro_init(&gate);
+    set_id(&gate, "gate");
+    gate.steps = gate_steps;
+    gate.step_count = 5;
+    gate.top_count = 3;
+    gate.trigger = b;
+    gate.speed = 2.0;
+    press(&fingers, state, b, 1);
+    engine_play_start(state, &gate, -1, 1);
+    engine_play_tick(state, 0);
+    runner = live_id(state, "gate");
+    expect(runner != NULL && runner->wait_until == 1 && has_id(state, 0, x) == 0 &&
+               has_id(state, 0, y) == 0,
+           "swap loop waits 1 ms while the finger is short of the time");
+    engine_play_tick(state, 20);
+    runner = live_id(state, "gate");
+    expect(runner != NULL && runner->wait_until == 21 && has_id(state, 20, x) == 0,
+           "swap loop time is not divided by speed");
+    engine_play_tick(state, 40);
+    runner = live_id(state, "gate");
+    expect(runner != NULL && has_id(state, 40, x) && runner->wait_until == 45,
+           "holding past the time starts the swap loop");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    gate.speed = 1.0;
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_tick(&play, 0);
+    press(&fingers, &play, b, 0);
+    engine_play_tick(&play, 10);
+    expect(live_id(&play, "gate") != NULL && has_id(&play, 10, y) && has_id(&play, 10, x) == 0,
+           "a release before the time skips the swap loop");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 0);
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, y) && has_id(&play, 0, x) == 0,
+           "a finger that is already up skips the swap loop");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    engine_play_set_fingers(&play, &fingers);
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, y) && has_id(&play, 0, x) == 0,
+           "a key that was never reported skips the swap loop");
+
+    fresh();
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, y) && has_id(&play, 0, x) == 0,
+           "a missing finger snapshot skips the swap loop");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    gate.trigger = 0;
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, y) && has_id(&play, 0, x) == 0,
+           "an empty trigger skips the swap loop");
+    gate.trigger = b;
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_flush(&play);
+    engine_play_ask_stop(&play, "gate");
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, y) && has_id(&play, 0, x) == 0,
+           "stopping skips the swap loop");
+
+    gate_steps[0].c = 0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, x) && has_id(&play, 0, y) == 0,
+           "a zero after time starts the swap loop now");
+
+    gate_steps[0].c = -5;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, x), "a negative after time starts the swap loop now");
+
+    gate_steps[0].c = 0;
+    gate_steps[0].count = 0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "gate");
+    expect(runner != NULL && runner->wait_until == 1 && runner->cycles == 1,
+           "an empty swap loop waits 1 ms");
+
+    memset(chain_steps, 0, sizeof chain_steps);
+    chain_steps[0].type = ENGINE_STEP_HOLD_LOOP;
+    chain_steps[0].first = 2;
+    chain_steps[0].count = 4;
+    chain_steps[0].a = 40;
+    chain_steps[1].type = ENGINE_STEP_SWAP_LOOP;
+    chain_steps[1].first = 6;
+    chain_steps[1].count = 4;
+    chain_steps[1].c = 40;
+    chain_steps[2].type = ENGINE_STEP_KEY;
+    chain_steps[2].action = ENGINE_ACT_DOWN;
+    chain_steps[2].key = a;
+    chain_steps[3].type = ENGINE_STEP_WAIT;
+    chain_steps[3].a = 10;
+    chain_steps[4].type = ENGINE_STEP_KEY;
+    chain_steps[4].action = ENGINE_ACT_UP;
+    chain_steps[4].key = a;
+    chain_steps[5].type = ENGINE_STEP_WAIT;
+    chain_steps[5].a = 10;
+    chain_steps[6].type = ENGINE_STEP_KEY;
+    chain_steps[6].action = ENGINE_ACT_DOWN;
+    chain_steps[6].key = x;
+    chain_steps[7].type = ENGINE_STEP_WAIT;
+    chain_steps[7].a = 10;
+    chain_steps[8].type = ENGINE_STEP_KEY;
+    chain_steps[8].action = ENGINE_ACT_UP;
+    chain_steps[8].key = x;
+    chain_steps[9].type = ENGINE_STEP_WAIT;
+    chain_steps[9].a = 10;
+    engine_macro_init(&gate);
+    set_id(&gate, "swap");
+    gate.steps = chain_steps;
+    gate.step_count = 10;
+    gate.top_count = 2;
+    gate.trigger = b;
+    gate.speed = 1.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, a) && has_id(&play, 0, x) == 0,
+           "swap after starts on the first loop");
+    press(&fingers, &play, b, 0);
+    engine_play_tick(&play, 20);
+    expect(has_id(&play, 20, x) == 0, "a quick tap never reaches the swap loop");
+    engine_play_tick(&play, 30);
+    expect(live_id(&play, "swap") == NULL && has_id(&play, 30, x) == 0,
+           "a quick tap ends without the second loop");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    engine_play_tick(&play, 20);
+    engine_play_tick(&play, 40);
+    engine_play_tick(&play, 50);
+    expect(has_id(&play, 50, x) && has_id(&play, 50, a) == 0,
+           "holding past the time swaps to the second loop");
+
+    memset(exit_steps, 0, sizeof exit_steps);
+    exit_steps[0].type = ENGINE_STEP_SWAP_LOOP;
+    exit_steps[0].first = 3;
+    exit_steps[0].count = 1;
+    exit_steps[0].a = 30;
+    exit_steps[1].type = ENGINE_STEP_KEY;
+    exit_steps[1].action = ENGINE_ACT_DOWN;
+    exit_steps[1].key = x;
+    exit_steps[2].type = ENGINE_STEP_WAIT;
+    exit_steps[2].a = 1000;
+    exit_steps[3].type = ENGINE_STEP_WAIT;
+    exit_steps[3].a = 10;
+    engine_macro_init(&gate);
+    set_id(&gate, "exit");
+    gate.steps = exit_steps;
+    gate.step_count = 4;
+    gate.top_count = 3;
+    gate.trigger = b;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 10);
+    engine_play_tick(&play, 20);
+    expect(has_id(&play, 20, x) == 0 && live_id(&play, "exit") != NULL,
+           "swap loop stays until its own swap time");
+    engine_play_tick(&play, 30);
+    expect(has_id(&play, 30, x), "swap loop pops when its swap time is reached");
+
+    memset(shot_steps, 0, sizeof shot_steps);
+    shot_steps[0].type = ENGINE_STEP_HOLD_LOOP;
+    shot_steps[0].first = 1;
+    shot_steps[0].count = 2;
+    shot_steps[1].type = ENGINE_STEP_KEY;
+    shot_steps[1].action = ENGINE_ACT_DOWN;
+    shot_steps[1].key = x;
+    shot_steps[2].type = ENGINE_STEP_WAIT;
+    shot_steps[2].a = 1000;
+    engine_macro_init(&shot);
+    set_id(&shot, "shot");
+    shot.steps = shot_steps;
+    shot.step_count = 3;
+    shot.top_count = 1;
+    shot.trigger = b;
+    memset(mute_steps, 0, sizeof mute_steps);
+    mute_steps[0].type = ENGINE_STEP_SWAP_LOOP;
+    mute_steps[0].first = 1;
+    mute_steps[0].count = 1;
+    mute_steps[0].mute_at = 0;
+    mute_steps[0].mute_n = 2;
+    mute_steps[1].type = ENGINE_STEP_WAIT;
+    mute_steps[1].a = 10;
+    engine_macro_init(&gate);
+    set_id(&gate, "wall");
+    gate.steps = mute_steps;
+    gate.step_count = 2;
+    gate.top_count = 1;
+    gate.trigger = n;
+    mutes[0] = 0;
+    mutes[1] = 1;
+    gate.mutes = mutes;
+    gate.mute_count = 2;
+    catalog[0] = shot;
+    catalog[1] = gate;
+    fresh();
+    engine_fingers_clear(&fingers);
+    engine_play_set_macros(&play, catalog, 2);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &gate, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "shot");
+    expect(engine_play_muted(&play, "shot") && engine_play_muted(&play, "wall") == 0 &&
+               runner != NULL && runner->paused && has_id(&play, 0, x) == 0,
+           "swap loop pauses the other macro and leaves itself out");
 }
 
 int main(void)
@@ -1547,6 +1851,7 @@ int main(void)
     check_goto();
     check_run();
     check_hold_loop();
+    check_swap_loop();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

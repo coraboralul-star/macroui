@@ -33,9 +33,9 @@
 #define ENGINE_ACT_UP 2
 
 /* Numbers stay fixed. The play tick runs key, mouse, move, scroll, wait,
-   randomWait, repeat, goto, run, and holdLoop.
-   swapLoop, burst, ifShort, onceHeld, edgeHold, and scanWait are recognized
-   and still skipped. pressHold is not one of these: it expands to several steps. */
+   randomWait, repeat, goto, run, holdLoop, and swapLoop.
+   burst, ifShort, onceHeld, edgeHold, and scanWait are recognized and still
+   skipped. pressHold is not one of these: it expands to several steps. */
 #define ENGINE_STEP_KEY 1
 #define ENGINE_STEP_MOUSE 2
 #define ENGINE_STEP_MOVE 3
@@ -69,7 +69,10 @@
    holdLoop stores the child span in first and count, swapAfterMs in a, and
    the frame release stop in b. 0 swapAfterMs does not swap. b keeps finish
    and nextUp. Anything else is none. mute_at and mute_n index the macro
-   mute table. Those entries are catalog indexes. */
+   mute table. Those entries are catalog indexes.
+   swapLoop stores the same fields, and afterMs in c. 0 afterMs does not
+   wait. The step builder stores 150 when the file omitted afterMs.
+   afterMs is not divided by speed. */
 struct engine_step {
     uint8_t type;
     uint8_t action;
@@ -80,6 +83,7 @@ struct engine_step {
     uint32_t count;
     uint16_t mute_at;
     uint16_t mute_n;
+    int32_t c;
 };
 
 struct engine_frame {
@@ -186,8 +190,8 @@ struct engine_pointer {
 
 /* The play struct is large. Keep it off a deep stack.
    freq 0 is stored as 1000 when a runner starts. dpi 0 is left 0.
-   macros is the caller's catalog. run indexes it. holdLoop indexes mutes
-   the same way. The pointer is the tick's mouse and window origin.
+   macros is the caller's catalog. run indexes it. holdLoop and swapLoop
+   index mutes the same way. The pointer is the tick's mouse and window origin.
    The finger snapshot is the physical key state for that tick. */
 struct engine_play {
     struct engine_runner runners[ENGINE_RUNNER_CAP];
@@ -283,8 +287,9 @@ void engine_play_advance(struct engine_play *play, int64_t now);
 
 /* Runs one runner. run does nothing here: there is no catalog.
    goto uses a screen point and a mouse at 0, 0.
-   holdLoop does nothing here: there is no mute list and no finger snapshot.
-   engine_play_advance is the path that starts run, reads the pointer, and runs holdLoop. */
+   holdLoop and swapLoop do nothing here: there is no mute list and no finger
+   snapshot. engine_play_advance is the path that starts run, reads the pointer,
+   and runs those blocks. */
 void engine_runner_advance(struct engine_runner *runner, int64_t now,
                            engine_roll_fn roll, void *roll_ctx);
 

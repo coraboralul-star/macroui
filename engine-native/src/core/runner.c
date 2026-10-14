@@ -802,6 +802,34 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
             return ENGINE_ADV_WAIT;
         return ENGINE_ADV_CONT;
     }
+    if (step->type == ENGINE_STEP_SWAP_LOOP) {
+        int64_t held = 0;
+        int64_t freq;
+
+        /* The bare runner has no mute list and no finger snapshot. */
+        if (!play)
+            return ENGINE_ADV_CONT;
+        if (runner->stopping)
+            return ENGINE_ADV_CONT;
+        /* A reported up skips before the loop starts. An empty trigger, a key
+           that was never reported, and a missing snapshot skip too. */
+        if (runner->trigger != 0 && finger_seen(play, runner->trigger) &&
+            !finger_down(play, runner->trigger))
+            return ENGINE_ADV_CONT;
+        if (runner->trigger == 0 || !finger_down(play, runner->trigger))
+            return ENGINE_ADV_CONT;
+        if (runner->started_at >= 0 && now > runner->started_at)
+            held = now - runner->started_at;
+        freq = runner->freq > 0 ? runner->freq : 1000;
+        /* afterMs is wall time. The 1 ms yield is not divided by speed. */
+        if (step->c > 0 && held < engine_ms_to_ticks(step->c, freq)) {
+            arm_ms(runner, now, 1.0, 1.0);
+            return ENGINE_ADV_AGAIN;
+        }
+        if (!push_hold(runner, play, step))
+            return ENGINE_ADV_WAIT;
+        return ENGINE_ADV_CONT;
+    }
     return ENGINE_ADV_CONT;
 }
 
@@ -1266,8 +1294,8 @@ static int arena_fits(const struct engine_play *play, uint32_t count)
     return play->arena_count <= ENGINE_STEP_CAP - count;
 }
 
-/* Copies holdLoop mute indexes into the play table and rewrites the step.
-   An invalid span is dropped. A full table refuses the start. */
+/* Copies holdLoop and swapLoop mute indexes into the play table and rewrites
+   the step. An invalid span is dropped. A full table refuses the start. */
 static int rebase_hold_mutes(struct engine_play *play, struct engine_step *steps, uint32_t count,
                              const int32_t *mutes, uint32_t mute_count)
 {
@@ -1280,7 +1308,7 @@ static int rebase_hold_mutes(struct engine_play *play, struct engine_step *steps
         uint32_t n;
         uint32_t k;
 
-        if (step->type != ENGINE_STEP_HOLD_LOOP)
+        if (step->type != ENGINE_STEP_HOLD_LOOP && step->type != ENGINE_STEP_SWAP_LOOP)
             continue;
         n = step->mute_n;
         if (n == 0)
