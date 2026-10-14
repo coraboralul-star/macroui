@@ -785,6 +785,16 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
         runner->scan_wait = 0;
         return arm_ms(runner, now, (double)step->a, runner->speed);
     }
+    if (step->type == ENGINE_STEP_SCAN_WAIT) {
+        /* FingerDown is the finger snapshot. An empty trigger does not stop.
+           A missing snapshot and a key that was never reported count as up. */
+        if (runner->trigger != 0 && !finger_down(play, runner->trigger)) {
+            mark_done(runner, play);
+            return ENGINE_ADV_WAIT;
+        }
+        runner->scan_wait = 1;
+        return arm_ms(runner, now, (double)step->a, runner->speed);
+    }
     if (step->type == ENGINE_STEP_KEY || step->type == ENGINE_STEP_MOUSE) {
         id = step->key;
         if (id == 0 || id > ENGINE_KEY_ID_MAX)
@@ -1470,6 +1480,16 @@ static int edge_should_stop(const struct engine_runner *runner, const struct eng
     return runner->trigger != 0 && !finger_down(play, runner->trigger);
 }
 
+/* FingerDown, not the edge-hold check. An empty trigger does not stop. */
+static int scan_should_stop(const struct engine_runner *runner, const struct engine_play *play)
+{
+    if (!runner || !runner->scan_wait)
+        return 0;
+    if (runner->stopping)
+        return 1;
+    return runner->trigger != 0 && !finger_down(play, runner->trigger);
+}
+
 static void advance_runner(struct engine_runner *runner, struct engine_play *play, int64_t now,
                            engine_roll_fn roll, void *roll_ctx)
 {
@@ -1490,9 +1510,9 @@ static void advance_runner(struct engine_runner *runner, struct engine_play *pla
     note_hold_release(runner, play);
     pulse_drop_due(runner, now);
     if (runner->wait_until != 0 && now < runner->wait_until) {
-        /* Spam clears the wait so the next block can run. A tap hold ends. */
-        if (edge_should_stop(runner, play)) {
-            if (runner->stack[runner->stack_count - 1].edge_spam)
+        /* scanWait is checked before an edge frame. Spam still yields. */
+        if (scan_should_stop(runner, play) || edge_should_stop(runner, play)) {
+            if (runner->stack_count > 0 && runner->stack[runner->stack_count - 1].edge_spam)
                 runner->wait_until = 0;
             else {
                 mark_done(runner, play);

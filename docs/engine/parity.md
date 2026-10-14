@@ -8,7 +8,7 @@ The fake clock is the caller. `engine_runner_advance` takes `now` in the same un
 
 ## Ported
 
-`engine-runner-test` covers the self-test labels for the sprint fixture, the basic key, play-once, play-mode repeat, while-held, the zero-delay tap, and busy. It also covers move, scroll, an injected `randomWait`, `nextUp`, `finish`, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, `onceHeld`, and `edgeHold`.
+`engine-runner-test` covers the self-test labels for the sprint fixture, the basic key, play-once, play-mode repeat, while-held, the zero-delay tap, and busy. It also covers move, scroll, an injected `randomWait`, `nextUp`, `finish`, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, `onceHeld`, `edgeHold`, and `scanWait`.
 
 Windows CI runs the AHK `--self-test` as well. That script is still the whole 244-check spec. The native file is the part the runner can execute.
 
@@ -80,9 +80,19 @@ A watched rising edge waits `armMs`, drops the edge key and the trigger hold, th
 
 `took_short` skips `edgeHold` on the top frame. `engine_has_hold_loop` already includes it.
 
+## scanWait
+
+`scanWait` stores `ms` in `a`, the same field as `wait`. `ms` is divided by speed when the wait is armed. `0` and a negative `a` still wait 1 ms through that arm path.
+
+A non-empty trigger that the finger snapshot says is up marks the runner done and returns a wait. An empty trigger does not. The check is the finger snapshot, the same one `holdLoop` and `onceHeld` read. It is not a separate edge-hold key check. A missing snapshot and a key that was never reported count as up. `engine_runner_advance` has no snapshot, so a non-empty trigger counts as up.
+
+While `scan_wait` is set, `stopping` or a trigger finger that is up ends the runner during the wait. `scan_wait` is set only when the step runs, and it is cleared after the wait finishes. A plain `wait` and `randomWait` clear it when they arm.
+
+`took_short` skips `scanWait` on the top frame. There is no extra case for it.
+
 ## Not executed yet
 
-`scanWait` has a type number. `Advance` skips it. `then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to their numbers. `pressHold` does not: it still expands to several steps, and that expansion is not compiled yet.
+`pressHold` still expands to several steps, and that expansion is not compiled yet. `then`, `ifShort`, `onceHeld`, `tapHold`, and `tapSpam` already map to their numbers.
 
 `priority` and `variables` are not read.
 
@@ -90,4 +100,4 @@ A name `engine_key_id` does not know is an empty key, and the step does nothing.
 
 Fractional milliseconds are not stored. The step record holds the integer the caller passed. The editor saves integers. A fraction in a raw file is #47's parse.
 
-The finger snapshot is the physical key for `holdLoop`, the trigger for `onceHeld`, and the trigger and watch keys for `edgeHold`. `scanWait` is still skipped, so it does not read that snapshot yet.
+The finger snapshot is the physical key for `holdLoop`, the trigger for `onceHeld`, the trigger and watch keys for `edgeHold`, and the trigger for `scanWait`.
