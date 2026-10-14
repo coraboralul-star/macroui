@@ -267,6 +267,40 @@ int engine_step_kind(const char *name)
     return 0;
 }
 
+int engine_goto_where(const char *name)
+{
+    const char *start;
+    const char *end;
+    char buf[8];
+    int n;
+    int i;
+
+    if (!name)
+        return ENGINE_WHERE_SCREEN;
+    start = name;
+    while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n')
+        start++;
+    end = start + strlen(start);
+    while (end > start &&
+           (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n'))
+        end--;
+    n = (int)(end - start);
+    if (n <= 0 || n >= (int)sizeof buf)
+        return ENGINE_WHERE_SCREEN;
+    for (i = 0; i < n; i++) {
+        char c = start[i];
+        if (c >= 'A' && c <= 'Z')
+            c = (char)(c - 'A' + 'a');
+        buf[i] = c;
+    }
+    buf[n] = '\0';
+    if (strcmp(buf, "window") == 0)
+        return ENGINE_WHERE_WINDOW;
+    if (strcmp(buf, "client") == 0)
+        return ENGINE_WHERE_CLIENT;
+    return ENGINE_WHERE_SCREEN;
+}
+
 int engine_has_hold_loop(const struct engine_step *steps, uint32_t count)
 {
     uint32_t i;
@@ -506,6 +540,60 @@ static int32_t sat_add(int32_t a, int32_t b)
     return (int32_t)sum;
 }
 
+static int32_t sat_delta(int32_t to, int32_t from)
+{
+    int64_t delta = (int64_t)to - (int64_t)from;
+
+    if (delta > INT32_MAX)
+        return INT32_MAX;
+    if (delta < INT32_MIN)
+        return INT32_MIN;
+    return (int32_t)delta;
+}
+
+static int local_to_screen(const struct engine_play *play, int where, int32_t x, int32_t y,
+                           int32_t *sx, int32_t *sy)
+{
+    if (where != ENGINE_WHERE_WINDOW && where != ENGINE_WHERE_CLIENT) {
+        *sx = x;
+        *sy = y;
+        return 1;
+    }
+    if (!play || !play->have_pointer)
+        return 0;
+    if (where == ENGINE_WHERE_CLIENT) {
+        if (!play->pointer.have_client)
+            return 0;
+        *sx = sat_add(play->pointer.client_x, x);
+        *sy = sat_add(play->pointer.client_y, y);
+        return 1;
+    }
+    if (!play->pointer.have_window)
+        return 0;
+    *sx = sat_add(play->pointer.window_x, x);
+    *sy = sat_add(play->pointer.window_y, y);
+    return 1;
+}
+
+/* Board output uses the remembered point after the first goto of this runner.
+   Software, and the first goto, use the snapshot. A missing snapshot is 0, 0. */
+static void mouse_pos(const struct engine_play *play, int32_t *x, int32_t *y)
+{
+    *x = 0;
+    *y = 0;
+    if (!play)
+        return;
+    if (play->output.mode != ENGINE_OUTPUT_SOFTWARE && play->output.mouse_ok) {
+        *x = play->output.mouse_x;
+        *y = play->output.mouse_y;
+        return;
+    }
+    if (play->have_pointer && play->pointer.have_mouse) {
+        *x = play->pointer.mouse_x;
+        *y = play->pointer.mouse_y;
+    }
+}
+
 static int push_frame(struct engine_runner *runner, uint32_t first, uint32_t count,
                       int32_t repeats, int release_stop)
 {
@@ -555,8 +643,9 @@ static int finish_frame(struct engine_runner *runner)
     return 1;
 }
 
-static int exec_step(struct engine_runner *runner, const struct engine_step *step,
-                     int64_t now, engine_roll_fn roll, void *roll_ctx)
+static int exec_step(struct engine_runner *runner, struct engine_play *play,
+                     const struct engine_step *step, int64_t now, engine_roll_fn roll,
+                     void *roll_ctx)
 {
     uint16_t id;
     int32_t count;
@@ -641,10 +730,47 @@ static int exec_step(struct engine_runner *runner, const struct engine_step *ste
             return ENGINE_ADV_WAIT;
         return ENGINE_ADV_CONT;
     }
+    if (step->type == ENGINE_STEP_GOTO) {
+        int32_t sx = 0;
+        int32_t sy = 0;
+        int32_t mx;
+        int32_t my;
+
+        /* The first goto of this runner drops the remembered point before
+           the delta, even when the window conversion fails. */
+        if (!runner->did_goto) {
+            if (play)
+                engine_output_forget_mouse(&play->output);
+            runner->did_goto = 1;
+        }
+        if (!local_to_screen(play, step->action, step->a, step->b, &sx, &sy))
+            return ENGINE_ADV_CONT;
+        mouse_pos(play, &mx, &my);
+        runner->move_x = sat_add(runner->move_x, sat_delta(sx, mx));
+        runner->move_y = sat_add(runner->move_y, sat_delta(sy, my));
+        runner->has_goto = 1;
+        runner->goto_x = sx;
+        runner->goto_y = sy;
+        if (play)
+            engine_output_remember_mouse(&play->output, sx, sy);
+        if (step->count > 0)
+            return arm_ms(runner, now, (double)step->count, runner->speed);
+        return ENGINE_ADV_CONT;
+    }
+    if (step->type == ENGINE_STEP_RUN) {
+        const struct engine_macro *target;
+
+        if (!play || !play->macros || step->a < 0 || step->a >= play->macro_count)
+            return ENGINE_ADV_CONT;
+        target = &play->macros[step->a];
+        /* once, and do not restart a live id. No cycle guard. */
+        engine_play_start(play, target, ENGINE_MODE_ONCE, 0);
+        return ENGINE_ADV_CONT;
+    }
     return ENGINE_ADV_CONT;
 }
 
-void engine_runner_advance(struct engine_runner *runner, int64_t now,
+static void advance_runner(struct engine_runner *runner, struct engine_play *play, int64_t now,
                            engine_roll_fn roll, void *roll_ctx)
 {
     int n;
@@ -654,6 +780,9 @@ void engine_runner_advance(struct engine_runner *runner, int64_t now,
     runner->move_x = 0;
     runner->move_y = 0;
     runner->wheel = 0;
+    runner->has_goto = 0;
+    runner->goto_x = 0;
+    runner->goto_y = 0;
     runner->released_now = 0;
     runner->pressed_count = 0;
     if (runner->done || runner->paused)
@@ -691,7 +820,7 @@ void engine_runner_advance(struct engine_runner *runner, int64_t now,
         if (!runner->steps || at >= runner->step_count)
             continue;
         step = &runner->steps[at];
-        result = exec_step(runner, step, now, roll, roll_ctx);
+        result = exec_step(runner, play, step, now, roll, roll_ctx);
         if (result == ENGINE_ADV_AGAIN) {
             if (frame->index > 0)
                 frame->index--;
@@ -702,6 +831,12 @@ void engine_runner_advance(struct engine_runner *runner, int64_t now,
     }
     if (!runner->done && runner->wait_until == 0)
         arm_ms(runner, now, 1.0, 1.0);
+}
+
+void engine_runner_advance(struct engine_runner *runner, int64_t now,
+                           engine_roll_fn roll, void *roll_ctx)
+{
+    advance_runner(runner, NULL, now, roll, roll_ctx);
 }
 
 static int playing(const struct engine_play *play, const char *id)
@@ -833,6 +968,32 @@ void engine_play_set_roll(struct engine_play *play, engine_roll_fn roll, void *c
     play->roll_ctx = ctx;
 }
 
+void engine_play_set_macros(struct engine_play *play, const struct engine_macro *macros, int count)
+{
+    if (!play)
+        return;
+    if (!macros || count <= 0) {
+        play->macros = NULL;
+        play->macro_count = 0;
+        return;
+    }
+    play->macros = macros;
+    play->macro_count = count;
+}
+
+void engine_play_set_pointer(struct engine_play *play, const struct engine_pointer *pointer)
+{
+    if (!play)
+        return;
+    if (!pointer) {
+        memset(&play->pointer, 0, sizeof play->pointer);
+        play->have_pointer = 0;
+        return;
+    }
+    play->pointer = *pointer;
+    play->have_pointer = 1;
+}
+
 int engine_play_start(struct engine_play *play, const struct engine_macro *macro,
                       int mode_override, int restart)
 {
@@ -890,7 +1051,7 @@ void engine_play_advance(struct engine_play *play, int64_t now)
     if (!play)
         return;
     for (i = 0; i < play->runner_count; i++)
-        engine_runner_advance(&play->runners[i], now, play->roll, play->roll_ctx);
+        advance_runner(&play->runners[i], play, now, play->roll, play->roll_ctx);
 }
 
 static int already(const uint16_t *ids, int count, uint16_t id)
@@ -958,6 +1119,9 @@ int engine_play_publish(struct engine_play *play, int64_t now)
     int64_t dx = 0;
     int64_t dy = 0;
     int64_t wheel = 0;
+    int has_abs = 0;
+    int32_t ax = 0;
+    int32_t ay = 0;
     int i;
 
     if (!play)
@@ -969,11 +1133,20 @@ int engine_play_publish(struct engine_play *play, int64_t now)
         dx += runner->move_x;
         dy += runner->move_y;
         wheel += runner->wheel;
+        if (runner->has_goto) {
+            has_abs = 1;
+            ax = runner->goto_x;
+            ay = runner->goto_y;
+            runner->has_goto = 0;
+        }
         runner->move_x = 0;
         runner->move_y = 0;
         runner->wheel = 0;
     }
     desired_count = engine_play_desired(play, now, desired, ENGINE_HOLD_CAP);
+    if (has_abs)
+        return engine_output_publish(&play->output, desired, desired_count, NULL, 0,
+                                     0, 0, sat_i32(wheel), 1, ax, ay, play->dpi, &play->last);
     return engine_output_publish(&play->output, desired, desired_count, NULL, 0,
                                  clamp_sum(dx), clamp_sum(dy), sat_i32(wheel),
                                  0, 0, 0, play->dpi, &play->last);

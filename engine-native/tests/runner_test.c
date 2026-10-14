@@ -92,6 +92,11 @@ static void check_names(void)
     expect(engine_step_kind("whileHeld") == ENGINE_STEP_HOLD_LOOP, "while held kind");
     expect(engine_step_kind("tapSpam") == ENGINE_STEP_EDGE_HOLD, "spam kind");
     expect(engine_step_kind("pressHold") == 0 && engine_step_kind("nope") == 0, "unknown kind");
+    expect(engine_goto_where("Client") == ENGINE_WHERE_CLIENT, "goto client");
+    expect(engine_goto_where("") == ENGINE_WHERE_SCREEN, "goto screen default");
+    expect(engine_goto_where(" window ") == ENGINE_WHERE_WINDOW, "goto window trims");
+    expect(engine_goto_where("nope") == ENGINE_WHERE_SCREEN && engine_goto_where(NULL) == ENGINE_WHERE_SCREEN,
+           "goto other name is screen");
     expect(engine_top_repeats(ENGINE_MODE_REPEAT, 0, 0) == 1, "play repeat floors at 1");
     expect(engine_top_repeats(ENGINE_MODE_REPEAT, 3, 0) == 3, "play repeat keeps 3");
     expect(engine_top_repeats(ENGINE_MODE_WHILE_HELD, 4, 0) == 0, "while held loops");
@@ -765,6 +770,383 @@ static void check_overflow(void)
     expect(engine_play_alive(state) == 0, "overflow stops the runner");
 }
 
+static int count_id(const struct engine_play *state, const char *id)
+{
+    int n = 0;
+    int i;
+
+    for (i = 0; i < state->runner_count; i++) {
+        if (!state->runners[i].done && strcmp(state->runners[i].id, id) == 0)
+            n++;
+    }
+    for (i = 0; i < state->pending_count; i++) {
+        if (strcmp(state->pending[i].id, id) == 0)
+            n++;
+    }
+    return n;
+}
+
+static void check_goto(void)
+{
+    struct engine_play *state = fresh();
+    struct engine_step steps[3];
+    struct engine_macro macro;
+    struct engine_pointer pointer;
+    struct engine_runner *runner;
+
+    memset(&pointer, 0, sizeof pointer);
+    pointer.have_mouse = 1;
+    pointer.mouse_x = 10;
+    pointer.mouse_y = 20;
+    engine_play_set_pointer(state, &pointer);
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_MOVE;
+    steps[0].a = 4;
+    steps[0].b = -3;
+    steps[1].type = ENGINE_STEP_SCROLL;
+    steps[1].a = 2;
+    steps[2].type = ENGINE_STEP_GOTO;
+    steps[2].action = ENGINE_WHERE_SCREEN;
+    steps[2].a = 15;
+    steps[2].b = 18;
+    steps[2].count = 15;
+    engine_macro_init(&macro);
+    set_id(&macro, "aim");
+    macro.steps = steps;
+    macro.step_count = 3;
+    engine_play_start(state, &macro, -1, 1);
+    engine_play_tick(state, 0);
+    expect(engine_play_alive(state) == 1, "goto duration keeps the runner");
+    expect((engine_report_flags(&state->last) & ENGINE_REPORT_ABSOLUTE) != 0, "goto publishes the point");
+    expect(engine_report_ax(&state->last) == 15 && engine_report_ay(&state->last) == 18, "screen goto");
+    expect(engine_report_dx(&state->last) == 0 && engine_report_dy(&state->last) == 0,
+           "goto drops the relative move");
+    expect(engine_report_wheel(&state->last) == 2, "goto keeps the wheel");
+    expect(state->output.mouse_ok == 1 && state->output.mouse_x == 15 && state->output.mouse_y == 18,
+           "goto remembers the point");
+    runner = engine_play_runner(state, 0);
+    expect(runner && runner->wait_until == 15, "goto duration is 15 ms");
+
+    engine_play_tick(state, 5);
+    expect((engine_report_flags(&state->last) & ENGINE_REPORT_ABSOLUTE) == 0,
+           "a waiting goto does not publish again");
+    engine_play_tick(state, 15);
+    expect(engine_play_alive(state) == 0, "goto finishes after the duration");
+
+    fresh();
+    memset(&pointer, 0, sizeof pointer);
+    pointer.have_mouse = 1;
+    pointer.have_window = 1;
+    pointer.window_x = 100;
+    pointer.window_y = 200;
+    pointer.have_client = 1;
+    pointer.client_x = -5;
+    pointer.client_y = 8;
+    engine_play_set_pointer(&play, &pointer);
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_GOTO;
+    steps[0].action = ENGINE_WHERE_WINDOW;
+    steps[0].a = 5;
+    steps[0].b = 7;
+    engine_macro_init(&macro);
+    set_id(&macro, "win");
+    macro.steps = steps;
+    macro.step_count = 1;
+    engine_play_start(&play, &macro, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(engine_report_ax(&play.last) == 105 && engine_report_ay(&play.last) == 207, "window goto");
+
+    fresh();
+    engine_play_set_pointer(&play, &pointer);
+    steps[0].action = ENGINE_WHERE_CLIENT;
+    steps[0].a = 3;
+    steps[0].b = 4;
+    set_id(&macro, "client");
+    engine_play_start(&play, &macro, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(engine_report_ax(&play.last) == -2 && engine_report_ay(&play.last) == 12, "client goto");
+
+    fresh();
+    pointer.have_window = 0;
+    engine_play_set_pointer(&play, &pointer);
+    engine_output_set_mode(&play.output, ENGINE_OUTPUT_RP2040, NULL, NULL, NULL);
+    engine_output_remember_mouse(&play.output, 9, 9);
+    steps[0].action = ENGINE_WHERE_WINDOW;
+    steps[0].a = 1;
+    steps[0].b = 1;
+    set_id(&macro, "miss");
+    engine_play_start(&play, &macro, -1, 1);
+    engine_play_flush(&play);
+    engine_play_advance(&play, 0);
+    runner = &play.runners[0];
+    expect(runner->did_goto == 1 && runner->has_goto == 0, "a failed goto still counts as the first");
+    expect(play.output.mouse_ok == 0, "the first goto clears the remembered point");
+    engine_play_publish(&play, 0);
+    expect((engine_report_flags(&play.last) & ENGINE_REPORT_ABSOLUTE) == 0, "a failed goto sends no point");
+
+    fresh();
+    memset(&pointer, 0, sizeof pointer);
+    pointer.have_mouse = 1;
+    pointer.mouse_x = 10;
+    pointer.mouse_y = 20;
+    engine_play_set_pointer(&play, &pointer);
+    engine_output_set_mode(&play.output, ENGINE_OUTPUT_RP2040, NULL, NULL, NULL);
+    engine_output_remember_mouse(&play.output, 1, 1);
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_GOTO;
+    steps[0].a = 10;
+    steps[0].b = 20;
+    steps[1].type = ENGINE_STEP_GOTO;
+    steps[1].a = 30;
+    steps[1].b = 40;
+    set_id(&macro, "board");
+    macro.steps = steps;
+    macro.step_count = 2;
+    engine_play_start(&play, &macro, -1, 1);
+    engine_play_flush(&play);
+    engine_play_advance(&play, 0);
+    runner = &play.runners[0];
+    expect(runner->move_x == 20 && runner->move_y == 20, "the second board goto uses the remembered point");
+    expect(runner->goto_x == 30 && runner->goto_y == 40, "the last goto wins");
+    engine_play_publish(&play, 0);
+    expect(engine_report_ax(&play.last) == 30 && engine_report_ay(&play.last) == 40 &&
+               engine_report_dx(&play.last) == 0,
+           "publish sends the absolute point");
+
+    fresh();
+    pointer.mouse_x = 0;
+    pointer.mouse_y = 0;
+    engine_play_set_pointer(&play, &pointer);
+    engine_output_remember_mouse(&play.output, 100, 100);
+    steps[0].a = 5;
+    steps[0].b = 5;
+    steps[0].count = 0;
+    steps[1].a = 5;
+    steps[1].b = 5;
+    steps[1].count = 0;
+    set_id(&macro, "soft");
+    engine_play_start(&play, &macro, -1, 1);
+    engine_play_flush(&play);
+    engine_play_advance(&play, 0);
+    expect(play.runners[0].move_x == 10 && play.runners[0].move_y == 10,
+           "software goto uses the snapshot both times");
+
+    fresh();
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_GOTO;
+    steps[0].a = 8;
+    steps[0].b = 9;
+    steps[0].count = 15;
+    engine_macro_init(&macro);
+    set_id(&macro, "slow");
+    macro.steps = steps;
+    macro.step_count = 1;
+    macro.speed = 2.0;
+    engine_play_start(&play, &macro, -1, 1);
+    engine_play_flush(&play);
+    engine_play_advance(&play, 0);
+    expect(play.runners[0].wait_until == 8, "goto duration divides by speed");
+}
+
+static void check_run(void)
+{
+    struct engine_play *state = fresh();
+    struct engine_step caller_steps[3];
+    struct engine_step target_steps[2];
+    struct engine_step filler_step;
+    struct engine_macro catalog[2];
+    struct engine_macro fillers[31];
+    struct engine_macro caller;
+    char name[8];
+    int i;
+    uint16_t w = kid("w");
+    uint16_t a = kid("a");
+
+    memset(caller_steps, 0, sizeof caller_steps);
+    memset(target_steps, 0, sizeof target_steps);
+    caller_steps[0].type = ENGINE_STEP_RUN;
+    caller_steps[0].a = 1;
+    caller_steps[1].type = ENGINE_STEP_KEY;
+    caller_steps[1].action = ENGINE_ACT_DOWN;
+    caller_steps[1].key = a;
+    caller_steps[2].type = ENGINE_STEP_WAIT;
+    caller_steps[2].a = 50;
+    target_steps[0].type = ENGINE_STEP_KEY;
+    target_steps[0].action = ENGINE_ACT_DOWN;
+    target_steps[0].key = w;
+    target_steps[1].type = ENGINE_STEP_WAIT;
+    target_steps[1].a = 50;
+
+    engine_macro_init(&catalog[0]);
+    engine_macro_init(&catalog[1]);
+    set_id(&catalog[0], "a");
+    catalog[0].steps = caller_steps;
+    catalog[0].step_count = 3;
+    set_id(&catalog[1], "b");
+    catalog[1].steps = target_steps;
+    catalog[1].step_count = 2;
+    catalog[1].mode = ENGINE_MODE_WHILE_HELD;
+    catalog[1].repeat_count = 5;
+    engine_play_set_macros(state, catalog, 2);
+    engine_play_start(state, &catalog[0], -1, 1);
+    engine_play_tick(state, 0);
+    expect(count_id(state, "a") == 1 && count_id(state, "b") == 1, "run queues the target");
+    expect(has_id(state, 0, a) == 1 && has_id(state, 0, w) == 0,
+           "the target does not advance on the tick it starts");
+    expect(engine_play_runner(state, 1) && engine_play_runner(state, 1)->started_at < 0 &&
+               engine_play_runner(state, 1)->mode == ENGINE_MODE_ONCE &&
+               engine_play_runner(state, 1)->stack[0].repeats_left == 1,
+           "run starts the target as once");
+    engine_play_tick(state, 1);
+    expect(has_id(state, 1, w) == 1, "the target advances on the next tick");
+    expect(count_id(state, "b") == 1, "run does not start a second copy");
+
+    fresh();
+    caller_steps[0].a = 1;
+    caller_steps[1].type = ENGINE_STEP_WAIT;
+    caller_steps[1].a = 100;
+    caller_steps[1].action = 0;
+    caller_steps[1].key = 0;
+    target_steps[0].type = ENGINE_STEP_RUN;
+    target_steps[0].a = 0;
+    target_steps[0].action = 0;
+    target_steps[0].key = 0;
+    target_steps[1].type = ENGINE_STEP_WAIT;
+    target_steps[1].a = 100;
+    set_id(&catalog[0], "a");
+    catalog[0].steps = caller_steps;
+    catalog[0].step_count = 2;
+    catalog[0].mode = ENGINE_MODE_ONCE;
+    set_id(&catalog[1], "b");
+    catalog[1].steps = target_steps;
+    catalog[1].step_count = 2;
+    catalog[1].mode = ENGINE_MODE_ONCE;
+    engine_play_set_macros(&play, catalog, 2);
+    engine_play_start(&play, &catalog[0], -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 1);
+    expect(count_id(&play, "a") == 1 && count_id(&play, "b") == 1,
+           "a running target is not started again");
+
+    fresh();
+    caller_steps[0].type = ENGINE_STEP_RUN;
+    caller_steps[0].a = 1;
+    caller_steps[1].type = 0;
+    catalog[0].steps = caller_steps;
+    catalog[0].step_count = 1;
+    target_steps[0].type = ENGINE_STEP_RUN;
+    target_steps[0].a = 0;
+    target_steps[1].type = ENGINE_STEP_WAIT;
+    target_steps[1].a = 50;
+    catalog[1].steps = target_steps;
+    catalog[1].step_count = 2;
+    engine_play_set_macros(&play, catalog, 2);
+    engine_play_start(&play, &catalog[0], -1, 1);
+    engine_play_tick(&play, 0);
+    expect(count_id(&play, "a") == 0 && count_id(&play, "b") == 1, "the caller finishes before the target advances");
+    engine_play_tick(&play, 1);
+    expect(count_id(&play, "a") == 1 && count_id(&play, "b") == 1,
+           "a finished caller can be started by its target");
+
+    fresh();
+    caller_steps[0].type = ENGINE_STEP_RUN;
+    caller_steps[0].a = -1;
+    caller_steps[1].type = ENGINE_STEP_KEY;
+    caller_steps[1].action = ENGINE_ACT_DOWN;
+    caller_steps[1].key = a;
+    engine_macro_init(&caller);
+    set_id(&caller, "solo");
+    caller.steps = caller_steps;
+    caller.step_count = 3;
+    caller_steps[2].type = ENGINE_STEP_WAIT;
+    caller_steps[2].a = 50;
+    engine_play_set_macros(&play, catalog, 1);
+    engine_play_start(&play, &caller, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(engine_play_alive(&play) == 1 && has_id(&play, 0, a) == 1, "a missing run target does nothing");
+
+    caller_steps[0].a = 4;
+    fresh();
+    engine_play_set_macros(&play, catalog, 1);
+    engine_play_start(&play, &caller, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(engine_play_alive(&play) == 1 && has_id(&play, 0, a) == 1, "an index past the catalog does nothing");
+
+    fresh();
+    caller_steps[0].a = 0;
+    caller_steps[1].type = ENGINE_STEP_KEY;
+    caller_steps[1].action = ENGINE_ACT_DOWN;
+    caller_steps[1].key = a;
+    memset(&filler_step, 0, sizeof filler_step);
+    filler_step.type = ENGINE_STEP_WAIT;
+    filler_step.a = 100;
+    engine_macro_init(&catalog[0]);
+    set_id(&catalog[0], "c");
+    catalog[0].steps = &filler_step;
+    catalog[0].step_count = 1;
+    catalog[0].mode = ENGINE_MODE_WHILE_HELD;
+    engine_play_start(&play, &catalog[0], -1, 1);
+    engine_play_flush(&play);
+    target_steps[0].type = ENGINE_STEP_WAIT;
+    target_steps[0].a = 50;
+    target_steps[0].action = 0;
+    target_steps[0].key = 0;
+    target_steps[1].type = 0;
+    engine_macro_init(&catalog[1]);
+    set_id(&catalog[1], "b");
+    catalog[1].steps = target_steps;
+    catalog[1].step_count = 1;
+    catalog[1].exclusive = 1;
+    catalog[1].mode = ENGINE_MODE_ONCE;
+    engine_macro_init(&caller);
+    set_id(&caller, "a");
+    caller.steps = caller_steps;
+    caller.step_count = 3;
+    caller_steps[2].type = ENGINE_STEP_WAIT;
+    caller_steps[2].a = 50;
+    engine_play_set_macros(&play, &catalog[1], 1);
+    caller_steps[0].a = 0;
+    engine_play_start(&play, &caller, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(count_id(&play, "c") == 0 && count_id(&play, "a") == 0 && count_id(&play, "b") == 1,
+           "an exclusive target stops the others and still starts");
+    expect(has_id(&play, 0, a) == 0, "steps after an exclusive run do not play");
+
+    fresh();
+    memset(&filler_step, 0, sizeof filler_step);
+    filler_step.type = ENGINE_STEP_WAIT;
+    filler_step.a = 1000;
+    for (i = 0; i < 31; i++) {
+        snprintf(name, sizeof name, "f%02d", i);
+        engine_macro_init(&fillers[i]);
+        set_id(&fillers[i], name);
+        fillers[i].steps = &filler_step;
+        fillers[i].step_count = 1;
+        fillers[i].mode = ENGINE_MODE_WHILE_HELD;
+        expect(engine_play_start(&play, &fillers[i], -1, 1) == 1, "filler starts");
+    }
+    engine_play_flush(&play);
+    target_steps[0].type = ENGINE_STEP_WAIT;
+    target_steps[0].a = 10;
+    engine_macro_init(&catalog[0]);
+    set_id(&catalog[0], "extra");
+    catalog[0].steps = target_steps;
+    catalog[0].step_count = 1;
+    caller_steps[0].type = ENGINE_STEP_RUN;
+    caller_steps[0].a = 0;
+    caller_steps[1].type = 0;
+    engine_macro_init(&caller);
+    set_id(&caller, "full");
+    caller.steps = caller_steps;
+    caller.step_count = 1;
+    engine_play_set_macros(&play, catalog, 1);
+    expect(engine_play_start(&play, &caller, -1, 1) == 1, "the last slot still starts");
+    engine_play_tick(&play, 0);
+    expect(count_id(&play, "extra") == 0 && count_id(&play, "full") == 0 && engine_play_alive(&play) == 31,
+           "a full list refuses the run and leaves the others");
+}
+
 int main(void)
 {
     check_names();
@@ -781,6 +1163,8 @@ int main(void)
     check_stop_mode();
     check_start_rules();
     check_overflow();
+    check_goto();
+    check_run();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;
