@@ -1,5 +1,5 @@
 /* Low-level hooks. Windows only.
-   Call run on the hook thread. main does not call it.
+   Call run on the hook thread. The resident process starts that thread.
    Unhook before installing again. The callback does not play a macro. */
 #ifndef ENGINE_HOOK_WIN_H
 #define ENGINE_HOOK_WIN_H
