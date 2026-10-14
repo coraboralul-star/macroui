@@ -1,0 +1,5 @@
+profile profiles/09-hold.json
+until 30
+0 finger b down
+0 start loop
+25 finger b up

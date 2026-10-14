@@ -1,6 +1,6 @@
 # Parity
 
-#46 and the harness slice of #49. Differences from `engine/MacroEngine.ahk` that this tree already accepts, and the checks that are not ported yet.
+#46 and #49. Differences from `engine/MacroEngine.ahk` that this tree already accepts, and the checks that are not ported yet.
 
 The fake clock is the caller. `engine_runner_advance` takes `now` in the same unit as the QPC frequency stored on the runner. `engine-runner-test` uses frequency 1000, so the self-test's millisecond numbers land on the same integers. A frequency of 10000000 is checked once, and the wait becomes `scaled_ms * freq / 1000` with the truncation in `docs/engine/architecture.md`. The runner does not read the clock.
 
@@ -99,6 +99,16 @@ Child steps are copied through, in order. A missing `steps` array is an empty li
 `scanWait` is always appended. `holdMs` is stored in `a`. Omitted `holdMs` is 200. That default is not the editor's 80. `0` and a negative value are stored as given. The wait of 18 and `holdMs` are not divided here. The wait arm path divides them.
 
 A steps entry that is not a map is not a native step. The count is the steps that are copied. An array whose entries are all non-maps is an empty list here, so a non-empty key still expands. AHK still sees a length above 0 and skips the key triple. The editor does not write that file.
+
+## Trace corpus
+
+`engine-native/bench` is one profile and one input script per case. `engine-trace` compiles the profile, plays the script on `engine_play_tick` at frequency 1000, and writes `expected/`. It links `engine_core` only. It does not call `SendInput` and it does not take the mutex. AHK `--trace` is `engine/TracePlay.ahk`, placed before the mutex, with `Engine.dry` and `Engine.rawOk` set. It does not install hooks and it does not load `profiles/default.json`.
+
+Linux CI runs `engine-trace` and checks it against `expected/`. Windows CI runs the same scripts through AutoHotkey 2.0.26 and `engine-trace --check`. A stem listed in `approved.txt` is allowed to differ. No stem is listed. The diffs are empty. The 244 AHK checks stay on `--self-test`.
+
+The script starts and stops macros. The trigger poll is not played. An empty finger snapshot is installed first, so a key that was never reported is not down. `priority` and `variables` are in some files and ignored. Corpus `randomWait` uses the same min and max, so AHK `Random()` is not called. A `roll` line is the native injected roll. AHK ignores that line. Goto lines are screen points. The trace records the absolute point and omits the cursor delta from that tick. Window and client gotos are not in the corpus, because AHK reads the foreground window.
+
+Downs at one time are sorted by name, then ups. AHK walks its hold map in sorted key order. The native hold list is insertion order. The time and the set match. An edge key and its trigger going down together is the case that shows this. `14-tap-hold` lists `XButton1` before `z` on both sides.
 
 ## Not executed yet
 

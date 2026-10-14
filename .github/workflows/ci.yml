@@ -78,6 +78,8 @@ jobs:
         run: engine-native/build/engine-process-test
       - name: Profile
         run: engine-native/build/engine-profile-test
+      - name: Trace
+        run: engine-native/build/engine-trace engine-native/bench
 
   engine-windows:
     name: Native engine
@@ -116,6 +118,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "engine-native/build/engine-process-win-test.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "engine-native/build/engine-trace.exe" "engine-native/bench"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: AHK self-test
         shell: pwsh
         run: |
@@ -125,5 +129,12 @@ jobs:
           Expand-Archive -LiteralPath $zip -DestinationPath $dest
           $exe = Get-ChildItem -LiteralPath $dest -Filter AutoHotkey64.exe -Recurse | Select-Object -First 1
           if (-not $exe) { Write-Error "AutoHotkey64.exe was not in the zip"; exit 1 }
-          & $exe.FullName (Join-Path (Get-Location) "engine\MacroEngine.ahk") "--self-test"
+          $script = Join-Path (Get-Location) "engine\MacroEngine.ahk"
+          $bench = Join-Path (Get-Location) "engine-native\bench"
+          & $exe.FullName $script "--self-test"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $trace = Join-Path $env:RUNNER_TEMP "trace"
+          & $exe.FullName $script "--trace" $bench $trace
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "engine-native/build/engine-trace.exe" "engine-native/bench" "--check" $trace
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

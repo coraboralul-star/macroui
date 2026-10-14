@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "name": "once",
+  "variables": {},
+  "macros": [
+    {
+      "id": "once",
+      "name": "Once",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "advanced": true,
+      "trigger": { "kind": "key", "button": "b" },
+      "steps": [],
+      "blocks": [
+        {
+          "type": "onceHeld",
+          "gapMs": 10,
+          "steps": [
+            { "type": "key", "action": "down", "key": "x" }
+          ]
+        }
+      ]
+    }
+  ]
+}

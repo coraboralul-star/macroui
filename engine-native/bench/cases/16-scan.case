@@ -1,0 +1,5 @@
+profile profiles/16-scan.json
+until 20
+0 finger q down
+0 start scan
+15 finger q up

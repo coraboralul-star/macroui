@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "name": "short",
+  "variables": {},
+  "macros": [
+    {
+      "id": "short",
+      "name": "Short",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "advanced": true,
+      "trigger": { "kind": "key", "button": "b" },
+      "steps": [],
+      "blocks": [
+        {
+          "type": "ifShort",
+          "underMs": 30,
+          "minCycles": 3,
+          "steps": [
+            { "type": "key", "action": "down", "key": "z" },
+            { "type": "wait", "ms": 5 },
+            { "type": "key", "action": "up", "key": "z" },
+            { "type": "wait", "ms": 5 }
+          ]
+        }
+      ]
+    }
+  ]
+}

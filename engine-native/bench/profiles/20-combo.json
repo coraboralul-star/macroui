@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "name": "combo",
+  "variables": {},
+  "macros": [
+    {
+      "id": "combo",
+      "name": "Combo",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "advanced": true,
+      "trigger": { "kind": "key", "button": "b" },
+      "steps": [],
+      "blocks": [
+        {
+          "type": "whileHeld",
+          "steps": [
+            { "type": "key", "action": "down", "key": "x" },
+            { "type": "wait", "ms": 10 }
+          ]
+        },
+        {
+          "type": "swapAfter",
+          "afterMs": 25,
+          "steps": [
+            { "type": "key", "action": "down", "key": "z" }
+          ]
+        }
+      ]
+    }
+  ]
+}

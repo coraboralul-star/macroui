@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "name": "shaped",
+  "variables": { "note": "stored" },
+  "macros": [
+    {
+      "id": "stride",
+      "name": "Stride",
+      "enabled": true,
+      "priority": 1,
+      "speed": 1,
+      "basic": true,
+      "gapMs": 5,
+      "playMode": "once",
+      "repeatCount": 1,
+      "trigger": { "kind": "key", "button": "q" },
+      "steps": []
+    },
+    {
+      "id": "clicks",
+      "name": "Clicks",
+      "enabled": true,
+      "priority": 2,
+      "speed": 1,
+      "playMode": "once",
+      "busy": true,
+      "trigger": { "kind": "key", "button": "f" },
+      "steps": [
+        { "type": "mouse", "action": "tap", "button": "LButton", "holdMs": 10 },
+        { "type": "wait", "ms": 20 },
+        { "type": "mouse", "action": "tap", "button": "LButton", "holdMs": 10 },
+        { "type": "wait", "ms": 20 }
+      ]
+    }
+  ]
+}

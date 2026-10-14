@@ -1,0 +1,3 @@
+profile profiles/08-run.json
+until 20
+0 start parent

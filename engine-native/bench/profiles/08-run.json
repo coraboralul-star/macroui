@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "name": "run",
+  "variables": {},
+  "macros": [
+    {
+      "id": "child",
+      "name": "Child",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "trigger": { "kind": "key", "button": "q" },
+      "steps": [
+        { "type": "key", "action": "down", "key": "q" },
+        { "type": "wait", "ms": 18 },
+        { "type": "key", "action": "up", "key": "q" }
+      ]
+    },
+    {
+      "id": "parent",
+      "name": "Parent",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "trigger": { "kind": "key", "button": "f" },
+      "steps": [
+        { "type": "run", "macroId": "child" }
+      ]
+    }
+  ]
+}

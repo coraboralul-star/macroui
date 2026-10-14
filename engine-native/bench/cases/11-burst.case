@@ -1,0 +1,4 @@
+profile profiles/11-burst.json
+until 24
+0 finger b up
+0 start burst

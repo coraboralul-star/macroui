@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "name": "mouse",
+  "variables": {},
+  "macros": [
+    {
+      "id": "click",
+      "name": "Click",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "trigger": { "kind": "key", "button": "q" },
+      "steps": [
+        { "type": "mouse", "action": "tap", "button": "LButton", "holdMs": 15 },
+        { "type": "wait", "ms": 20 }
+      ]
+    }
+  ]
+}

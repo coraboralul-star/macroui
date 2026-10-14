@@ -15,6 +15,7 @@ $required = @(
     (Join-Path $Repo "ui\dist\index.html"),
     (Join-Path $Repo "engine\MacroEngine.ahk"),
     (Join-Path $Repo "engine\JSON.ahk"),
+    (Join-Path $Repo "engine\TracePlay.ahk"),
     (Join-Path $Repo "setup\EnsureRuntime.ps1"),
     (Join-Path $Repo "shell\vendetta.png")
 )
@@ -50,6 +51,7 @@ Get-ChildItem -LiteralPath $shellOut -Recurse -File | ForEach-Object {
 New-Item -ItemType Directory -Path (Join-Path $Stage "engine") -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $Repo "engine\MacroEngine.ahk") -Destination (Join-Path $Stage "engine\MacroEngine.ahk")
 Copy-Item -LiteralPath (Join-Path $Repo "engine\JSON.ahk") -Destination (Join-Path $Stage "engine\JSON.ahk")
+Copy-Item -LiteralPath (Join-Path $Repo "engine\TracePlay.ahk") -Destination (Join-Path $Stage "engine\TracePlay.ahk")
 
 New-Item -ItemType Directory -Path (Join-Path $Stage "setup") -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $Repo "setup\EnsureRuntime.ps1") -Destination (Join-Path $Stage "setup\EnsureRuntime.ps1")
@@ -94,6 +96,7 @@ try {
         "ui/dist/index.html",
         "engine/MacroEngine.ahk",
         "engine/JSON.ahk",
+        "engine/TracePlay.ahk",
         "setup/EnsureRuntime.ps1"
     )
     foreach ($name in $need) {

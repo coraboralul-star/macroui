@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "name": "mute",
+  "variables": {},
+  "macros": [
+    {
+      "id": "shot",
+      "name": "Shot",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "advanced": true,
+      "trigger": { "kind": "key", "button": "b" },
+      "steps": [],
+      "blocks": [
+        {
+          "type": "whileHeld",
+          "steps": [
+            { "type": "key", "action": "down", "key": "x" },
+            { "type": "wait", "ms": 1000 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "wall",
+      "name": "Wall",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "advanced": true,
+      "trigger": { "kind": "key", "button": "n" },
+      "steps": [],
+      "blocks": [
+        {
+          "type": "whileHeld",
+          "mute": ["shot"],
+          "steps": [
+            { "type": "wait", "ms": 10 }
+          ]
+        }
+      ]
+    }
+  ]
+}
