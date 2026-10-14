@@ -520,7 +520,6 @@ static void check_yield_and_skip(void)
     struct engine_step steps[70];
     struct engine_step follow[3];
     struct engine_macro macro;
-    struct engine_step hold;
     int i;
 
     memset(steps, 0, sizeof steps);
@@ -566,17 +565,25 @@ static void check_yield_and_skip(void)
     expect(has_id(&play, 0, kid("w")) && !has_id(&play, 0, 0), "an empty key is a no-op");
 
     fresh();
-    memset(&hold, 0, sizeof hold);
-    hold.type = ENGINE_STEP_HOLD_LOOP;
-    hold.key = kid("w");
-    macro.steps = &hold;
-    macro.step_count = 1;
-    set_id(&macro, "later");
-    engine_play_start(&play, &macro, -1, 1);
-    engine_play_flush(&play);
-    engine_runner_advance(&play.runners[0], 0, NULL, NULL);
-    expect(play.runners[0].done == 1 && has_id(&play, 0, kid("w")) == 0,
-           "hold loop is not executed yet");
+    {
+        struct engine_step later[2];
+
+        memset(later, 0, sizeof later);
+        later[0].type = ENGINE_STEP_HOLD_LOOP;
+        later[0].first = 1;
+        later[0].count = 1;
+        later[1].type = ENGINE_STEP_WAIT;
+        later[1].a = 10;
+        macro.steps = later;
+        macro.step_count = 2;
+        macro.top_count = 1;
+        set_id(&macro, "later");
+        engine_play_start(&play, &macro, -1, 1);
+        engine_play_flush(&play);
+        engine_runner_advance(&play.runners[0], 0, NULL, NULL);
+        expect(play.runners[0].done == 1, "a hold loop on the bare runner does nothing");
+    }
+    macro.top_count = 0;
 
     fresh();
     follow[0].type = ENGINE_STEP_KEY;
@@ -1147,6 +1154,380 @@ static void check_run(void)
            "a full list refuses the run and leaves the others");
 }
 
+static struct engine_runner *live_id(struct engine_play *state, const char *id)
+{
+    int i;
+
+    for (i = 0; i < state->runner_count; i++) {
+        if (!state->runners[i].done && strcmp(state->runners[i].id, id) == 0)
+            return &state->runners[i];
+    }
+    return NULL;
+}
+
+static void press(struct engine_fingers *fingers, struct engine_play *state, uint16_t id, int down)
+{
+    engine_fingers_set(fingers, id, down);
+    engine_play_set_fingers(state, fingers);
+}
+
+static void check_hold_loop(void)
+{
+    struct engine_play *state = fresh();
+    struct engine_fingers fingers;
+    struct engine_step loop_steps[3];
+    struct engine_step shot_steps[3];
+    struct engine_step wall_steps[2];
+    struct engine_step wall2_steps[2];
+    struct engine_step plain_steps[1];
+    struct engine_step swap_steps[6];
+    struct engine_step drain_steps[7];
+    struct engine_step skip_steps[6];
+    struct engine_macro loop;
+    struct engine_macro shot;
+    struct engine_macro wall;
+    struct engine_macro wall2;
+    struct engine_macro plain;
+    struct engine_macro catalog[4];
+    int32_t mute_shot[2];
+    uint16_t b = kid("b");
+    uint16_t x = kid("x");
+    uint16_t n = kid("n");
+    uint16_t m = kid("m");
+    uint16_t h = kid("h");
+    uint16_t w = kid("w");
+    uint16_t z = kid("z");
+    uint16_t y = kid("y");
+    struct engine_runner *runner;
+
+    engine_fingers_clear(&fingers);
+    memset(loop_steps, 0, sizeof loop_steps);
+    loop_steps[0].type = ENGINE_STEP_HOLD_LOOP;
+    loop_steps[0].first = 1;
+    loop_steps[0].count = 2;
+    loop_steps[1].type = ENGINE_STEP_KEY;
+    loop_steps[1].action = ENGINE_ACT_DOWN;
+    loop_steps[1].key = x;
+    loop_steps[2].type = ENGINE_STEP_WAIT;
+    loop_steps[2].a = 10;
+    engine_macro_init(&loop);
+    set_id(&loop, "loop");
+    loop.steps = loop_steps;
+    loop.step_count = 3;
+    loop.top_count = 1;
+    loop.trigger = b;
+    press(&fingers, state, b, 1);
+    engine_play_start(state, &loop, -1, 1);
+    engine_play_tick(state, 0);
+    runner = live_id(state, "loop");
+    expect(runner != NULL && has_id(state, 0, x) && runner->cycles == 0,
+           "hold loop presses while the finger is down");
+    engine_play_tick(state, 10);
+    runner = live_id(state, "loop");
+    expect(runner != NULL && has_id(state, 10, x) && runner->cycles == 1,
+           "hold loop restarts the body");
+    press(&fingers, state, b, 0);
+    engine_play_tick(state, 20);
+    expect(live_id(state, "loop") == NULL && has_id(state, 20, x) == 0,
+           "hold loop pops when the finger comes up");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    loop_steps[0].count = 0;
+    engine_play_set_macros(&play, NULL, 0);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &loop, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "loop");
+    expect(runner != NULL && runner->wait_until == 1 && runner->cycles == 1,
+           "an empty hold loop waits 1 ms");
+    engine_play_tick(&play, 1);
+    runner = live_id(&play, "loop");
+    expect(runner != NULL && runner->wait_until == 2, "an empty hold loop keeps waiting");
+    press(&fingers, &play, b, 0);
+    engine_play_tick(&play, 2);
+    expect(live_id(&play, "loop") == NULL, "an empty hold loop ends when the finger comes up");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    loop_steps[0].count = 2;
+    press(&fingers, &play, b, 0);
+    engine_play_start(&play, &loop, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(live_id(&play, "loop") == NULL && has_id(&play, 0, x) == 0,
+           "a finger that is already up skips the hold loop");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    engine_play_set_fingers(&play, &fingers);
+    engine_play_start(&play, &loop, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "loop");
+    expect(runner != NULL && has_id(&play, 0, x),
+           "a key that was never reported still starts the hold loop");
+    engine_play_tick(&play, 10);
+    expect(live_id(&play, "loop") == NULL, "that hold loop ends after one pass");
+
+    memset(shot_steps, 0, sizeof shot_steps);
+    shot_steps[0].type = ENGINE_STEP_HOLD_LOOP;
+    shot_steps[0].first = 1;
+    shot_steps[0].count = 2;
+    shot_steps[1].type = ENGINE_STEP_KEY;
+    shot_steps[1].action = ENGINE_ACT_DOWN;
+    shot_steps[1].key = x;
+    shot_steps[2].type = ENGINE_STEP_WAIT;
+    shot_steps[2].a = 1000;
+    engine_macro_init(&shot);
+    set_id(&shot, "shot");
+    shot.steps = shot_steps;
+    shot.step_count = 3;
+    shot.top_count = 1;
+    shot.trigger = b;
+    shot.advanced = 1;
+
+    memset(wall_steps, 0, sizeof wall_steps);
+    wall_steps[0].type = ENGINE_STEP_HOLD_LOOP;
+    wall_steps[0].first = 1;
+    wall_steps[0].count = 1;
+    wall_steps[0].mute_at = 0;
+    wall_steps[0].mute_n = 2;
+    wall_steps[1].type = ENGINE_STEP_WAIT;
+    wall_steps[1].a = 10;
+    engine_macro_init(&wall);
+    set_id(&wall, "wall");
+    wall.steps = wall_steps;
+    wall.step_count = 2;
+    wall.top_count = 1;
+    wall.trigger = n;
+    mute_shot[0] = 0;
+    mute_shot[1] = 1;
+    wall.mutes = mute_shot;
+    wall.mute_count = 2;
+    memcpy(wall2_steps, wall_steps, sizeof wall2_steps);
+    wall2_steps[0].mute_n = 1;
+    wall2 = wall;
+    set_id(&wall2, "wall2");
+    wall2.trigger = m;
+    wall2.steps = wall2_steps;
+    wall2.mute_count = 1;
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    catalog[0] = shot;
+    catalog[1] = wall;
+    catalog[2] = wall2;
+    engine_play_set_macros(&play, catalog, 3);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, x) && live_id(&play, "shot") != NULL &&
+               live_id(&play, "shot")->paused == 0,
+           "shot plays while its key is held");
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &wall, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "shot");
+    expect(engine_play_muted(&play, "shot") && !engine_play_muted(&play, "wall") &&
+               runner != NULL && runner->paused && has_id(&play, 0, x) == 0,
+           "wall pauses shot and drops its keys");
+    expect(engine_play_mute_count(&play, "shot") == 1, "mute counts once");
+    press(&fingers, &play, m, 1);
+    engine_play_start(&play, &wall2, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(engine_play_mute_count(&play, "shot") == 2 && live_id(&play, "shot")->paused,
+           "a second mute does not unpause early");
+    press(&fingers, &play, n, 0);
+    engine_play_tick(&play, 10);
+    expect(engine_play_mute_count(&play, "shot") == 1 && live_id(&play, "shot")->paused &&
+               live_id(&play, "wall") == NULL,
+           "releasing one mute leaves the other");
+    press(&fingers, &play, m, 0);
+    engine_play_tick(&play, 20);
+    runner = live_id(&play, "shot");
+    expect(engine_play_muted(&play, "shot") == 0 && runner != NULL && runner->paused == 0 &&
+               runner->done == 0,
+           "releasing the last mute unpauses shot");
+    engine_play_tick(&play, 1000);
+    expect(has_id(&play, 1000, x) && live_id(&play, "shot") != NULL,
+           "shot plays again while its key is still held");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    engine_play_set_macros(&play, catalog, 3);
+    press(&fingers, &play, b, 1);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &shot, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_start(&play, &wall, -1, 1);
+    engine_play_tick(&play, 0);
+    press(&fingers, &play, b, 0);
+    press(&fingers, &play, n, 0);
+    engine_play_tick(&play, 10);
+    engine_play_tick(&play, 1000);
+    expect(live_id(&play, "shot") == NULL && has_id(&play, 1000, x) == 0,
+           "shot stays stopped if its key came up during the pause");
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    engine_play_set_macros(&play, catalog, 3);
+    press(&fingers, &play, b, 1);
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &wall, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(engine_play_muted(&play, "shot") && count_id(&play, "shot") == 0,
+           "a held key does not start while muted");
+    press(&fingers, &play, n, 0);
+    engine_play_tick(&play, 10);
+    expect(count_id(&play, "shot") == 1 && has_id(&play, 10, x) == 0,
+           "a key that stayed down starts when the mute lifts");
+    engine_play_tick(&play, 11);
+    expect(has_id(&play, 11, x), "that restarted hold sends again");
+
+    memset(plain_steps, 0, sizeof plain_steps);
+    plain_steps[0].type = ENGINE_STEP_KEY;
+    plain_steps[0].action = ENGINE_ACT_DOWN;
+    plain_steps[0].key = w;
+    engine_macro_init(&plain);
+    set_id(&plain, "hold-w");
+    plain.steps = plain_steps;
+    plain.step_count = 1;
+    plain.mode = ENGINE_MODE_WHILE_HELD;
+    plain.trigger = h;
+    catalog[0] = plain;
+    mute_shot[0] = 0;
+    wall.mutes = mute_shot;
+    wall.mute_count = 1;
+    wall_steps[0].mute_n = 1;
+    catalog[1] = wall;
+
+    fresh();
+    engine_fingers_clear(&fingers);
+    engine_play_set_macros(&play, catalog, 2);
+    press(&fingers, &play, h, 1);
+    engine_play_start(&play, &plain, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, w), "plain hold macro holds w");
+    press(&fingers, &play, n, 1);
+    engine_play_start(&play, &wall, -1, 1);
+    engine_play_tick(&play, 0);
+    runner = live_id(&play, "hold-w");
+    expect(runner != NULL && runner->paused && has_id(&play, 0, w) == 0,
+           "gate mutes the plain hold");
+    press(&fingers, &play, h, 0);
+    press(&fingers, &play, n, 0);
+    engine_play_tick(&play, 10);
+    expect(live_id(&play, "hold-w") == NULL && has_id(&play, 10, w) == 0,
+           "unmute does not replay a hold whose key came up");
+
+    memset(swap_steps, 0, sizeof swap_steps);
+    swap_steps[0].type = ENGINE_STEP_HOLD_LOOP;
+    swap_steps[0].first = 3;
+    swap_steps[0].count = 1;
+    swap_steps[0].a = 40;
+    swap_steps[1].type = ENGINE_STEP_KEY;
+    swap_steps[1].action = ENGINE_ACT_DOWN;
+    swap_steps[1].key = x;
+    swap_steps[2].type = ENGINE_STEP_WAIT;
+    swap_steps[2].a = 10;
+    swap_steps[3].type = ENGINE_STEP_WAIT;
+    swap_steps[3].a = 10;
+    engine_macro_init(&loop);
+    set_id(&loop, "swap");
+    loop.steps = swap_steps;
+    loop.step_count = 4;
+    loop.top_count = 3;
+    loop.trigger = b;
+    loop.speed = 2.0;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &loop, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, x) == 0 && live_id(&play, "swap") != NULL,
+           "swap time starts inside the hold loop");
+    engine_play_tick(&play, 20);
+    expect(has_id(&play, 20, x) == 0 && live_id(&play, "swap") != NULL,
+           "swap time is not divided by speed");
+    engine_play_tick(&play, 40);
+    expect(has_id(&play, 40, x), "holding past the time leaves the hold loop");
+
+    memset(drain_steps, 0, sizeof drain_steps);
+    drain_steps[0].type = ENGINE_STEP_HOLD_LOOP;
+    drain_steps[0].first = 3;
+    drain_steps[0].count = 4;
+    drain_steps[1].type = ENGINE_STEP_KEY;
+    drain_steps[1].action = ENGINE_ACT_DOWN;
+    drain_steps[1].key = y;
+    drain_steps[2].type = ENGINE_STEP_WAIT;
+    drain_steps[2].a = 10;
+    drain_steps[3].type = ENGINE_STEP_KEY;
+    drain_steps[3].action = ENGINE_ACT_DOWN;
+    drain_steps[3].key = x;
+    drain_steps[4].type = ENGINE_STEP_WAIT;
+    drain_steps[4].a = 50;
+    drain_steps[5].type = ENGINE_STEP_KEY;
+    drain_steps[5].action = ENGINE_ACT_UP;
+    drain_steps[5].key = x;
+    drain_steps[6].type = ENGINE_STEP_KEY;
+    drain_steps[6].action = ENGINE_ACT_DOWN;
+    drain_steps[6].key = z;
+    engine_macro_init(&loop);
+    set_id(&loop, "drain");
+    loop.steps = drain_steps;
+    loop.step_count = 7;
+    loop.top_count = 3;
+    loop.trigger = b;
+    loop.speed = 1.0;
+    loop.release_stop = ENGINE_STOP_NEXT_UP;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &loop, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(has_id(&play, 0, x), "hold starts with the key down");
+    press(&fingers, &play, b, 0);
+    engine_play_tick(&play, 50);
+    runner = live_id(&play, "drain");
+    expect(runner != NULL && has_id(&play, 50, y) && has_id(&play, 50, z) == 0 &&
+               has_id(&play, 50, x) == 0,
+           "release skips a later down and runs the next block");
+
+    drain_steps[0].b = ENGINE_STOP_FINISH;
+    engine_macro_init(&loop);
+    set_id(&loop, "full");
+    loop.steps = drain_steps;
+    loop.step_count = 7;
+    loop.top_count = 3;
+    loop.trigger = b;
+    loop.release_stop = ENGINE_STOP_NEXT_UP;
+    fresh();
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, b, 1);
+    engine_play_start(&play, &loop, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_ask_stop(&play, "full");
+    press(&fingers, &play, b, 0);
+    engine_play_tick(&play, 50);
+    expect(live_id(&play, "full") != NULL && has_id(&play, 50, z),
+           "block play full still presses the later down");
+
+    memset(skip_steps, 0, sizeof skip_steps);
+    skip_steps[0].type = ENGINE_STEP_SWAP_LOOP;
+    skip_steps[1].type = ENGINE_STEP_BURST;
+    skip_steps[2].type = ENGINE_STEP_IF_SHORT;
+    skip_steps[3].type = ENGINE_STEP_ONCE_HELD;
+    skip_steps[4].type = ENGINE_STEP_EDGE_HOLD;
+    skip_steps[5].type = ENGINE_STEP_SCAN_WAIT;
+    engine_macro_init(&loop);
+    set_id(&loop, "rest");
+    loop.steps = skip_steps;
+    loop.step_count = 6;
+    fresh();
+    engine_play_start(&play, &loop, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(live_id(&play, "rest") == NULL, "the other hold blocks are still skipped");
+}
+
 int main(void)
 {
     check_names();
@@ -1165,6 +1546,7 @@ int main(void)
     check_overflow();
     check_goto();
     check_run();
+    check_hold_loop();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;
