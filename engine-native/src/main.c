@@ -3,16 +3,20 @@
 #include "version.h"
 
 #if defined(_WIN32)
-int engine_win_layer_present(void);
+#include "win_entry.h"
 #endif
 
-int main(void)
+int main(int argc, char **argv)
 {
+#if defined(_WIN32)
+    (void)argc;
+    (void)argv;
+    return engine_win_main();
+#else
+    (void)argc;
+    (void)argv;
     if (printf("%s\n", engine_version()) < 0)
         return 1;
-#if defined(_WIN32)
-    if (engine_win_layer_present() != 1)
-        return 1;
-#endif
     return 0;
+#endif
 }

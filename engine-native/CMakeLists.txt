@@ -32,6 +32,7 @@ add_library(engine_core STATIC
   src/core/clock.c
   src/core/hook.c
   src/core/output.c
+  src/core/process.c
   src/core/runner.c
   src/ipc/report.c)
 target_include_directories(engine_core PUBLIC src/core src/ipc)
@@ -54,11 +55,19 @@ target_link_libraries(engine-output-test PRIVATE engine_core)
 add_executable(engine-runner-test tests/runner_test.c)
 target_link_libraries(engine-runner-test PRIVATE engine_core)
 
+add_executable(engine-process-test tests/process_test.c)
+target_link_libraries(engine-process-test PRIVATE engine_core)
+
 if(WIN32)
   add_library(engine_win STATIC src/win/win_entry.c src/win/clock_win.c src/win/hook_win.c src/win/output_win.c)
   target_include_directories(engine_win PUBLIC src/win)
-  target_link_libraries(engine_win PUBLIC engine_core user32)
+  target_link_libraries(engine_win PUBLIC engine_core user32 shell32)
   target_link_libraries(macroui-engine PRIVATE engine_win)
+  if(MSVC)
+    target_link_options(macroui-engine PRIVATE "/SUBSYSTEM:WINDOWS" "/ENTRY:mainCRTStartup")
+  else()
+    target_link_options(macroui-engine PRIVATE "-mwindows")
+  endif()
 
   add_executable(engine-clock-wait-test tests/clock_wait_test.c)
   target_link_libraries(engine-clock-wait-test PRIVATE engine_win)
@@ -68,4 +77,7 @@ if(WIN32)
 
   add_executable(engine-output-win-test tests/output_win_test.c)
   target_link_libraries(engine-output-win-test PRIVATE engine_win)
+
+  add_executable(engine-process-win-test tests/process_win_test.c)
+  target_link_libraries(engine-process-win-test PRIVATE engine_win)
 endif()

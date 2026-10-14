@@ -1,5 +1,6 @@
 /* One SendInput for a report image. Windows only.
-   main does not call this. The echo value is on every INPUT. */
+   The resident process calls this to release keys on exit.
+   The echo value is on every INPUT. */
 #ifndef ENGINE_OUTPUT_WIN_H
 #define ENGINE_OUTPUT_WIN_H
 

@@ -4,7 +4,7 @@
 
 Behaviour the port must match is in `docs/engine/plan.md` and `docs/engine/ahk-analysis.md`. This file is the threads, the ordering, the clock, and the tree. The runner for the first steps is `engine-native/src/core/runner.c`. The byte layout of pipe messages is `docs/engine/ipc-protocol.md`.
 
-`engine-native/` from this issue prints its version and exits. It does not take the mutex, install a hook, or open the pipe.
+`engine-native/` on Linux prints its version and exits. On Windows, #48 is the resident process: it takes the mutex, starts the three threads, and opens the pipe. `--self-test` prints the version and does not take the mutex.
 
 ## Threads
 
@@ -101,7 +101,7 @@ There is no `RegisterHotKey`. Software swallow and board swallow are both the re
 
 The hook thread is the thread that installed the hooks, and it is the thread that reinstalls them. Reinstall runs between messages, not inside the callback. Unhook first. A handle Windows has already removed still looks valid.
 
-The watchdog rules in the analysis stay. Idle does not re-raise. The stamps live on the hook thread. The decision runs in step 4. That decision is `engine_hook_watch` in `engine-native/src/core/hook.c`. The hook thread reads the raise flags between messages and unhooks before it installs. `engine-native/src/win/hook_win.c` is that install. `main` does not call it.
+The watchdog rules in the analysis stay. Idle does not re-raise. The stamps live on the hook thread. The decision runs in step 4. That decision is `engine_hook_watch` in `engine-native/src/core/hook.c`. The hook thread reads the raise flags between messages and unhooks before it installs. `engine-native/src/win/hook_win.c` is that install. The resident process starts that thread. The playback thread does not call it.
 
 ## Playback priority
 
@@ -189,31 +189,39 @@ Key id 0 is empty. Ids 1..255 are the virtual key after side resolution. Id 256 
 
 `applied` stores key ids. The IPC thread turns them into the names on the state message. The playback thread does not format that text. The name table is filled once at startup.
 
-The report image is fixed and little-endian. Its fields are the `report` payload in `docs/engine/ipc-protocol.md`. One publish produces one image. The bytes are `engine-native/src/ipc/report.c`. The diff that fills it is `engine-native/src/core/output.c`. On the software path that image becomes one `SendInput` call in `engine-native/src/win/output_win.c` and is not written to the pipe. A board mode is the same image. The shell writes the `K` / `M` lines. `main` does not call any of this.
+The report image is fixed and little-endian. Its fields are the `report` payload in `docs/engine/ipc-protocol.md`. One publish produces one image. The bytes are `engine-native/src/ipc/report.c`. The diff that fills it is `engine-native/src/core/output.c`. On the software path that image becomes one `SendInput` call in `engine-native/src/win/output_win.c` and is not written to the pipe. A board mode is the same image. The shell writes the `K` / `M` lines. The resident process calls `SendInput` only to release keys on exit. It does not publish a playing report.
 
 ## Process
 
-Resident startup, when a later issue replaces the version printer:
+Resident startup on Windows (#48). Linux still prints the version and exits.
 
 1. `SetProcessDpiAwarenessContext` to Per-Monitor V2, before any dpi query.
-2. `CreateMutexW` on `Local\MacroUI.Engine`, initial owner true. If the mutex already exists, exit. Do not kill the holder and do not release its keys.
+2. `CreateMutexW` on `Local\MacroUI.Engine`, initial owner true. If the mutex already exists, exit 2. Do not kill the holder and do not release its keys.
 3. Start the IPC thread, the hook thread, then the playback thread.
-4. No console window.
+4. No console window. The Windows exe is built with the Windows subsystem.
 
-`--self-test` returns before step 2. Both engines share the mutex name. Switching engines is: release keys, quit, wait until the mutex is free, then start the other.
+`--self-test` prints `macroui-engine 0` and returns before step 2. `--bench` returns before step 2 and does not measure. `--profile` stores the path and does not open it. There is no relative default. A missing value or any other argument exits 1 before the mutex. Both engines share the mutex name. Switching engines is: release keys, quit, wait until the mutex is free, then start the other.
+
+`ERROR_ALREADY_EXISTS` closes only the new handle. It does not call `ReleaseMutex`. AutoHotkey still does not check that error. `#SingleInstance Force` only sees another AutoHotkey script, so launching `MacroEngine.ahk` by hand can still run beside the native process. The shell's `EngineMutexHeld` will not start AutoHotkey while the name is taken. `FindEngineProcess` still looks for `AutoHotkey64`. Adopting the native pid is #50. Do not run both engines.
+
+The hook thread is `engine_win_hook_run`. The playback thread waits the disarmed 16 ms slice until quit, then releases applied keys. It does not advance a runner. The IPC thread creates `\\.\pipe\MacroUI` with the flags in `docs/engine/ipc-protocol.md`. `command` `quit` writes the command ack, then sets the quit flag. A first byte of `{` gets `ack` `bad frame` and is not applied, so a JSON quit does not stop the process. `hello` and `state` are not written. `start`, `stop`, `reload`, `profile`, and `output` are not applied.
 
 The board scale uses the foreground dpi from the snapshot, and the system dpi when the window has none. Per-Monitor V2 can change that number relative to the unaware AHK process. If #53 shows a difference, record it there. The process stays Per-Monitor V2.
 
-Exit releases keys, asks the hook thread to unhook, closes the timer, the pipe, and the mutex, in that order.
+Exit releases keys, asks the hook thread to unhook, closes the timer, the pipe, and the mutex, in that order. Software ups go through `SendInput`. A board mode clears applied and does not call `SendInput`. The port stays in the shell. `timeBeginPeriod` is not called, so there is no `timeEndPeriod`. An unhandled exception runs that same order and exits. A hidden top-level window and a console control handler set the quit flag for session end and close. There is no crash dump. `TerminateProcess` cannot run the exit order, so a hard kill can leave software keys down. The shell's kill stays a last resort.
+
+Thread priorities are the table above. The process stays `NORMAL_PRIORITY_CLASS`. MMCSS stays off. Integrity level stays where the process started.
 
 ## Tree
 
 ```
 engine-native/
   CMakeLists.txt
-  src/main.c              version printer, no Win32
+  src/main.c              Linux prints the version. Windows calls win_entry
   src/core/version.h
   src/core/version.c      portable, Linux CI compiles this
+  src/core/process.h
+  src/core/process.c      args, boot order, exit order, quit and ack bytes
   src/core/clock.h
   src/core/clock.c        pace, half-away rounding, tick deltas
   src/core/hook.h
@@ -224,7 +232,7 @@ engine-native/
   src/core/runner.c       steps, the runner, publish before remove
   src/ipc/report.h
   src/ipc/report.c        156-byte report image
-  src/win/win_entry.c     Windows only; pipe and mutex later
+  src/win/win_entry.c     resident process, mutex, pipe, exit
   src/win/clock_win.h
   src/win/clock_win.c     high-res wait
   src/win/hook_win.h
@@ -238,6 +246,8 @@ engine-native/
   tests/output_test.c     portable report, diff, and line plan
   tests/output_win_test.c Windows SendInput fill
   tests/runner_test.c     fake clock, the basic steps, run, goto, holdLoop, swapLoop, burst, ifShort, onceHeld, edgeHold, scanWait, and the pressHold expansion
+  tests/process_test.c    args, boot order, exit order, quit frame
+  tests/process_win_test.c mutex, a second instance, quit, key release
 ```
 
 `engine/` stays the AHK engine until #54.
@@ -248,7 +258,7 @@ engine-native/
 
 C17, CMake, x64, one executable, `macroui-engine`. MSVC uses the static CRT and `/experimental:c11atomics`, because that is what turns on `stdatomic.h`. Windows CI is MSVC on `windows-latest`. Linux CI is the image C compiler and builds `src/main.c`, `src/core`, and `src/ipc`. It does not build `src/win`. clang-cl is not required.
 
-The program prints `macroui-engine 0` and exits 0. That string is the version until a later issue replaces this entry with the resident process.
+Linux prints `macroui-engine 0` and exits 0. Windows does that for `--self-test` only. With no arguments it is the resident process above. The version string stays `macroui-engine 0`.
 
 ## Later issues
 
@@ -260,7 +270,7 @@ The program prints `macroui-engine 0` and exits 0. That string is the version un
 | #45 | Output. `src/ipc/report.c`, `src/core/output.c`, `src/win/output_win.c`, and `shell/ReportBoard.cs`. |
 | #46 | Block compiler and runner. `src/core/runner.c` runs the basic steps, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, `onceHeld`, `edgeHold`, and `scanWait`. Mute is on that runner. `pressHold` expands and is not a step. |
 | #47 | Profile loading, live config, and validation. |
-| #48 | Process lifecycle, single instance, and exit. |
+| #48 | Process lifecycle is the Windows entry in `src/win/win_entry.c`. Single instance is `Local\MacroUI.Engine`. Exit releases keys, then unhooks, then closes the timer, the pipe, and the mutex. The shell adopting the native pid is #50. |
 | #49 | Fake-clock harness is `tests/runner_test.c`. Windows CI runs the AHK `--self-test`. The trace corpus is still open. |
 | #54 | Native becomes the default, then AHK leaves. |
 
