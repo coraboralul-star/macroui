@@ -143,13 +143,13 @@ static void release_keys(void)
     engine_win_release_output(&g.output);
 }
 
-static int write_frame(HANDLE pipe, const unsigned char *bytes, int length)
+static int write_frame_tries(HANDLE pipe, const unsigned char *bytes, int length, int tries)
 {
-    int tries;
+    int i;
 
-    if (!pipe || !bytes || length <= 0)
+    if (!pipe || !bytes || length <= 0 || tries < 1)
         return 1;
-    for (tries = 0; tries < 4; tries++) {
+    for (i = 0; i < tries; i++) {
         DWORD wrote = 0;
 
         if (WriteFile(pipe, bytes, (DWORD)length, &wrote, NULL))
@@ -159,6 +159,62 @@ static int write_frame(HANDLE pipe, const unsigned char *bytes, int length)
         Sleep(1);
     }
     return 1;
+}
+
+static int write_frame(HANDLE pipe, const unsigned char *bytes, int length)
+{
+    return write_frame_tries(pipe, bytes, length, 4);
+}
+
+static int put_str(unsigned char *buf, int cap, int *at, const char *text)
+{
+    size_t n = text ? strlen(text) : 0;
+
+    if (n > 4096)
+        n = 4096;
+    if (!at || *at < 0 || *at + 2 + (int)n > cap)
+        return 1;
+    buf[*at] = (unsigned char)(n & 0xffu);
+    buf[*at + 1] = (unsigned char)((n >> 8) & 0xffu);
+    if (n)
+        memcpy(buf + *at + 2, text, n);
+    *at += 2 + (int)n;
+    return 0;
+}
+
+/* Hello, then one state. A failed state write is not a dropped client.
+   Running, held, and windows stay empty until playback publishes them. */
+static int greet_client(void)
+{
+    struct engine_state_snapshot snap;
+    unsigned char hello[13] = {
+        0x4D, 0x55, 0x49, 0x31, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00
+    };
+    unsigned char state[512];
+    unsigned int payload;
+    int at;
+
+    engine_state_read(&g.state_slot, &snap);
+    hello[12] = snap.armed ? 1 : 0;
+    if (write_frame(g.pipe, hello, (int)sizeof hello) != 0)
+        return 1;
+
+    memset(state, 0, sizeof state);
+    memcpy(state, hello, 12);
+    state[6] = 2;
+    state[7] = 0;
+    state[12] = snap.armed ? 1 : 0;
+    at = 20;
+    if (put_str(state, (int)sizeof state, &at, snap.active_id) != 0 ||
+        put_str(state, (int)sizeof state, &at, snap.front) != 0)
+        return 0;
+    payload = (unsigned int)(at - 12);
+    state[8] = (unsigned char)(payload & 0xffu);
+    state[9] = (unsigned char)((payload >> 8) & 0xffu);
+    state[10] = (unsigned char)((payload >> 16) & 0xffu);
+    state[11] = (unsigned char)((payload >> 24) & 0xffu);
+    write_frame_tries(g.pipe, state, at, 1);
+    return 0;
 }
 
 static void drop_client(void)
@@ -209,9 +265,13 @@ static void poll_pipe(void)
         BOOL connected = ConnectNamedPipe(g.pipe, NULL);
 
         err = GetLastError();
-        if (connected || err == ERROR_PIPE_CONNECTED)
+        if (connected || err == ERROR_PIPE_CONNECTED) {
             g.client = 1;
-        else
+            if (greet_client() != 0) {
+                drop_client();
+                return;
+            }
+        } else
             return;
     }
     ok = ReadFile(g.pipe, g.pipe_buf, ENGINE_PIPE_BYTES, &read, NULL);
@@ -409,7 +469,7 @@ static void adopt_profile(void)
     read_front_name(g.front, sizeof g.front);
     engine_profile_pick(image, g.front, g.prefer, &live);
     snprintf(g.prefer, sizeof g.prefer, "%s", live.prefer);
-    /* hello and state frames stay unwritten. The snapshot still carries activeId. */
+    /* Connect writes hello and one state. Later publishes do not write a frame. */
     engine_state_publish(&g.state_slot, 0, live.active_id, g.front);
 }
 

@@ -6,9 +6,18 @@ export type LiveOutput = { mode: InputMode; requested: InputMode };
 export type BoardPort = { port: string; chip: string; name: string };
 export type WindowRow = { exe: string; title: string };
 
-export function parseLink(message: HostMessage): { shell: boolean; pipe: boolean } | null {
+export type EngineKind = "ahk" | "native";
+
+export function parseEngineKind(value: unknown): EngineKind | "" {
+  return value === "native" ? "native" : value === "ahk" ? "ahk" : "";
+}
+
+export function parseLink(message: HostMessage): { shell: boolean; pipe: boolean; engine: EngineKind | ""; choice: EngineKind } | null {
   if (message.type !== "link") return null;
-  return { shell: Boolean(message.shell), pipe: Boolean(message.pipe) };
+  const pipe = Boolean(message.pipe);
+  const engine = pipe ? parseEngineKind(message.engine) : "";
+  const choice = parseEngineKind(message.choice) || "ahk";
+  return { shell: Boolean(message.shell), pipe, engine, choice };
 }
 
 export function parseEngineState(message: HostMessage): EngineState | null {

@@ -54,6 +54,8 @@ jobs:
         run: dotnet build launcher/Vendetta.csproj
       - name: Report lines
         run: dotnet run --project shell/report-board-test/ReportBoardTest.csproj -c Release
+      - name: Engine link
+        run: dotnet run --project shell/engine-link-test/EngineLinkTest.csproj -c Release
 
   engine-linux:
     name: Native engine core

@@ -1,3 +1,4 @@
+import type { EngineKind } from "../hostMessages";
 import { INPUT_MODES, type InputMode } from "../profile";
 
 export type CloseMode = "tray" | "quit";
@@ -26,6 +27,9 @@ export function SettingsPage({
   connected,
   closeMode,
   onCloseMode,
+  engineChoice,
+  onEngine,
+  engineWire,
 }: {
   pane: SettingPane;
   onPane: (pane: SettingPane) => void;
@@ -35,6 +39,9 @@ export function SettingsPage({
   connected: boolean;
   closeMode: CloseMode;
   onCloseMode: (mode: CloseMode) => void;
+  engineChoice: EngineKind;
+  onEngine: (kind: EngineKind) => void;
+  engineWire: EngineKind | "";
 }) {
   return (
     <div className="settings">
@@ -85,6 +92,40 @@ export function SettingsPage({
                     <span className="settings-row-note">The window closes and macros stop.</span>
                   </button>
                 </div>
+              </div>
+              <div className="settings-block">
+                <div className="settings-row is-static">
+                  <span>
+                    <span className="settings-row-name">Engine</span>
+                    <span className="settings-row-note">AutoHotkey is the default. Native is the new engine. Only one runs at a time.</span>
+                  </span>
+                </div>
+                <div className="settings-choices is-pair" role="radiogroup" aria-label="Engine">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={engineChoice === "ahk"}
+                    className={`settings-choice${engineChoice === "ahk" ? " is-on" : ""}`}
+                    onClick={() => onEngine("ahk")}
+                  >
+                    <span className="settings-row-name">AutoHotkey</span>
+                    <span className="settings-row-note">The current engine.</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={engineChoice === "native"}
+                    className={`settings-choice${engineChoice === "native" ? " is-on" : ""}`}
+                    onClick={() => onEngine("native")}
+                  >
+                    <span className="settings-row-name">Native</span>
+                    <span className="settings-row-note">Switching releases keys, then starts this engine.</span>
+                  </button>
+                </div>
+                <p className={`settings-status${engineWire ? " is-on" : ""}`}>
+                  <i aria-hidden="true" />
+                  {engineWire === "native" ? "Running on Native" : engineWire === "ahk" ? "Running on AutoHotkey" : "Not running"}
+                </p>
               </div>
               <div className="settings-block">
                 <div className="settings-row is-static">
