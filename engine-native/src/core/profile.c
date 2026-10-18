@@ -1521,6 +1521,32 @@ const char *engine_profile_slot_detail(const struct engine_profile_slot *slot)
     return slot->detail;
 }
 
+int engine_profile_slot_apply_document(struct engine_profile_slot *slot, const char *text,
+                                       size_t length)
+{
+    struct json_value root;
+    struct engine_profile_image *image = NULL;
+
+    if (!slot)
+        return 0;
+    if (!text) {
+        text = "";
+        length = 0;
+    }
+    if (json_parse(text, length, &root) != 0 || root.kind != JSON_OBJECT) {
+        if (root.kind != JSON_NONE)
+            json_free(&root);
+        return 0;
+    }
+    json_free(&root);
+    if (engine_profile_compile(text, length, &image) != 0 || !image)
+        return 0;
+    slot->failed = 0;
+    slot->detail[0] = '\0';
+    engine_profile_slot_publish(slot, image);
+    return 1;
+}
+
 void engine_state_slot_init(struct engine_state_slot *slot)
 {
     if (!slot)
@@ -1545,6 +1571,31 @@ void engine_state_publish(struct engine_state_slot *slot, int armed, const char 
     dst->armed = armed ? 1 : 0;
     copy_cap(dst->active_id, sizeof dst->active_id, active_id);
     copy_cap(dst->front, sizeof dst->front, front);
+    atomic_store_explicit(&slot->published, next, memory_order_release);
+}
+
+void engine_state_publish_snapshot(struct engine_state_slot *slot,
+                                   const struct engine_state_snapshot *snap)
+{
+    int cur;
+    int next;
+    struct engine_state_snapshot *dst;
+
+    if (!slot || !snap)
+        return;
+    cur = atomic_load_explicit(&slot->published, memory_order_acquire);
+    next = cur == 0 ? 1 : 0;
+    dst = &slot->copy[next];
+    *dst = *snap;
+    if (dst->running_count < 0)
+        dst->running_count = 0;
+    if (dst->running_count > ENGINE_STATE_RUNNING_CAP)
+        dst->running_count = ENGINE_STATE_RUNNING_CAP;
+    if (dst->held_count < 0)
+        dst->held_count = 0;
+    if (dst->held_count > ENGINE_STATE_HELD_CAP)
+        dst->held_count = ENGINE_STATE_HELD_CAP;
+    dst->armed = dst->armed ? 1 : 0;
     atomic_store_explicit(&slot->published, next, memory_order_release);
 }
 

@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "clock_win.h"
+#include "command.h"
 #include "hook_win.h"
 #include "output_win.h"
 #include "process.h"
@@ -35,6 +36,26 @@
 #define ENGINE_PIPE_TIMEOUT_MS 50u
 #define ENGINE_JOIN_MS 5000
 #define ENGINE_ARG_CAP 64
+#define ENGINE_WINDOW_MS 500
+
+#ifndef GA_ROOTOWNER
+#define GA_ROOTOWNER 3
+#endif
+
+struct engine_focus {
+    char name[ENGINE_PROFILE_FOCUS_CAP];
+    char owner[ENGINE_PROFILE_FOCUS_CAP];
+    int32_t mouse_x;
+    int32_t mouse_y;
+    int have_mouse;
+    int have_window;
+    int32_t win_x;
+    int32_t win_y;
+    int have_client;
+    int32_t client_x;
+    int32_t client_y;
+    uint32_t dpi;
+};
 
 static const wchar_t k_session_class[] = L"MacroUIEngineSession";
 
@@ -64,20 +85,48 @@ struct engine_resident {
     int client;
     struct engine_profile_slot profiles;
     struct engine_state_slot state_slot;
-    char front[ENGINE_PROFILE_FOCUS_CAP];
-    char front_pub[ENGINE_PROFILE_FOCUS_CAP];
+    struct engine_focus focus_pub;
     atomic_uint front_seq;
     char prefer[ENGINE_ID_CAP];
     uint64_t prefer_seq;
+    struct engine_play *play;
+    struct engine_cmd_ring cmds;
+    struct engine_trigger_mem triggers;
+    struct engine_fingers fingers;
+    struct engine_report_slot reports;
+    uint32_t report_seen;
+    struct engine_state_window windows[ENGINE_STATE_WINDOW_CAP];
+    int window_count;
+    struct engine_state_snapshot sent_state;
+    struct engine_state_window sent_windows[ENGINE_STATE_WINDOW_CAP];
+    int sent_window_count;
+    int sent_ready;
+    DWORD windows_at;
+    uint64_t profile_seq;
+    int armed;
+    HANDLE play_wake;
 };
 
+static unsigned char g_state_buf[65536];
+
 static struct engine_resident g;
+
+static void drop_client(void);
+static int load_resident_profile(void);
 
 static void request_quit(void)
 {
     atomic_store_explicit(&g.quit, 1, memory_order_release);
     if (g.ipc_wake)
         SetEvent(g.ipc_wake);
+    if (g.play_wake)
+        SetEvent(g.play_wake);
+}
+
+static void wake_playback(void)
+{
+    if (g.play_wake)
+        SetEvent(g.play_wake);
 }
 
 static HANDLE take_handle(HANDLE *slot)
@@ -138,9 +187,22 @@ int engine_win_release_output(struct engine_output *out)
 
 static void release_keys(void)
 {
+    struct engine_output *out;
+    int guard;
+
     if (atomic_exchange_explicit(&g.keys_done, 1, memory_order_acq_rel) != 0)
         return;
-    engine_win_release_output(&g.output);
+    out = g.play ? &g.play->output : &g.output;
+    if (out->mode == ENGINE_OUTPUT_SOFTWARE) {
+        engine_win_release_output(out);
+        return;
+    }
+    for (guard = 0; guard < 4 && out->applied_count > 0; guard++) {
+        struct engine_report report;
+
+        if (engine_output_release(out, &report))
+            engine_report_slot_publish(&g.reports, &report);
+    }
 }
 
 static int write_frame_tries(HANDLE pipe, const unsigned char *bytes, int length, int tries)
@@ -166,54 +228,68 @@ static int write_frame(HANDLE pipe, const unsigned char *bytes, int length)
     return write_frame_tries(pipe, bytes, length, 4);
 }
 
-static int put_str(unsigned char *buf, int cap, int *at, const char *text)
+static int write_state_frame(int tries)
 {
-    size_t n = text ? strlen(text) : 0;
+    struct engine_state_snapshot snap;
+    int n;
 
-    if (n > 4096)
-        n = 4096;
-    if (!at || *at < 0 || *at + 2 + (int)n > cap)
+    engine_state_read(&g.state_slot, &snap);
+    n = engine_state_frame(&snap, g.windows, g.window_count, g_state_buf, (int)sizeof g_state_buf);
+    if (n < 0)
         return 1;
-    buf[*at] = (unsigned char)(n & 0xffu);
-    buf[*at + 1] = (unsigned char)((n >> 8) & 0xffu);
-    if (n)
-        memcpy(buf + *at + 2, text, n);
-    *at += 2 + (int)n;
+    if (write_frame_tries(g.pipe, g_state_buf, n, tries) != 0)
+        return 1;
+    g.sent_state = snap;
+    g.sent_window_count = g.window_count;
+    if (g.window_count > 0)
+        memcpy(g.sent_windows, g.windows, (size_t)g.window_count * sizeof g.windows[0]);
+    g.sent_ready = 1;
     return 0;
 }
 
-/* Hello, then one state. A failed state write is not a dropped client.
-   Running, held, and windows stay empty until playback publishes them. */
+static void maybe_write_state(void)
+{
+    struct engine_state_snapshot snap;
+
+    if (!g.client || !g.pipe)
+        return;
+    engine_state_read(&g.state_slot, &snap);
+    if (g.sent_ready && g.sent_window_count == g.window_count &&
+        memcmp(&g.sent_state, &snap, sizeof snap) == 0 &&
+        (g.window_count <= 0 ||
+         memcmp(g.sent_windows, g.windows, (size_t)g.window_count * sizeof g.windows[0]) == 0))
+        return;
+    write_state_frame(1);
+}
+
+static void flush_report(void)
+{
+    struct engine_report report;
+    unsigned char buf[12 + ENGINE_REPORT_BYTES];
+    int n;
+
+    if (!g.client || !g.pipe)
+        return;
+    if (!engine_report_slot_take(&g.reports, &g.report_seen, &report))
+        return;
+    n = engine_report_frame(&report, buf, (int)sizeof buf);
+    if (n > 0 && write_frame(g.pipe, buf, n) != 0)
+        drop_client();
+}
+
+/* Hello, then one state. A failed state write is not a dropped client. */
 static int greet_client(void)
 {
     struct engine_state_snapshot snap;
     unsigned char hello[13] = {
         0x4D, 0x55, 0x49, 0x31, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00
     };
-    unsigned char state[512];
-    unsigned int payload;
-    int at;
 
     engine_state_read(&g.state_slot, &snap);
     hello[12] = snap.armed ? 1 : 0;
     if (write_frame(g.pipe, hello, (int)sizeof hello) != 0)
         return 1;
-
-    memset(state, 0, sizeof state);
-    memcpy(state, hello, 12);
-    state[6] = 2;
-    state[7] = 0;
-    state[12] = snap.armed ? 1 : 0;
-    at = 20;
-    if (put_str(state, (int)sizeof state, &at, snap.active_id) != 0 ||
-        put_str(state, (int)sizeof state, &at, snap.front) != 0)
-        return 0;
-    payload = (unsigned int)(at - 12);
-    state[8] = (unsigned char)(payload & 0xffu);
-    state[9] = (unsigned char)((payload >> 8) & 0xffu);
-    state[10] = (unsigned char)((payload >> 16) & 0xffu);
-    state[11] = (unsigned char)((payload >> 24) & 0xffu);
-    write_frame_tries(g.pipe, state, at, 1);
+    write_state_frame(1);
     return 0;
 }
 
@@ -228,29 +304,70 @@ static void drop_client(void)
 
 static void on_pipe_message(const unsigned char *msg, int length)
 {
-    int kind = engine_pipe_kind(msg, length);
+    struct engine_pipe_frame frame;
     int ack_len = 0;
     const unsigned char *ack = NULL;
+    int wake = 0;
 
-    if (kind == ENGINE_PIPE_QUIT)
+    engine_frame_read(msg, length, &frame);
+    if (frame.kind == ENGINE_FRAME_QUIT)
         ack = engine_ack_command(&ack_len);
-    else if (kind == ENGINE_PIPE_JSON)
+    else if (frame.kind == ENGINE_FRAME_JSON || frame.kind == ENGINE_FRAME_BAD)
         ack = engine_ack_bad_frame(&ack_len);
-    else if (kind == ENGINE_PIPE_BAD_VERSION)
+    else if (frame.kind == ENGINE_FRAME_BAD_VERSION)
         ack = engine_ack_bad_version(&ack_len);
-    else
+    else if (frame.kind == ENGINE_FRAME_START || frame.kind == ENGINE_FRAME_STOP ||
+             frame.kind == ENGINE_FRAME_RELOAD || frame.kind == ENGINE_FRAME_COMMAND) {
+        if (frame.kind == ENGINE_FRAME_START)
+            engine_cmd_push(&g.cmds, ENGINE_CMD_START, 0);
+        else if (frame.kind == ENGINE_FRAME_STOP)
+            engine_cmd_push(&g.cmds, ENGINE_CMD_STOP, 0);
+        else if (frame.kind == ENGINE_FRAME_RELOAD) {
+            if (load_resident_profile() != 0) {
+                const unsigned char *err;
+                int err_len = 0;
+
+                err = engine_error_profile_read(&err_len);
+                if (write_frame(g.pipe, err, err_len) != 0) {
+                    drop_client();
+                    return;
+                }
+            }
+            engine_cmd_push(&g.cmds, ENGINE_CMD_RELOAD, 0);
+        }
+        ack = engine_ack_command(&ack_len);
+        wake = 1;
+    } else if (frame.kind == ENGINE_FRAME_OUTPUT) {
+        engine_cmd_push(&g.cmds, ENGINE_CMD_OUTPUT, frame.output_mode);
+        wake = 1;
+    } else if (frame.kind == ENGINE_FRAME_PROFILE) {
+        const char *text = frame.profile_len ? (const char *)frame.profile : "";
+
+        engine_profile_slot_apply_document(&g.profiles, text, frame.profile_len);
+        ack = engine_ack_profile(&ack_len);
+        wake = 1;
+    } else
         return;
-    if (write_frame(g.pipe, ack, ack_len) != 0 && kind == ENGINE_PIPE_QUIT) {
-        atomic_store_explicit(&g.fail, 1, memory_order_release);
-        request_quit();
+    if (ack && write_frame(g.pipe, ack, ack_len) != 0) {
+        if (frame.kind == ENGINE_FRAME_QUIT) {
+            atomic_store_explicit(&g.fail, 1, memory_order_release);
+            request_quit();
+            return;
+        }
+        drop_client();
+        if (wake)
+            wake_playback();
         return;
     }
-    if (kind == ENGINE_PIPE_BAD_VERSION)
+    if (frame.kind == ENGINE_FRAME_BAD_VERSION)
         drop_client();
-    if (kind == ENGINE_PIPE_QUIT) {
+    if (frame.kind == ENGINE_FRAME_QUIT) {
         /* The ack is already written. The flag is next, then playback wakes. */
         request_quit();
+        return;
     }
+    if (wake)
+        wake_playback();
 }
 
 static void poll_pipe(void)
@@ -328,34 +445,37 @@ static int open_session_window(void)
     return 0;
 }
 
-static void publish_front_name(const char *name)
+static void publish_focus(const struct engine_focus *focus)
 {
     unsigned seq = atomic_load_explicit(&g.front_seq, memory_order_relaxed);
 
     atomic_store_explicit(&g.front_seq, seq + 1u, memory_order_relaxed);
     atomic_thread_fence(memory_order_release);
-    snprintf(g.front_pub, sizeof g.front_pub, "%s", name ? name : "");
+    if (focus)
+        g.focus_pub = *focus;
+    else
+        memset(&g.focus_pub, 0, sizeof g.focus_pub);
     atomic_store_explicit(&g.front_seq, seq + 2u, memory_order_release);
 }
 
-static void read_front_name(char *dst, size_t cap)
+static void read_focus(struct engine_focus *dst)
 {
     int tries;
 
-    if (!dst || cap == 0)
+    if (!dst)
         return;
+    memset(dst, 0, sizeof *dst);
     for (tries = 0; tries < 8; tries++) {
         unsigned seq = atomic_load_explicit(&g.front_seq, memory_order_acquire);
-        char tmp[ENGINE_PROFILE_FOCUS_CAP];
+        struct engine_focus tmp;
 
         if (seq & 1u)
             continue;
-        memcpy(tmp, g.front_pub, sizeof tmp);
-        tmp[sizeof tmp - 1u] = '\0';
+        tmp = g.focus_pub;
         atomic_thread_fence(memory_order_acquire);
         if (atomic_load_explicit(&g.front_seq, memory_order_relaxed) != seq)
             continue;
-        snprintf(dst, cap, "%s", tmp);
+        *dst = tmp;
         return;
     }
 }
@@ -375,30 +495,167 @@ static void copy_image_base(const wchar_t *path, char *dst, size_t cap)
         dst[0] = '\0';
 }
 
-/* Foreground image name for PickLive. This stays on the IPC thread. */
-static void refresh_front(void)
+static void image_name(HWND hwnd, char *dst, size_t cap)
 {
-    HWND hwnd;
     DWORD pid = 0;
     HANDLE proc;
     wchar_t wide[1024];
     DWORD n = (DWORD)(sizeof wide / sizeof wide[0]);
-    char name[ENGINE_PROFILE_FOCUS_CAP];
 
-    name[0] = '\0';
-    hwnd = GetForegroundWindow();
-    if (hwnd && GetWindowThreadProcessId(hwnd, &pid) && pid) {
-        proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-        if (proc) {
-            if (QueryFullProcessImageNameW(proc, 0, wide, &n))
-                copy_image_base(wide, name, sizeof name);
-            CloseHandle(proc);
-        }
-    }
-    publish_front_name(name);
+    if (!dst || cap == 0)
+        return;
+    dst[0] = '\0';
+    if (!hwnd || !GetWindowThreadProcessId(hwnd, &pid) || !pid)
+        return;
+    proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!proc)
+        return;
+    if (QueryFullProcessImageNameW(proc, 0, wide, &n))
+        copy_image_base(wide, dst, cap);
+    CloseHandle(proc);
 }
 
-static void load_resident_profile(void)
+static void wide_to_utf8(const wchar_t *wide, char *dst, size_t cap)
+{
+    int n;
+
+    if (!dst || cap == 0)
+        return;
+    dst[0] = '\0';
+    if (!wide || !wide[0])
+        return;
+    n = WideCharToMultiByte(CP_UTF8, 0, wide, -1, dst, (int)cap, NULL, NULL);
+    if (n <= 0)
+        dst[0] = '\0';
+}
+
+/* Foreground image, owner, dpi, and rects for PickLive and goto.
+   This stays on the IPC thread. */
+static void refresh_front(void)
+{
+    struct engine_focus focus;
+    HWND hwnd;
+    HWND root;
+    POINT cursor;
+    POINT origin;
+    RECT rect;
+    UINT dpi;
+
+    memset(&focus, 0, sizeof focus);
+    focus.dpi = 96;
+    hwnd = GetForegroundWindow();
+    if (hwnd) {
+        image_name(hwnd, focus.name, sizeof focus.name);
+        root = GetAncestor(hwnd, GA_ROOTOWNER);
+        if (!root)
+            root = hwnd;
+        image_name(root, focus.owner, sizeof focus.owner);
+        dpi = GetDpiForWindow(hwnd);
+        if (dpi)
+            focus.dpi = dpi;
+        if (GetWindowRect(hwnd, &rect)) {
+            focus.have_window = 1;
+            focus.win_x = rect.left;
+            focus.win_y = rect.top;
+        }
+        origin.x = 0;
+        origin.y = 0;
+        if (ClientToScreen(hwnd, &origin)) {
+            focus.have_client = 1;
+            focus.client_x = origin.x;
+            focus.client_y = origin.y;
+        }
+    }
+    if (GetCursorPos(&cursor)) {
+        focus.have_mouse = 1;
+        focus.mouse_x = cursor.x;
+        focus.mouse_y = cursor.y;
+    }
+    publish_focus(&focus);
+}
+
+struct window_collect {
+    char front[ENGINE_PROFILE_FOCUS_CAP];
+    char front_title[ENGINE_STATE_TITLE_CAP];
+    int saw_front;
+};
+
+static int same_exe(const char *a, const char *b)
+{
+    int i;
+
+    if (!a || !b)
+        return 0;
+    for (i = 0; a[i] && b[i]; i++) {
+        char ca = a[i];
+        char cb = b[i];
+
+        if (ca >= 'A' && ca <= 'Z')
+            ca = (char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z')
+            cb = (char)(cb - 'A' + 'a');
+        if (ca != cb)
+            return 0;
+    }
+    return a[i] == b[i];
+}
+
+static BOOL CALLBACK collect_window(HWND hwnd, LPARAM param)
+{
+    struct window_collect *collect = (struct window_collect *)param;
+    wchar_t title[ENGINE_STATE_TITLE_CAP];
+    char exe[ENGINE_PROFILE_FOCUS_CAP];
+    int i;
+
+    if (!IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER))
+        return TRUE;
+    title[0] = L'\0';
+    if (GetWindowTextW(hwnd, title, ENGINE_STATE_TITLE_CAP) <= 0 || !title[0])
+        return TRUE;
+    image_name(hwnd, exe, sizeof exe);
+    if (!exe[0])
+        return TRUE;
+    for (i = 0; i < g.window_count; i++) {
+        if (same_exe(g.windows[i].exe, exe))
+            return TRUE;
+    }
+    if (g.window_count >= ENGINE_STATE_WINDOW_CAP)
+        return TRUE;
+    snprintf(g.windows[g.window_count].exe, sizeof g.windows[0].exe, "%s", exe);
+    wide_to_utf8(title, g.windows[g.window_count].title, sizeof g.windows[0].title);
+    if (collect && same_exe(exe, collect->front))
+        collect->saw_front = 1;
+    g.window_count++;
+    return TRUE;
+}
+
+static void refresh_windows(void)
+{
+    struct window_collect collect;
+    struct engine_focus focus;
+    wchar_t title[ENGINE_STATE_TITLE_CAP];
+    HWND hwnd;
+
+    read_focus(&focus);
+    memset(&collect, 0, sizeof collect);
+    snprintf(collect.front, sizeof collect.front, "%s", focus.name);
+    g.window_count = 0;
+    EnumWindows(collect_window, (LPARAM)&collect);
+    if (!focus.name[0] || collect.saw_front)
+        return;
+    hwnd = GetForegroundWindow();
+    title[0] = L'\0';
+    if (hwnd)
+        GetWindowTextW(hwnd, title, ENGINE_STATE_TITLE_CAP);
+    wide_to_utf8(title, collect.front_title, sizeof collect.front_title);
+    if (g.window_count >= ENGINE_STATE_WINDOW_CAP)
+        g.window_count = ENGINE_STATE_WINDOW_CAP - 1;
+    snprintf(g.windows[g.window_count].exe, sizeof g.windows[0].exe, "%s", focus.name);
+    snprintf(g.windows[g.window_count].title, sizeof g.windows[0].title, "%s", collect.front_title);
+    g.window_count++;
+}
+
+static int load_resident_profile(void)
 {
     wchar_t wide[ENGINE_PROFILE_CAP];
     HANDLE file;
@@ -406,71 +663,274 @@ static void load_resident_profile(void)
     char *buf;
     DWORD got = 0;
     int chars;
+    int rc;
 
     /* No --profile is the empty document. There is no relative default. */
-    if (!g.args.profile[0]) {
-        engine_profile_slot_load_missing(&g.profiles);
-        return;
-    }
+    if (!g.args.profile[0])
+        return engine_profile_slot_load_missing(&g.profiles);
     chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, g.args.profile, -1, wide,
                                 ENGINE_PROFILE_CAP);
-    if (chars <= 0) {
-        engine_profile_slot_fail(&g.profiles);
-        return;
-    }
+    if (chars <= 0)
+        return engine_profile_slot_fail(&g.profiles);
     file = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
 
         if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
-            engine_profile_slot_load_missing(&g.profiles);
-        else
-            engine_profile_slot_fail(&g.profiles);
-        return;
+            return engine_profile_slot_load_missing(&g.profiles);
+        return engine_profile_slot_fail(&g.profiles);
     }
     if (!GetFileSizeEx(file, &size) || size.QuadPart < 0 ||
         (unsigned long long)size.QuadPart > ENGINE_PROFILE_TEXT_MAX) {
         CloseHandle(file);
-        engine_profile_slot_fail(&g.profiles);
-        return;
+        return engine_profile_slot_fail(&g.profiles);
     }
     buf = (char *)malloc((size_t)size.QuadPart + 1u);
     if (!buf) {
         CloseHandle(file);
-        engine_profile_slot_fail(&g.profiles);
-        return;
+        return engine_profile_slot_fail(&g.profiles);
     }
     if (size.QuadPart > 0 &&
         (!ReadFile(file, buf, (DWORD)size.QuadPart, &got, NULL) || got != (DWORD)size.QuadPart)) {
         CloseHandle(file);
         free(buf);
-        engine_profile_slot_fail(&g.profiles);
-        return;
+        return engine_profile_slot_fail(&g.profiles);
     }
     CloseHandle(file);
     buf[got] = '\0';
-    engine_profile_slot_load_text(&g.profiles, buf, got);
+    rc = engine_profile_slot_load_text(&g.profiles, buf, got);
     free(buf);
+    return rc;
 }
 
-static void adopt_profile(void)
+static void send_play_report(const struct engine_report *report, int mode)
+{
+    if (!g.play || !report || !engine_report_active(report))
+        return;
+    if (mode == ENGINE_OUTPUT_SOFTWARE)
+        engine_win_send_report(report, g.play->output.swap_clicks);
+    else {
+        engine_report_slot_publish(&g.reports, report);
+        if (g.ipc_wake)
+            SetEvent(g.ipc_wake);
+    }
+}
+
+static void apply_commands(void)
+{
+    struct engine_cmd_item item;
+
+    if (!g.play)
+        return;
+    if (engine_cmd_take_overflow(&g.cmds)) {
+        g.armed = 0;
+        engine_play_stop_all(g.play);
+        while (engine_cmd_pop(&g.cmds, &item))
+            ;
+        return;
+    }
+    while (engine_cmd_pop(&g.cmds, &item)) {
+        if (item.kind == ENGINE_CMD_START) {
+            g.armed = 1;
+            engine_trigger_reseed(&g.triggers);
+        } else if (item.kind == ENGINE_CMD_STOP) {
+            g.armed = 0;
+            engine_play_stop_all(g.play);
+        } else if (item.kind == ENGINE_CMD_RELOAD) {
+            engine_trigger_reseed(&g.triggers);
+            engine_hook_set_suspect(&g.hooks);
+        } else if (item.kind == ENGINE_CMD_OUTPUT) {
+            struct engine_report release;
+            int rebind = 0;
+            int sent = ENGINE_OUTPUT_SOFTWARE;
+
+            if (engine_output_set_mode(&g.play->output, item.mode, &release, &rebind, &sent))
+                send_play_report(&release, sent);
+        }
+    }
+}
+
+static void drain_fingers(void)
+{
+    struct engine_finger ev;
+    int pause;
+
+    if (!g.play)
+        return;
+    pause = engine_fingers_down(&g.fingers, ENGINE_KEY_PAUSE);
+    while (engine_event_pop(&g.hooks, &ev)) {
+        if (ev.id == ENGINE_KEY_PAUSE && engine_panic_edge(ev.id, pause, ev.down))
+            engine_play_stop_all(g.play);
+        engine_fingers_set(&g.fingers, ev.id, ev.down);
+        if (ev.id == ENGINE_KEY_PAUSE)
+            pause = ev.down ? 1 : 0;
+    }
+    if (engine_event_overflow(&g.hooks)) {
+        engine_event_clear_overflow(&g.hooks);
+        engine_play_stop_all(g.play);
+    }
+}
+
+static void watch_hooks(int64_t now)
+{
+    struct engine_hook_watch_in in;
+    struct engine_hook_watch_out watch;
+    int64_t freq = g.clock.qpc_freq > 0 ? g.clock.qpc_freq : 1000;
+
+    if (!g.play)
+        return;
+    memset(&in, 0, sizeof in);
+    in.key_installed = atomic_load_explicit(&g.hooks.key_installed, memory_order_acquire);
+    in.mouse_installed = atomic_load_explicit(&g.hooks.mouse_installed, memory_order_acquire);
+    in.need_mouse = g.armed;
+    in.armed = g.armed;
+    in.running = engine_play_alive(g.play) > 0;
+    in.pending = g.play->pending_count > 0;
+    in.suspect = atomic_load_explicit(&g.hooks.suspect, memory_order_acquire);
+    in.key_stamp = atomic_load_explicit(&g.hooks.key_stamp, memory_order_acquire);
+    in.mouse_stamp = atomic_load_explicit(&g.hooks.mouse_stamp, memory_order_acquire);
+    in.now = now;
+    in.silence = engine_ms_to_ticks(ENGINE_HOOK_SILENCE_MS, freq);
+    engine_hook_set_need_mouse(&g.hooks, g.armed);
+    engine_hook_watch(&in, &watch);
+    if (watch.clear_suspect)
+        atomic_store_explicit(&g.hooks.suspect, 0, memory_order_release);
+    engine_hook_post_ops(&g.hooks, &watch);
+}
+
+static void fill_running(struct engine_state_snapshot *snap, const struct engine_live_config *live)
+{
+    int i;
+
+    snap->running_count = 0;
+    if (!g.play)
+        return;
+    for (i = 0; i < g.play->runner_count && snap->running_count < ENGINE_STATE_RUNNING_CAP; i++) {
+        int row;
+        int m;
+        const char *name = "";
+
+        if (g.play->runners[i].done)
+            continue;
+        row = snap->running_count++;
+        snprintf(snap->running[row].id, sizeof snap->running[row].id, "%s", g.play->runners[i].id);
+        if (live && live->macros && live->extras) {
+            for (m = 0; m < live->macro_count; m++) {
+                if (strcmp(live->macros[m].id, g.play->runners[i].id) == 0) {
+                    name = live->extras[m].name;
+                    break;
+                }
+            }
+        }
+        snprintf(snap->running[row].name, sizeof snap->running[row].name, "%s", name ? name : "");
+    }
+}
+
+static void publish_play_state(const struct engine_live_config *live, const struct engine_focus *focus)
+{
+    struct engine_state_snapshot snap;
+    int n;
+    int i;
+
+    memset(&snap, 0, sizeof snap);
+    snap.armed = g.armed;
+    if (live)
+        snprintf(snap.active_id, sizeof snap.active_id, "%s", live->active_id);
+    if (focus)
+        snprintf(snap.front, sizeof snap.front, "%s", focus->name);
+    fill_running(&snap, live);
+    n = 0;
+    if (g.play) {
+        n = g.play->output.applied_count;
+        if (n > ENGINE_STATE_HELD_CAP)
+            n = ENGINE_STATE_HELD_CAP;
+        if (n < 0)
+            n = 0;
+        for (i = 0; i < n; i++)
+            snap.held[i] = g.play->output.applied[i];
+    }
+    snap.held_count = n;
+    engine_state_publish_snapshot(&g.state_slot, &snap);
+}
+
+static int64_t next_deadline(int64_t now)
+{
+    int64_t next = now;
+    int have = 0;
+    int i;
+
+    if (!g.play)
+        return now;
+    for (i = 0; i < g.play->runner_count; i++) {
+        int64_t at;
+
+        if (g.play->runners[i].done)
+            continue;
+        at = g.play->runners[i].wait_until;
+        if (at <= now)
+            continue;
+        if (!have || at < next) {
+            next = at;
+            have = 1;
+        }
+    }
+    return have ? next : now;
+}
+
+static void playback_tick(int64_t now)
 {
     const struct engine_profile_image *image;
     struct engine_live_config live;
+    struct engine_focus focus;
+    struct engine_pointer pointer;
     uint64_t seq;
 
+    if (!g.play)
+        return;
+    memset(&live, 0, sizeof live);
+    memset(&focus, 0, sizeof focus);
     image = engine_profile_slot_adopt(&g.profiles);
     seq = image ? image->sequence : 0;
     if (seq != g.prefer_seq) {
         g.prefer_seq = seq;
         snprintf(g.prefer, sizeof g.prefer, "%s", image ? image->active_id : "");
     }
-    read_front_name(g.front, sizeof g.front);
-    engine_profile_pick(image, g.front, g.prefer, &live);
+    read_focus(&focus);
+    engine_profile_pick(image, focus.name, g.prefer, &live);
     snprintf(g.prefer, sizeof g.prefer, "%s", live.prefer);
-    /* Connect writes hello and one state. Later publishes do not write a frame. */
-    engine_state_publish(&g.state_slot, 0, live.active_id, g.front);
+    engine_play_set_macros(g.play, live.macros, live.macro_count);
+    if (seq != g.profile_seq) {
+        g.profile_seq = seq;
+        engine_reap_orphans(g.play, &live);
+        engine_trigger_reseed(&g.triggers);
+        engine_hook_set_suspect(&g.hooks);
+    }
+    g.play->dpi = focus.dpi ? focus.dpi : 96;
+    memset(&pointer, 0, sizeof pointer);
+    pointer.have_mouse = focus.have_mouse;
+    pointer.mouse_x = focus.mouse_x;
+    pointer.mouse_y = focus.mouse_y;
+    pointer.have_window = focus.have_window;
+    pointer.window_x = focus.win_x;
+    pointer.window_y = focus.win_y;
+    pointer.have_client = focus.have_client;
+    pointer.client_x = focus.client_x;
+    pointer.client_y = focus.client_y;
+    engine_play_set_pointer(g.play, &pointer);
+
+    apply_commands();
+    watch_hooks(now);
+    drain_fingers();
+    engine_play_set_fingers(g.play, &g.fingers);
+    if (g.armed)
+        engine_poll_triggers(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner);
+    engine_play_tick(g.play, now);
+    send_play_report(&g.play->last, g.play->output.mode);
+    publish_play_state(&live, &focus);
+    engine_arm_swallow(&g.hooks, &live, focus.name, focus.owner, g.armed,
+                       g.play->output.mode != ENGINE_OUTPUT_SOFTWARE);
+    engine_hook_set_wake(&g.hooks, g.armed || engine_play_alive(g.play) > 0 || g.play->pending_count > 0);
 }
 
 static DWORD WINAPI ipc_thread(LPVOID param)
@@ -496,10 +956,26 @@ static DWORD WINAPI ipc_thread(LPVOID param)
     }
     atomic_store_explicit(&g.ipc_entered, 1, memory_order_release);
     while (!atomic_load_explicit(&g.quit, memory_order_acquire)) {
+        DWORD now = GetTickCount();
+
         pump_window();
         refresh_front();
+        if (g.windows_at == 0 || now - g.windows_at >= ENGINE_WINDOW_MS) {
+            refresh_windows();
+            g.windows_at = now;
+        }
         if (g.pipe)
             poll_pipe();
+        if (g.client) {
+            flush_report();
+            maybe_write_state();
+        }
+        if (atomic_load_explicit(&g.quit, memory_order_acquire))
+            break;
+        if (g.ipc_wake)
+            ResetEvent(g.ipc_wake);
+        if (atomic_load_explicit(&g.quit, memory_order_acquire))
+            break;
         if (g.ipc_wake)
             WaitForSingleObject(g.ipc_wake, 8);
     }
@@ -509,6 +985,7 @@ static DWORD WINAPI ipc_thread(LPVOID param)
     }
     if (g.release_pipe)
         WaitForSingleObject(g.release_pipe, ENGINE_JOIN_MS);
+    flush_report();
     engine_profile_slot_shutdown(&g.profiles);
     close_pipe();
     free(g.pipe_buf);
@@ -532,21 +1009,26 @@ static DWORD WINAPI playback_thread(LPVOID param)
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
     if (engine_win_clock_open(&g.clock) != 0)
         atomic_store_explicit(&g.fail, 1, memory_order_release);
+    if (g.play && g.clock.qpc_freq > 0)
+        g.play->freq = g.clock.qpc_freq;
     atomic_store_explicit(&g.play_entered, 1, memory_order_release);
     memset(&slice, 0, sizeof slice);
     while (!atomic_load_explicit(&g.quit, memory_order_acquire)) {
         int reason = 0;
+        int64_t now;
 
-        if (!g.clock.timer) {
+        if (!g.clock.timer || !g.play) {
             atomic_store_explicit(&g.fail, 1, memory_order_release);
             request_quit();
             break;
         }
-        /* Adopt first, then read the foreground name the IPC thread published.
-           This tick does not allocate, does not query a window, and does not
-           advance a runner. The 16 ms slice also waits on the IPC wake. */
-        adopt_profile();
-        if (engine_win_clock_slice(&g.clock, &slice, g.hook.wake, g.ipc_wake, &reason) != 0) {
+        now = engine_win_clock_now(&g.clock);
+        playback_tick(now);
+        slice.armed = g.armed;
+        slice.running = engine_play_alive(g.play) > 0;
+        slice.pending = g.play->pending_count > 0;
+        slice.next_deadline = next_deadline(now);
+        if (engine_win_clock_slice(&g.clock, &slice, g.hook.wake, g.play_wake, &reason) != 0) {
             atomic_store_explicit(&g.fail, 1, memory_order_release);
             request_quit();
             break;
@@ -643,6 +1125,12 @@ static int finish_resident(void)
     }
     close_pipe();
     close_mutex();
+    free(g.play);
+    g.play = NULL;
+    if (g.play_wake) {
+        CloseHandle(g.play_wake);
+        g.play_wake = NULL;
+    }
     if (g.exited)
         SetEvent(g.exited);
     return atomic_load_explicit(&g.fail, memory_order_acquire) ? ENGINE_EXIT_FAIL : ENGINE_EXIT_OK;
@@ -669,20 +1157,36 @@ static int run_resident(const struct engine_args *args)
     engine_state_slot_init(&g.state_slot);
     engine_hook_init(&g.hooks);
     engine_output_init(&g.output);
+    engine_cmd_ring_init(&g.cmds);
+    engine_trigger_init(&g.triggers);
+    engine_fingers_clear(&g.fingers);
+    engine_report_slot_init(&g.reports);
+    g.play = (struct engine_play *)calloc(1, sizeof *g.play);
+    if (!g.play) {
+        atomic_store_explicit(&g.fail, 1, memory_order_release);
+        return ENGINE_EXIT_FAIL;
+    }
+    engine_play_init(g.play);
 
     mutex = CreateMutexW(NULL, TRUE, L"Local\\MacroUI.Engine");
-    if (!mutex)
+    if (!mutex) {
+        free(g.play);
+        g.play = NULL;
         return ENGINE_EXIT_FAIL;
+    }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         CloseHandle(mutex);
+        free(g.play);
+        g.play = NULL;
         return ENGINE_EXIT_BUSY;
     }
     g.mutex = mutex;
 
     g.ipc_wake = CreateEventW(NULL, TRUE, FALSE, NULL);
+    g.play_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
     g.release_pipe = CreateEventW(NULL, TRUE, FALSE, NULL);
     g.exited = CreateEventW(NULL, TRUE, FALSE, NULL);
-    if (!g.ipc_wake || !g.release_pipe || !g.exited ||
+    if (!g.ipc_wake || !g.play_wake || !g.release_pipe || !g.exited ||
         engine_win_hook_open(&g.hook, &g.hooks) != 0) {
         atomic_store_explicit(&g.fail, 1, memory_order_release);
         return finish_resident();

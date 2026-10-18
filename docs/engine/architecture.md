@@ -189,7 +189,7 @@ Key id 0 is empty. Ids 1..255 are the virtual key after side resolution. Id 256 
 
 `applied` stores key ids. The IPC thread turns them into the names on the state message. The playback thread does not format that text. The name table is filled once at startup.
 
-The report image is fixed and little-endian. Its fields are the `report` payload in `docs/engine/ipc-protocol.md`. One publish produces one image. The bytes are `engine-native/src/ipc/report.c`. The diff that fills it is `engine-native/src/core/output.c`. On the software path that image becomes one `SendInput` call in `engine-native/src/win/output_win.c` and is not written to the pipe. A board mode is the same image. The shell writes the `K` / `M` lines. The resident process calls `SendInput` only to release keys on exit. It does not publish a playing report.
+The report image is fixed and little-endian. Its fields are the `report` payload in `docs/engine/ipc-protocol.md`. One publish produces one image. The bytes are `engine-native/src/ipc/report.c`. The diff that fills it is `engine-native/src/core/output.c`. On the software path that image becomes one `SendInput` call in `engine-native/src/win/output_win.c` and is not written to the pipe. A board mode is the same image, written as a `report` frame. The shell writes the `K` / `M` lines. Playback calls `SendInput` while the mode is software, and again to release keys on exit. A board exit queues the ups and does not call `SendInput`.
 
 ## Process
 
@@ -204,7 +204,7 @@ Resident startup on Windows (#48). Linux still prints the version and exits.
 
 `ERROR_ALREADY_EXISTS` closes only the new handle. It does not call `ReleaseMutex`. AutoHotkey still does not check that error. `#SingleInstance Force` only sees another AutoHotkey script, so launching `MacroEngine.ahk` by hand can still run beside the native process. The shell's `EngineMutexHeld` will not start a second engine while the name is taken. `FindEngineProcess` adopts `AutoHotkey64` for AHK and `macroui-engine` for the native engine. Do not run both engines.
 
-The hook thread is `engine_win_hook_run`. The playback thread adopts a newer profile image, reads the foreground name the IPC thread published, and picks the live config. It waits the disarmed 16 ms slice until quit, then releases applied keys. It does not advance a runner and it does not query a window. The IPC thread creates `\\.\pipe\MacroUI` with the flags in `docs/engine/ipc-protocol.md`. It reads `--profile` before the pipe loop and queries the foreground image name on that thread. On connect it writes `hello`, then one `state` with no running rows, no held keys, and no windows. Later snapshot publishes do not write a frame. `command` `quit` writes the command ack, then sets the quit flag. A first byte of `{` gets `ack` `bad frame` and is not applied, so a JSON quit does not stop the process. `start`, `stop`, `reload`, `profile`, and `output` are not applied. A corrupt profile keeps the last good image, or an empty one, and stores the detail `the saved profile could not be read`. That error frame is still not written.
+The hook thread is `engine_win_hook_run`. The playback thread adopts a newer profile image, reads the foreground snapshot the IPC thread published, and picks the live config. It applies the command ring, drains hook events, and, while armed, polls triggers and advances runners. It does not query a window. Software output calls `SendInput` on this thread. A board report is queued for the IPC thread. The disarmed idle slice stays 16 ms. Quit releases applied keys, then the thread leaves. The IPC thread creates `\\.\pipe\MacroUI` with the flags in `docs/engine/ipc-protocol.md`. It reads `--profile` before the pipe loop and queries the foreground image, owner, dpi, and rects on that thread. On connect it writes `hello`, then one `state`. Later publishes write `state` when the snapshot or the window list changes, and write `report` when playback queued one. `command` `quit` writes the command ack, then sets the quit flag. A first byte of `{` gets `ack` `bad frame` and is not applied, so a JSON quit does not stop the process. `start` arms. `stop` disarms and calls `StopAll`. `reload` re-reads `--profile` here. `profile` publishes a JSON object and applies nothing else. `output` is queued with `start` and `stop`. A corrupt profile keeps the last good image, or an empty one, and stores the detail `the saved profile could not be read`. A failed `reload` sends that `error` frame, then the command ack. A failed load before a client is connected does not wait to deliver the error.
 
 The board scale uses the foreground dpi from the snapshot, and the system dpi when the window has none. Per-Monitor V2 can change that number relative to the unaware AHK process. If #53 shows a difference, record it there. The process stays Per-Monitor V2.
 
@@ -230,6 +230,8 @@ engine-native/
   src/core/output.c       applied diff, send plan, board plan
   src/core/runner.h
   src/core/runner.c       steps, the runner, publish before remove
+  src/core/command.h
+  src/core/command.c      frames, the command ring, trigger poll, state bytes
   src/core/json.h
   src/core/json.c         profile JSON, AHK parse quirks
   src/core/profile.h
@@ -280,10 +282,11 @@ Linux prints `macroui-engine 0` and exits 0. Windows does that for `--self-test`
 | #44 | Hooks, trigger bits, and the watchdog. `src/core/hook.c` and `src/win/hook_win.c`. |
 | #45 | Output. `src/ipc/report.c`, `src/core/output.c`, `src/win/output_win.c`, and `shell/ReportBoard.cs`. |
 | #46 | Block compiler and runner. `src/core/runner.c` runs the basic steps, `goto`, `run`, `holdLoop`, `swapLoop`, `burst`, `ifShort`, `onceHeld`, `edgeHold`, and `scanWait`. Mute is on that runner. `pressHold` expands and is not a step. |
-| #47 | Profile load is `src/core/json.c` and `src/core/profile.c`. The IPC thread reads `--profile`. Playback adopts the image and picks the live config. `reload` is still not applied. |
+| #47 | Profile load is `src/core/json.c` and `src/core/profile.c`. The IPC thread reads `--profile`. Playback adopts the image and picks the live config. `reload` is #70. |
 | #48 | Process lifecycle is the Windows entry in `src/win/win_entry.c`. Single instance is `Local\MacroUI.Engine`. Exit releases keys, then unhooks, then closes the timer, the pipe, and the mutex. The shell adopts the native pid. |
 | #49 | Fake-clock harness is `tests/runner_test.c`. Windows CI runs the AHK `--self-test`. The trace corpus is `bench/`. Diffs against AHK are empty. |
 | #50 | Shell switch. `shell/EngineLink.cs` speaks JSON to AutoHotkey and frames to the native engine. One engine at a time. Two native start failures fall back to AutoHotkey. |
+| #70 | Native applies `start`, `stop`, `reload`, `profile`, and `output`. `start` arms. Triggers start runners. State carries running rows, held names, and windows. `swapClicks` and the once-lock pass list stay out. |
 | #54 | Native becomes the default, then AHK leaves. |
 
 Block ideas stay out. `priority` and `variables` stay stored and ignored.

@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "process.h"
@@ -257,7 +258,7 @@ static int send_quit(void)
     HANDLE pipe = INVALID_HANDLE_VALUE;
     DWORD mode = PIPE_READMODE_MESSAGE;
     const unsigned char *ack;
-    unsigned char got[512];
+    unsigned char *got;
     int ack_len = 0;
     int n = 0;
     int i;
@@ -275,16 +276,25 @@ static int send_quit(void)
     }
     if (pipe == INVALID_HANDLE_VALUE)
         return 1;
+    got = (unsigned char *)malloc(262144);
+    if (!got) {
+        CloseHandle(pipe);
+        return 1;
+    }
     if (!SetNamedPipeHandleState(pipe, &mode, NULL, NULL)) {
+        free(got);
         CloseHandle(pipe);
         return 1;
     }
-    /* The engine writes hello, then state, before it reads. */
-    if (read_ack(pipe, got, (int)sizeof got, &n) != 0 || frame_type(got, n, &type) != 0 || type != 1) {
+    /* The engine writes hello, then state, before it reads.
+       Later state and report frames can arrive before the quit ack. */
+    if (read_ack(pipe, got, 262144, &n) != 0 || frame_type(got, n, &type) != 0 || type != 1) {
+        free(got);
         CloseHandle(pipe);
         return 1;
     }
-    if (read_ack(pipe, got, (int)sizeof got, &n) != 0 || frame_type(got, n, &type) != 0 || type != 2) {
+    if (read_ack(pipe, got, 262144, &n) != 0 || frame_type(got, n, &type) != 0 || type != 2) {
+        free(got);
         CloseHandle(pipe);
         return 1;
     }
@@ -292,17 +302,32 @@ static int send_quit(void)
         DWORD wrote = 0;
 
         if (!WriteFile(pipe, quit, (DWORD)sizeof quit, &wrote, NULL) || wrote != sizeof quit) {
+            free(got);
             CloseHandle(pipe);
             return 1;
         }
     }
     ack = engine_ack_command(&ack_len);
-    if (read_ack(pipe, got, (int)sizeof got, &n) != 0 || n != ack_len || memcmp(got, ack, (size_t)n) != 0) {
+    for (i = 0; i < 8; i++) {
+        if (read_ack(pipe, got, 262144, &n) != 0 || frame_type(got, n, &type) != 0) {
+            free(got);
+            CloseHandle(pipe);
+            return 1;
+        }
+        if (type == 2 || type == 5)
+            continue;
+        if (type == 3 && n == ack_len && memcmp(got, ack, (size_t)n) == 0) {
+            free(got);
+            CloseHandle(pipe);
+            return 0;
+        }
+        free(got);
         CloseHandle(pipe);
         return 1;
     }
+    free(got);
     CloseHandle(pipe);
-    return 0;
+    return 1;
 }
 
 static void check_release(void)
