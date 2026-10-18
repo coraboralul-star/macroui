@@ -32,6 +32,7 @@ public partial class MainWindow : Window
     bool _engineLive;
     int _readyGate;
     string _lastState = "";
+    string _pendingError = "";
     string _portsJson = "";
     string _inputMode = "software";
     string _outputMode = "software";
@@ -48,6 +49,11 @@ public partial class MainWindow : Window
     readonly Queue<byte[]> _reportPending = new();
     int _inputGen;
     string _closeMode = "tray";
+    string _engineChoice = "ahk";
+    string _wire = "";
+    int _nativeStrikes;
+    int _expectExit;
+    int _suppressLaunch;
     bool _allowClose;
     System.Windows.Forms.NotifyIcon? _tray;
     System.Drawing.Icon? _trayIcon;
@@ -68,7 +74,7 @@ public partial class MainWindow : Window
         _profilePath = Path.Combine(_repo, "profiles", "default.json");
         _shellPath = Path.Combine(_repo, "profiles", "shell.json");
         Directory.CreateDirectory(Path.GetDirectoryName(_profilePath)!);
-        LoadCloseMode();
+        LoadShellSettings();
         if (!File.Exists(_profilePath))
             File.WriteAllText(_profilePath, """{"version":1,"name":"Default","variables":{},"macros":[]}""", new UTF8Encoding(false));
     }
@@ -122,26 +128,36 @@ public partial class MainWindow : Window
         StartShowWait();
     }
 
-    void LoadCloseMode()
+    void LoadShellSettings()
     {
         try
         {
             if (!File.Exists(_shellPath)) return;
-            var close = JsonNode.Parse(File.ReadAllText(_shellPath))?["close"]?.ToString();
+            var node = JsonNode.Parse(File.ReadAllText(_shellPath));
+            var close = node?["close"]?.ToString();
             if (close == "tray" || close == "quit")
                 _closeMode = close;
+            var engine = node?["engine"]?.ToString();
+            if (engine == "ahk" || engine == "native")
+                _engineChoice = engine;
         }
-        catch { /* keep the tray default */ }
+        catch (Exception ex)
+        {
+            Log("shell settings " + ex.Message);
+        }
     }
 
-    void SaveCloseMode()
+    void SaveShellSettings()
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_shellPath)!);
-            File.WriteAllText(_shellPath, "{\"close\":\"" + _closeMode + "\"}", new UTF8Encoding(false));
+            File.WriteAllText(_shellPath, "{\"close\":\"" + _closeMode + "\",\"engine\":\"" + _engineChoice + "\"}", new UTF8Encoding(false));
         }
-        catch { /* the page still remembers the choice */ }
+        catch (Exception ex)
+        {
+            Log("shell settings save " + ex.Message);
+        }
     }
 
     void StartShowWait()
@@ -306,12 +322,15 @@ public partial class MainWindow : Window
         {
             if (_pipe is { IsConnected: true })
             {
-                var quit = Encoding.UTF8.GetBytes("{\"v\":1,\"type\":\"command\",\"action\":\"quit\"}\n");
+                var quit = QuitBytes();
                 _pipe.Write(quit, 0, quit.Length);
                 _pipe.Flush();
             }
         }
-        catch { /* the process kill below is the backup */ }
+        catch (Exception ex)
+        {
+            Log("engine quit " + ex.Message);
+        }
         try
         {
             if (_engine is { HasExited: false } && !_engine.WaitForExit(500))
@@ -404,8 +423,11 @@ public partial class MainWindow : Window
             if (close == "tray" || close == "quit")
             {
                 _closeMode = close;
-                SaveCloseMode();
+                SaveShellSettings();
             }
+            var engine = node?["engine"]?.ToString();
+            if (engine == "ahk" || engine == "native")
+                RequestEngine(engine);
             return;
         }
         if (type == "hello")
@@ -416,6 +438,8 @@ public partial class MainWindow : Window
             SendPorts(true);
             SendToPage(_outputPageJson);
             SendWindowState();
+            if (_pendingError.Length > 0)
+                SendToPage(_pendingError);
             if (_lastState.Length > 0)
                 SendToPage(_lastState);
             MaybeReady();
@@ -445,81 +469,175 @@ public partial class MainWindow : Window
             }
             // The engine re-reads the file. Piping the whole profile parsed it on
             // the hook thread, and a long stall there makes Windows drop the hook.
-            _ = WritePipe("{\"v\":1,\"type\":\"command\",\"action\":\"reload\"}");
+            _ = WriteCommand("reload");
             return;
         }
         if (type == "command")
         {
-            var action = node?["action"]?.ToString();
+            var action = node?["action"]?.ToString() ?? "";
             if (action == "reload")
             {
-                _ = WritePipe(e.WebMessageAsJson);
+                _ = WriteCommand(action, e.WebMessageAsJson);
                 SendReady();
                 SendPorts(true);
                 return;
             }
-            _ = WritePipe(e.WebMessageAsJson);
+            _ = WriteCommand(action, e.WebMessageAsJson);
         }
     }
 
     async Task PumpPipe(CancellationToken ct)
     {
         var misses = 0;
+        var buf = new byte[1024 * 1024];
         while (!ct.IsCancellationRequested)
         {
+            NamedPipeClientStream? pipe = null;
             try
             {
-                var pipe = new NamedPipeClientStream(".", "MacroUI", PipeDirection.InOut, PipeOptions.Asynchronous);
+                pipe = new NamedPipeClientStream(".", "MacroUI", PipeDirection.InOut, PipeOptions.Asynchronous);
                 await pipe.ConnectAsync(1500, ct).ConfigureAwait(false);
                 pipe.ReadMode = PipeTransmissionMode.Message;
+                var first = await ReadPipe(pipe, buf, ct, 2000).ConfigureAwait(false);
+                if (first <= 0)
+                    throw new IOException("engine hello did not arrive");
+                if (!pipe.IsMessageComplete)
+                    throw new IOException("engine hello was truncated");
+                var peer = EngineLink.Classify(buf.AsSpan(0, first));
+                if (peer == EnginePeer.Reject)
+                {
+                    Log("engine hello was not a known protocol");
+                    PostError(ErrorJson("shell", "bad-engine", "The engine spoke a protocol this app does not know."));
+                    throw new IOException("engine hello was rejected");
+                }
                 _pipe = pipe;
+                _wire = peer == EnginePeer.Native ? "native" : "ahk";
+                if (_wire == "native")
+                    _nativeStrikes = 0;
                 misses = 0;
                 SendToPage(LinkJson());
-                await SendProfileEnvelope().ConfigureAwait(false);
-                await WritePipe(OutputJson(_outputMode)).ConfigureAwait(false);
-                var buf = new byte[1024 * 1024];
+                AcceptMessage(buf.AsSpan(0, first));
+                if (peer == EnginePeer.Native)
+                    await SendNativeProfile().ConfigureAwait(false);
+                else
+                {
+                    await SendProfileEnvelope().ConfigureAwait(false);
+                    await WritePipe(OutputJson(_outputMode)).ConfigureAwait(false);
+                }
                 while (!ct.IsCancellationRequested)
                 {
-                    var n = await pipe.ReadAsync(buf, ct).ConfigureAwait(false);
-                    if (n <= 0) break;
-                    var text = Encoding.UTF8.GetString(buf, 0, n);
-                    var kind = MessageType(text);
-                    if (kind == "state")
-                        _lastState = text;
-                    if (kind == "hello" || kind == "state")
-                        NoteEngine();
-                    if (kind == "hid")
-                    {
-                        WriteHid(text);
-                        continue;
-                    }
-                    SendToPage(text);
+                    var n = await ReadPipe(pipe, buf, ct, 0).ConfigureAwait(false);
+                    if (n <= 0)
+                        break;
+                    if (!pipe.IsMessageComplete)
+                        throw new IOException("engine frame was truncated");
+                    AcceptMessage(buf.AsSpan(0, n));
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 break;
             }
-            catch
+            catch (Exception ex)
             {
-                misses++;
-                if (misses == 2)
-                    TryLaunchEngine();
+                Log("engine pipe " + ex.Message);
+                if (Volatile.Read(ref _suppressLaunch) != 0 || Volatile.Read(ref _expectExit) != 0)
+                {
+                    /* a switch owns the next launch */
+                }
+                else if (_engineChoice == "native" && ex.Message.StartsWith("engine hello", StringComparison.Ordinal))
+                    NoteNativeFailure(ex.Message);
+                else
+                {
+                    misses++;
+                    if (misses == 2)
+                        TryLaunchEngine();
+                }
             }
+            finally
+            {
+                if (!ReferenceEquals(pipe, _pipe))
+                {
+                    try { pipe?.Dispose(); } catch (Exception ex) { Log("engine pipe close " + ex.Message); }
+                }
+            }
+            var dead = _pipe;
             _pipe = null;
+            _wire = "";
             _lastState = "";
+            try { dead?.Dispose(); }
+            catch (Exception ex) { Log("engine pipe close " + ex.Message); }
             if (!_closing)
                 SendToPage(LinkJson());
             try { await Task.Delay(700, ct).ConfigureAwait(false); } catch { break; }
         }
     }
 
+    static async Task<int> ReadPipe(NamedPipeClientStream pipe, byte[] buf, CancellationToken ct, int timeoutMs)
+    {
+        if (timeoutMs <= 0)
+            return await pipe.ReadAsync(buf, ct).ConfigureAwait(false);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        linked.CancelAfter(timeoutMs);
+        try
+        {
+            return await pipe.ReadAsync(buf, linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new IOException("engine hello timed out");
+        }
+    }
+
+    void AcceptMessage(ReadOnlySpan<byte> message)
+    {
+        if (_wire != "native")
+        {
+            var text = Encoding.UTF8.GetString(message);
+            var kind = MessageType(text);
+            if (kind == "state")
+                _lastState = text;
+            if (kind == "hello" || kind == "state")
+                NoteEngine();
+            if (kind == "hid")
+            {
+                WriteHid(text);
+                return;
+            }
+            SendToPage(text);
+            return;
+        }
+        if (!EngineLink.TryTranslate(message, out var inbound))
+            throw new IOException("bad engine frame");
+        if (inbound.Live)
+            NoteEngine();
+        if (inbound.Report != null)
+            WriteReport(inbound.Report);
+        if (inbound.Json == null)
+            return;
+        if (inbound.State)
+            _lastState = inbound.Json;
+        SendToPage(inbound.Json);
+    }
+
+    async Task WriteCommand(string action, string? ahkJson = null)
+    {
+        if (_wire == "native")
+            await WritePipeBytes(EngineLink.Command(action)).ConfigureAwait(false);
+        else
+            await WritePipe(ahkJson ?? "{\"v\":1,\"type\":\"command\",\"action\":\"" + action + "\"}").ConfigureAwait(false);
+    }
+
     async Task WritePipe(string json)
+    {
+        await WritePipeBytes(Encoding.UTF8.GetBytes(json)).ConfigureAwait(false);
+    }
+
+    async Task WritePipeBytes(byte[] bytes)
     {
         var pipe = _pipe;
         if (pipe is not { IsConnected: true })
             return;
-        var bytes = Encoding.UTF8.GetBytes(json);
         await _write.WaitAsync();
         try
         {
@@ -527,9 +645,9 @@ public partial class MainWindow : Window
                 return;
             await pipe.WriteAsync(bytes);
         }
-        catch
+        catch (Exception ex)
         {
-            /* the read loop reconnects */
+            Log("pipe write " + ex.Message);
         }
         finally
         {
@@ -537,40 +655,287 @@ public partial class MainWindow : Window
         }
     }
 
+    void RequestEngine(string want)
+    {
+        if (want != "ahk" && want != "native")
+            return;
+        if (want == _engineChoice)
+            return;
+        _engineChoice = want;
+        _nativeStrikes = 0;
+        SaveShellSettings();
+        SendToPage(LinkJson());
+        _ = Task.Run(RestartEngine);
+    }
+
+    void RestartEngine()
+    {
+        Interlocked.Exchange(ref _suppressLaunch, 1);
+        try
+        {
+            QuitEngine();
+            LaunchEngine();
+        }
+        catch (Exception ex)
+        {
+            Log("engine switch " + ex.Message);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _suppressLaunch, 0);
+        }
+        SendToPage(LinkJson());
+    }
+
+    void QuitEngine()
+    {
+        // Release keys, quit, then wait until the mutex is free. The engine
+        // releases on the way out. Kill is only if that exit does not finish.
+        Interlocked.Exchange(ref _expectExit, 1);
+        try
+        {
+            WritePipeSync(QuitBytes());
+            var proc = _engine;
+            if (proc != null)
+            {
+                try
+                {
+                    if (!proc.HasExited && !proc.WaitForExit(2000))
+                    {
+                        Log("engine did not exit after quit");
+                        proc.Kill(entireProcessTree: true);
+                        proc.WaitForExit(1000);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log("engine quit " + ex.Message);
+                }
+            }
+            for (var i = 0; i < 40 && EngineMutexHeld(); i++)
+                Thread.Sleep(50);
+            if (EngineMutexHeld())
+                Log("engine mutex still held after quit");
+            ForgetEngine();
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _expectExit, 0);
+        }
+    }
+
+    byte[] QuitBytes()
+    {
+        if (_wire == "native" || NativeProcess(_engine))
+            return EngineLink.Command("quit");
+        return Encoding.UTF8.GetBytes("{\"v\":1,\"type\":\"command\",\"action\":\"quit\"}\n");
+    }
+
+    void WritePipeSync(byte[] bytes)
+    {
+        var pipe = _pipe;
+        if (pipe is not { IsConnected: true })
+            return;
+        _write.Wait();
+        try
+        {
+            if (!ReferenceEquals(pipe, _pipe) || !pipe.IsConnected)
+                return;
+            pipe.Write(bytes, 0, bytes.Length);
+            pipe.Flush();
+        }
+        catch (Exception ex)
+        {
+            Log("pipe write " + ex.Message);
+        }
+        finally
+        {
+            _write.Release();
+        }
+    }
+
+    void NoteNativeFailure(string why)
+    {
+        _nativeStrikes++;
+        Log(why + " (" + _nativeStrikes + ")");
+        if (_nativeStrikes >= 2)
+        {
+            _engineChoice = "ahk";
+            _nativeStrikes = 0;
+            SaveShellSettings();
+            PostError(ErrorJson("shell", "engine-fallback", "The native engine failed twice. AutoHotkey is running."));
+            SendToPage(LinkJson());
+            Interlocked.Exchange(ref _suppressLaunch, 1);
+            try
+            {
+                QuitEngine();
+                LaunchEngine();
+            }
+            catch (Exception ex)
+            {
+                Log("engine fallback " + ex.Message);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _suppressLaunch, 0);
+            }
+        }
+        else
+            LaunchEngine();
+        SendToPage(LinkJson());
+    }
+
     void TryLaunchEngine()
     {
-        // Relaunch only when the running engine is gone. Starting a second
-        // AutoHotkey hits #SingleInstance Force, which kills the resident one
-        // and releases every held key.
+        if (Volatile.Read(ref _suppressLaunch) != 0)
+            return;
+        LaunchEngine();
+    }
+
+    void LaunchEngine()
+    {
+        // One engine. A second process would share the mutex and exit, or
+        // AutoHotkey's #SingleInstance Force would kill the resident one.
         if (_engine is { HasExited: false })
             return;
         if (_engine != null)
         {
-            try { _engine.Dispose(); } catch { /* already gone */ }
-            _engine = null;
+            var unexpected = Volatile.Read(ref _expectExit) == 0 && _engineChoice == "native";
+            ForgetEngine();
+            if (unexpected)
+            {
+                NoteNativeFailure("native engine exited");
+                return;
+            }
         }
         if (EngineMutexHeld())
         {
-            _engine = FindEngineProcess();
+            _engine = FindEngineProcess(_engineChoice);
+            if (_engine == null)
+                Log("engine mutex is held by a different process");
             return;
         }
+        if (_engineChoice == "native")
+            StartNative();
+        else
+            StartAhk();
+    }
+
+    void StartNative()
+    {
+        var exe = NativeExe();
+        if (exe == null)
+        {
+            Log("native engine exe was not found");
+            NoteNativeFailure("native engine did not start");
+            return;
+        }
+        try
+        {
+            var start = HiddenStart(exe);
+            start.ArgumentList.Add("--profile");
+            start.ArgumentList.Add(_profilePath);
+            _engine = Process.Start(start);
+        }
+        catch (Exception ex)
+        {
+            Log("native engine start " + ex.Message);
+            NoteNativeFailure("native engine did not start");
+            return;
+        }
+        if (_engine == null)
+        {
+            NoteNativeFailure("native engine did not start");
+            return;
+        }
+        try
+        {
+            if (_engine.WaitForExit(300))
+            {
+                var code = _engine.ExitCode;
+                ForgetEngine();
+                NoteNativeFailure("native engine exited " + code);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("native engine start " + ex.Message);
+            ForgetEngine();
+            NoteNativeFailure("native engine did not start");
+        }
+    }
+
+    void StartAhk()
+    {
         var ahk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "AutoHotkey", "v2", "AutoHotkey64.exe");
         var script = Path.Combine(_repo, "engine", "MacroEngine.ahk");
         if (!File.Exists(ahk) || !File.Exists(script))
         {
+            Log("AutoHotkey engine was not found");
             if (_hosted)
                 PublishBootFailure("The macro system did not start.");
             return;
         }
-        var start = new ProcessStartInfo(ahk)
+        try
         {
-            UseShellExecute = false,
-            WorkingDirectory = _repo,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden,
-        };
-        start.ArgumentList.Add(script);
-        _engine = Process.Start(start);
+            var start = HiddenStart(ahk);
+            start.ArgumentList.Add(script);
+            _engine = Process.Start(start);
+        }
+        catch (Exception ex)
+        {
+            Log("AutoHotkey start " + ex.Message);
+            if (_hosted)
+                PublishBootFailure("The macro system did not start.");
+        }
+    }
+
+    string? NativeExe()
+    {
+        string[] paths =
+        [
+            Path.Combine(_repo, "engine-native", "build", "Release", "macroui-engine.exe"),
+            Path.Combine(_repo, "engine-native", "build", "Debug", "macroui-engine.exe"),
+            Path.Combine(_repo, "engine-native", "build", "macroui-engine.exe"),
+            Path.Combine(AppContext.BaseDirectory, "macroui-engine.exe"),
+        ];
+        foreach (var path in paths)
+        {
+            if (File.Exists(path))
+                return path;
+        }
+        return null;
+    }
+
+    ProcessStartInfo HiddenStart(string file) => new(file)
+    {
+        UseShellExecute = false,
+        WorkingDirectory = _repo,
+        CreateNoWindow = true,
+        WindowStyle = ProcessWindowStyle.Hidden,
+    };
+
+    void ForgetEngine()
+    {
+        var proc = _engine;
+        _engine = null;
+        if (proc == null)
+            return;
+        try { proc.Dispose(); }
+        catch (Exception ex) { Log("engine dispose " + ex.Message); }
+    }
+
+    static bool NativeProcess(Process? process)
+    {
+        try
+        {
+            return process != null && !process.HasExited
+                && process.ProcessName.Equals("macroui-engine", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     static bool EngineMutexHeld()
@@ -590,17 +955,25 @@ public partial class MainWindow : Window
         }
     }
 
-    static Process? FindEngineProcess()
+    static Process? FindEngineProcess(string choice)
+    {
+        if (choice == "native")
+            return FindNamed("macroui-engine", "macroui-engine");
+        return FindNamed("AutoHotkey64", "MacroEngine.ahk");
+    }
+
+    static Process? FindNamed(string processName, string marker)
     {
         Process? match = null;
-        foreach (var process in Process.GetProcessesByName("AutoHotkey64"))
+        foreach (var process in Process.GetProcessesByName(processName))
         {
             var cmd = "";
             try { cmd = CommandLine(process.Id); }
             catch { /* already exited */ }
-            if (match == null
-                && cmd.Contains("MacroEngine.ahk", StringComparison.OrdinalIgnoreCase)
-                && !cmd.Contains("--self-test", StringComparison.OrdinalIgnoreCase))
+            var native = processName.Equals("macroui-engine", StringComparison.OrdinalIgnoreCase);
+            var skip = cmd.Contains("--self-test", StringComparison.OrdinalIgnoreCase)
+                || cmd.Contains("--bench", StringComparison.OrdinalIgnoreCase);
+            if (match == null && !skip && (native || cmd.Contains(marker, StringComparison.OrdinalIgnoreCase)))
                 match = process;
             else
                 process.Dispose();
@@ -672,8 +1045,38 @@ public partial class MainWindow : Window
         SendToPage(JsonSerializer.Serialize(new { type = "chrome", maximized = WindowState == WindowState.Maximized }));
     }
 
-    string LinkJson() =>
-        JsonSerializer.Serialize(new { type = "link", shell = true, pipe = _pipe is { IsConnected: true } });
+    string LinkJson()
+    {
+        var connected = _pipe is { IsConnected: true };
+        return JsonSerializer.Serialize(new
+        {
+            type = "link",
+            shell = true,
+            pipe = connected,
+            engine = connected ? _wire : "",
+            choice = _engineChoice,
+        });
+    }
+
+    void PostError(string json)
+    {
+        _pendingError = json;
+        SendToPage(json);
+    }
+
+    void Log(string message)
+    {
+        var line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) + " " + message;
+        System.Diagnostics.Trace.TraceError(line);
+        try
+        {
+            File.AppendAllText(Path.Combine(_repo, "profiles", "shell.log"), line + Environment.NewLine);
+        }
+        catch
+        {
+            /* the trace line is already written */
+        }
+    }
 
     // Write to a sibling file and swap it in. A crash or power loss during a
     // plain WriteAllText left a truncated default.json, which the engine could
@@ -715,12 +1118,41 @@ public partial class MainWindow : Window
             RememberSwap(profile);
             json = new JsonObject { ["v"] = 1, ["type"] = "profile", ["profile"] = profile }.ToJsonString();
         }
-        catch
+        catch (Exception ex)
         {
+            Log("profile read " + ex.Message);
             SendToPage(ErrorJson("shell", "profile-read", "could not read the profile on disk"));
             return;
         }
         await WritePipe(json);
+    }
+
+    async Task SendNativeProfile()
+    {
+        byte[] file;
+        try
+        {
+            var text = File.ReadAllText(_profilePath);
+            var profile = JsonNode.Parse(text);
+            RememberSwap(profile);
+            file = new UTF8Encoding(false).GetBytes(text);
+        }
+        catch (Exception ex)
+        {
+            Log("profile read " + ex.Message);
+            SendToPage(ErrorJson("shell", "profile-read", "could not read the profile on disk"));
+            return;
+        }
+        try
+        {
+            await WritePipeBytes(EngineLink.Profile(file)).ConfigureAwait(false);
+            await WritePipeBytes(EngineLink.Output(_outputMode)).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log("native profile " + ex.Message);
+            SendToPage(ErrorJson("shell", "profile-read", "could not read the profile on disk"));
+        }
     }
 
     void QueuePortRefresh()
@@ -809,7 +1241,10 @@ public partial class MainWindow : Window
         var page = JsonSerializer.Serialize(new { type = "output", mode, requested });
         _outputPageJson = page;
         SendToPage(page);
-        await WritePipe(OutputJson(mode));
+        if (_wire == "native")
+            await WritePipeBytes(EngineLink.Output(mode));
+        else
+            await WritePipe(OutputJson(mode));
     }
 
     string OpenAndAsk(string port, string mode)

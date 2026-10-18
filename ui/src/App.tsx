@@ -13,7 +13,7 @@ import { SettingsPage, type CloseMode, type SettingPane } from "./components/Set
 import { keyLabel } from "./keyboard";
 import { pressLabel } from "./recording";
 import { inputModeLabel, normalizeInputMode } from "./profile";
-import { outputChipMode, outputConnected, outputFallenBack } from "./hostMessages";
+import { outputChipMode, outputConnected, outputFallenBack, type EngineKind } from "./hostMessages";
 import { useHostStatus } from "./useHostStatus";
 import { useMacroActions, type TriggerMenu } from "./useMacroActions";
 import { useProfile } from "./useProfile";
@@ -44,11 +44,16 @@ export function App() {
   const [menu, setMenu] = useState<TriggerMenu | null>(null);
   const [graphId, setGraphId] = useState<string | null>(null);
   const [closeMode, setCloseMode] = useState<CloseMode>(readClose);
+  const [engineChoice, setEngineChoice] = useState<EngineKind>("ahk");
 
   useEffect(() => {
     localStorage.setItem(CLOSE_KEY, closeMode);
     post({ type: "shell", close: closeMode });
   }, [closeMode]);
+
+  useEffect(() => {
+    setEngineChoice(host.engineChoice);
+  }, [host.engineChoice]);
 
   const openAdvanced = () => {
     setPage("keyboard");
@@ -146,7 +151,10 @@ export function App() {
               <span>Output</span>
               {chipLabel}
             </button>
-            <p className={`status${host.pipe && host.engine.armed ? " is-live" : ""}`}>{host.status}</p>
+            <p className={`status${host.pipe && host.engine.armed ? " is-live" : ""}`}>
+              {host.status}
+              {host.engineWire === "native" ? " - Native" : host.engineWire === "ahk" ? " - AutoHotkey" : ""}
+            </p>
           </div>
           <div className="chrome">
             <button type="button" aria-label="Minimize" onClick={() => post({ type: "window", action: "minimize" })}>
@@ -316,6 +324,12 @@ export function App() {
             connected={inputConnected}
             closeMode={closeMode}
             onCloseMode={setCloseMode}
+            engineChoice={engineChoice}
+            onEngine={(kind) => {
+              setEngineChoice(kind);
+              post({ type: "shell", engine: kind });
+            }}
+            engineWire={host.engineWire}
           />
         )}
         {menu ? (

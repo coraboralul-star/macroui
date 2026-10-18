@@ -11,9 +11,11 @@ firmware/out/
 tools/bench/out/
 engine-native/build/
 shell/report-board-test/bin/
+shell/engine-link-test/bin/
 profiles/*.json
 profiles/*.json.bak
 profiles/*.json.tmp
+profiles/shell.log
 shell/bin/**/runtimes/android-*/
 shell/bin/**/runtimes/linux-*/
 shell/bin/**/runtimes/maccatalyst-*/

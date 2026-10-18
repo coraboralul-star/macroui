@@ -238,15 +238,30 @@ static int read_ack(HANDLE pipe, unsigned char *buf, int cap, int *got)
     }
 }
 
+static int frame_type(const unsigned char *buf, int n, unsigned int *type)
+{
+    unsigned int length;
+
+    if (!buf || n < 12 || memcmp(buf, "MUI1", 4) != 0 || buf[4] != 1 || buf[5] != 0)
+        return 1;
+    length = (unsigned int)buf[8] | ((unsigned int)buf[9] << 8) | ((unsigned int)buf[10] << 16) |
+             ((unsigned int)buf[11] << 24);
+    if ((unsigned int)n != 12u + length || length > 1048576u)
+        return 1;
+    *type = (unsigned int)buf[6] | ((unsigned int)buf[7] << 8);
+    return 0;
+}
+
 static int send_quit(void)
 {
     HANDLE pipe = INVALID_HANDLE_VALUE;
     DWORD mode = PIPE_READMODE_MESSAGE;
     const unsigned char *ack;
-    unsigned char got[64];
+    unsigned char got[512];
     int ack_len = 0;
     int n = 0;
     int i;
+    unsigned int type = 0;
     static const unsigned char quit[] = {
         0x4D, 0x55, 0x49, 0x31, 0x01, 0x00, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x04
     };
@@ -261,6 +276,15 @@ static int send_quit(void)
     if (pipe == INVALID_HANDLE_VALUE)
         return 1;
     if (!SetNamedPipeHandleState(pipe, &mode, NULL, NULL)) {
+        CloseHandle(pipe);
+        return 1;
+    }
+    /* The engine writes hello, then state, before it reads. */
+    if (read_ack(pipe, got, (int)sizeof got, &n) != 0 || frame_type(got, n, &type) != 0 || type != 1) {
+        CloseHandle(pipe);
+        return 1;
+    }
+    if (read_ack(pipe, got, (int)sizeof got, &n) != 0 || frame_type(got, n, &type) != 0 || type != 2) {
         CloseHandle(pipe);
         return 1;
     }

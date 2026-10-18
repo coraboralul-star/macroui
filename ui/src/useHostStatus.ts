@@ -10,6 +10,7 @@ import {
   parseWindows,
   statusLabel,
   type BoardPort,
+  type EngineKind,
   type LiveOutput,
   type WindowRow,
 } from "./hostMessages";
@@ -18,6 +19,8 @@ import type { EngineState } from "./profile";
 export function useHostStatus() {
   const [shell, setShell] = useState(false);
   const [pipe, setPipe] = useState(false);
+  const [engineWire, setEngineWire] = useState<EngineKind | "">("");
+  const [engineChoice, setEngineChoice] = useState<EngineKind>("ahk");
   const [engine, setEngine] = useState<EngineState>({ armed: false, running: [], held: [], activeId: "" });
   const [fault, setFault] = useState<string | null>(null);
   const [ports, setPorts] = useState<BoardPort[]>([]);
@@ -31,6 +34,8 @@ export function useHostStatus() {
       if (link) {
         setShell(link.shell);
         setPipe(link.pipe);
+        setEngineWire(link.engine);
+        setEngineChoice(link.choice);
       }
       const state = parseEngineState(message);
       if (state) {
@@ -58,5 +63,5 @@ export function useHostStatus() {
   const runningIds = useMemo(() => new Set(engine.running.map((item) => item.id)), [engine.running]);
   const status = statusLabel(pipe, shell, engine.armed);
 
-  return { shell, pipe, engine, windows, ports, output, fault, setFault, maximized, runningIds, status };
+  return { shell, pipe, engine, engineWire, engineChoice, windows, ports, output, fault, setFault, maximized, runningIds, status };
 }
