@@ -817,6 +817,11 @@ static void watch_hooks(int64_t now)
     if (watch.clear_suspect)
         atomic_store_explicit(&g.hooks.suspect, 0, memory_order_release);
     engine_hook_post_ops(&g.hooks, &watch);
+    /* The hook thread applies a raise only after GetMessage returns.
+       A keyboard hook is already installed. The mouse hook is not, so a
+       mouse trigger never arrives unless this posts a message. */
+    if (watch.count > 0)
+        engine_win_hook_kick(&g.hook);
 }
 
 static void fill_running(struct engine_state_snapshot *snap, const struct engine_live_config *live)

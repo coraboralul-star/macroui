@@ -504,7 +504,12 @@ void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_liv
                 continue;
             if (!engine_can_trigger(id))
                 continue;
-            if (focus_ok)
+            /* Keyboard triggers are swallowed for software and for a board.
+               A mouse trigger is the AHK hotkey: software eats the click,
+               and a board lets it through. Left and right are included. */
+            if (focus_ok &&
+                (!engine_is_mouse_button(id) || !play ||
+                 play->output.mode == ENGINE_OUTPUT_SOFTWARE))
                 swallow[id] = 1;
         }
     }

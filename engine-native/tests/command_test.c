@@ -1,6 +1,7 @@
 /* Frames, the command ring, trigger edges, and the state image.
    Does not arm profiles/default.json and does not call SendInput. */
 #include "command.h"
+#include "output.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -483,6 +484,143 @@ static void check_once_lock(void)
     free(play);
 }
 
+static void press_button(struct engine_hook_state *st, uint16_t id, int down, uint32_t flags,
+                         uint64_t extra, int64_t now, struct engine_hook_decision *out)
+{
+    struct engine_hook_sample sample;
+
+    memset(&sample, 0, sizeof sample);
+    sample.kind = ENGINE_HOOK_MOUSE;
+    sample.now = now;
+    sample.flags = flags;
+    sample.extra = extra;
+    if (id == ENGINE_KEY_LBUTTON)
+        sample.msg = down ? ENGINE_MSG_LBUTTONDOWN : ENGINE_MSG_LBUTTONUP;
+    else if (id == ENGINE_KEY_RBUTTON)
+        sample.msg = down ? ENGINE_MSG_RBUTTONDOWN : ENGINE_MSG_RBUTTONUP;
+    else if (id == ENGINE_KEY_MBUTTON)
+        sample.msg = down ? ENGINE_MSG_MBUTTONDOWN : ENGINE_MSG_MBUTTONUP;
+    else if (id == ENGINE_KEY_XBUTTON1 || id == ENGINE_KEY_XBUTTON2) {
+        sample.msg = down ? ENGINE_MSG_XBUTTONDOWN : ENGINE_MSG_XBUTTONUP;
+        sample.mouse_data = id == ENGINE_KEY_XBUTTON1 ? (1u << 16) : (2u << 16);
+    }
+    engine_hook_classify(st, &sample, out);
+}
+
+static void check_mouse_triggers(void)
+{
+    static const uint16_t ids[] = {
+        ENGINE_KEY_LBUTTON, ENGINE_KEY_RBUTTON, ENGINE_KEY_MBUTTON,
+        ENGINE_KEY_XBUTTON1, ENGINE_KEY_XBUTTON2
+    };
+    static const char *names[] = { "left", "right", "middle", "mouse 4", "mouse 5" };
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_macro macro;
+    struct engine_profile_extra extra;
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    struct engine_hook_state hooks;
+    struct engine_hook_decision decision;
+    struct engine_finger ev;
+    char label[96];
+    int i;
+
+    if (!play) {
+        expect(0, "mouse play alloc");
+        return;
+    }
+    engine_play_init(play);
+    engine_macro_init(&macro);
+    memset(&extra, 0, sizeof extra);
+    memset(&live, 0, sizeof live);
+    snprintf(macro.id, sizeof macro.id, "click");
+    macro.mode = ENGINE_MODE_WHILE_HELD;
+    macro.step_count = 1;
+    extra.enabled = 1;
+    live.macros = &macro;
+    live.extras = &extra;
+    live.macro_count = 1;
+
+    for (i = 0; i < 5; i++) {
+        engine_play_init(play);
+        engine_trigger_init(&mem);
+        engine_fingers_clear(&fingers);
+        macro.trigger = ids[i];
+        engine_fingers_set(&fingers, ids[i], 1);
+        engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+        snprintf(label, sizeof label, "%s held at arm does not start", names[i]);
+        expect(play->pending_count == 0, label);
+        engine_fingers_set(&fingers, ids[i], 0);
+        engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+        engine_fingers_set(&fingers, ids[i], 1);
+        engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+        snprintf(label, sizeof label, "%s while held starts on the down edge", names[i]);
+        expect(play->pending_count == 1, label);
+        engine_play_flush(play);
+        engine_fingers_set(&fingers, ids[i], 0);
+        engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+        snprintf(label, sizeof label, "%s while held stops when the finger comes up", names[i]);
+        expect(play->runners[0].done == 1, label);
+    }
+
+    engine_hook_init(&hooks);
+    play->output.mode = ENGINE_OUTPUT_SOFTWARE;
+    for (i = 0; i < 5; i++) {
+        macro.trigger = ids[i];
+        engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, play);
+        press_button(&hooks, ids[i], 1, 0, 0, 40 + i, &decision);
+        snprintf(label, sizeof label, "software swallows %s", names[i]);
+        expect(decision.swallow == 1 && decision.enqueued == 1, label);
+        expect(engine_event_pop(&hooks, &ev) == 1 && ev.id == ids[i], "the swallowed click is still a finger");
+    }
+
+    play->output.mode = ENGINE_OUTPUT_RP2350;
+    for (i = 0; i < 5; i++) {
+        macro.trigger = ids[i];
+        engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, play);
+        press_button(&hooks, ids[i], 1, 0, 0, 50 + i, &decision);
+        snprintf(label, sizeof label, "a board passes %s", names[i]);
+        expect(decision.swallow == 0 && decision.enqueued == 1, label);
+        engine_event_pop(&hooks, &ev);
+    }
+
+    engine_play_init(play);
+    play->output.mode = ENGINE_OUTPUT_SOFTWARE;
+    macro.trigger = ENGINE_KEY_XBUTTON1;
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    engine_hook_init(&hooks);
+    press_button(&hooks, ENGINE_KEY_XBUTTON1, 1, 0, 0, 70, &decision);
+    expect(engine_event_pop(&hooks, &ev) == 1 && ev.down == 1, "mouse 4 down is a finger");
+    engine_fingers_set(&fingers, ev.id, ev.down);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    press_button(&hooks, ENGINE_KEY_XBUTTON1, 0, 0, 0, 71, &decision);
+    engine_event_pop(&hooks, &ev);
+    engine_fingers_set(&fingers, ev.id, ev.down);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    press_button(&hooks, ENGINE_KEY_XBUTTON1, 1, 0, 0, 72, &decision);
+    engine_event_pop(&hooks, &ev);
+    engine_fingers_set(&fingers, ev.id, ev.down);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    expect(play->pending_count == 1, "mouse 4 while held starts from the hook");
+    engine_play_flush(play);
+    press_button(&hooks, ENGINE_KEY_XBUTTON1, 0, ENGINE_MOUSE_INJECTED, 0, 73, &decision);
+    expect(decision.enqueued == 0, "an injected mouse 4 release is not a finger");
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    expect(play->runners[0].done == 0, "a sent click does not end the hold");
+    press_button(&hooks, ENGINE_KEY_XBUTTON1, 0, 0, ENGINE_EXTRA_ECHO, 74, &decision);
+    expect(decision.enqueued == 0, "an echoed mouse 4 release is not a finger");
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    expect(play->runners[0].done == 0, "the engine's own click does not end the hold");
+    press_button(&hooks, ENGINE_KEY_XBUTTON1, 0, 0, 0, 75, &decision);
+    expect(engine_event_pop(&hooks, &ev) == 1 && ev.down == 0, "a real mouse 4 release is a finger");
+    engine_fingers_set(&fingers, ev.id, ev.down);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    expect(play->runners[0].done == 1, "the real mouse 4 release ends the hold");
+    free(play);
+}
+
 int main(void)
 {
     check_frames();
@@ -493,6 +631,7 @@ int main(void)
     check_swallow();
     check_saved_profile();
     check_once_lock();
+    check_mouse_triggers();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

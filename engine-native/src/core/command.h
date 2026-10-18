@@ -120,9 +120,11 @@ void engine_reap_orphans(struct engine_play *play, const struct engine_live_conf
 /* Empty when disarmed. An armed keyboard trigger is swallowed when the live
    profile focus says so, for software and for a board. That is the AHK $*
    hotkey, and the board low-level hook that still eats the real key.
-   Unmatched focus and the editor pass the key. Pause, left click, and right
-   click are not triggers. Board output is a hid echo, not a pass bit.
-   A once-lock pass count lets that key through. A null play has no pass list. */
+   A mouse trigger is swallowed only in software. Board output passes the
+   click. Unmatched focus and the editor pass the button. Pause is not a
+   trigger. Left, right, middle, and both side buttons are. A once-lock pass
+   count lets that button through. A null play has no pass list and treats
+   output as software. */
 void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_live_config *live,
                         const char *front, const char *owner, int armed,
                         const struct engine_play *play);

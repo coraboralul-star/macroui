@@ -254,6 +254,15 @@ static void check_swap_clicks(void)
     engine_report_send(&report, image->swap_clicks, ops, 4, &count);
     expect(ops[0].id == ENGINE_KEY_MBUTTON, "profile swap leaves middle");
     engine_profile_image_free(image);
+    image = compile("{\"swapClicks\":true,\"macros\":[{\"id\":\"m4\",\"playMode\":\"whileHeld\","
+                    "\"trigger\":{\"kind\":\"side\",\"button\":\"XButton1\"},"
+                    "\"steps\":[{\"type\":\"key\",\"action\":\"down\",\"key\":\"g\"}]}]}");
+    if (image) {
+        expect(image->swap_clicks == 1 && image->flat.count == 1 &&
+                   image->flat.macros[0].trigger == ENGINE_KEY_XBUTTON1,
+               "swap does not remap a mouse trigger");
+        engine_profile_image_free(image);
+    }
 }
 
 static void check_run_and_ignored(void)

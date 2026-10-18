@@ -93,13 +93,13 @@ In order:
 3. Injected input returns the same way. Keyboard flags `0x12`, mouse flags `0x03`.
 4. A board echo that matches a token is consumed, passed through, and not enqueued. The token's window is 150 ms of QPC. The match is this list, not a walk of the profile.
 5. Otherwise resolve the key id, enqueue, and wake if playback asked.
-6. The keyboard hook returns 1 when the published map says swallow. Every other path calls `CallNextHookEx`. The mouse hook never returns 1.
+6. The keyboard hook returns 1 when the published map says swallow. A mouse button returns 1 from that same map, and only software output sets the bit. Board output passes the click. Move and wheel always call `CallNextHookEx`.
 
 Side keys are resolved here. Generic shift, ctrl, alt, and win become the left or right virtual key from the scan code and the extended bit. Right shift is scan `0x36`. Numpad Enter is virtual key `0x0D` with the extended bit, and its key id is 256. Every other key id is the virtual key, 1 through 255. Mouse buttons use the name-table ids 257 through 261. Those ids are not virtual keys.
 
-There is no `RegisterHotKey`. Software swallow and board swallow are both the return from this callback. The pass count is a bit in the same map, published with it.
+There is no `RegisterHotKey`. Software swallow and board swallow are both the return from this callback. The pass count is a bit in the same map, published with it. Mouse buttons use that return for software only. A board passes the trigger click. `SendInput` from this process is echo `0x56454E44` and is not a finger. Injected mouse flags `0x03` are not a finger either.
 
-The hook thread is the thread that installed the hooks, and it is the thread that reinstalls them. Reinstall runs between messages, not inside the callback. Unhook first. A handle Windows has already removed still looks valid.
+The hook thread is the thread that installed the hooks, and it is the thread that reinstalls them. Reinstall runs between messages, not inside the callback. Unhook first. A handle Windows has already removed still looks valid. Playback posts that thread a message whenever it publishes a raise. The keyboard hook is installed with the thread. The mouse hook is not, so a mouse trigger never arrives until that message is posted.
 
 The watchdog rules in the analysis stay. Idle does not re-raise. The stamps live on the hook thread. The decision runs in step 4. That decision is `engine_hook_watch` in `engine-native/src/core/hook.c`. The hook thread reads the raise flags between messages and unhooks before it installs. `engine-native/src/win/hook_win.c` is that install. The resident process starts that thread. The playback thread does not call it.
 

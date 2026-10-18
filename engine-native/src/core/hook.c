@@ -259,8 +259,6 @@ int engine_can_trigger(uint16_t id)
 {
     if (id == 0 || id == ENGINE_KEY_PAUSE)
         return 0;
-    if (id == ENGINE_KEY_LBUTTON || id == ENGINE_KEY_RBUTTON)
-        return 0;
     return 1;
 }
 
@@ -524,8 +522,6 @@ void engine_hook_classify(struct engine_hook_state *st,
         if (atomic_load_explicit(&st->wake_on_input, memory_order_acquire))
             out->wake = 1;
     }
-    if (sample->kind != ENGINE_HOOK_KEY)
-        return;
     bits = swallow_bits(st, id);
     if ((bits & ENGINE_SWALLOW_BIT) && !(bits & ENGINE_PASS_BIT))
         out->swallow = 1;
