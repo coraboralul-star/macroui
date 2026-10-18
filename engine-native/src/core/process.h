@@ -67,7 +67,9 @@ int engine_steps_equal(const int *got, int got_count, const int *want, int want_
 int engine_pipe_kind(const unsigned char *msg, int length);
 
 const unsigned char *engine_ack_command(int *length);
+const unsigned char *engine_ack_profile(int *length);
 const unsigned char *engine_ack_bad_frame(int *length);
 const unsigned char *engine_ack_bad_version(int *length);
+const unsigned char *engine_error_profile_read(int *length);
 
 #endif

@@ -92,10 +92,22 @@ struct engine_live_config {
     char focus_exe[ENGINE_PROFILE_FOCUS_CAP];
 };
 
+#define ENGINE_STATE_RUNNING_CAP 32
+#define ENGINE_STATE_HELD_CAP 64
+
+struct engine_state_row {
+    char id[ENGINE_ID_CAP];
+    char name[ENGINE_PROFILE_NAME_CAP];
+};
+
 struct engine_state_snapshot {
     int armed;
     char active_id[ENGINE_ID_CAP];
     char front[ENGINE_PROFILE_FOCUS_CAP];
+    int running_count;
+    struct engine_state_row running[ENGINE_STATE_RUNNING_CAP];
+    int held_count;
+    uint16_t held[ENGINE_STATE_HELD_CAP];
 };
 
 struct engine_state_slot {
@@ -145,13 +157,24 @@ int engine_profile_slot_fail(struct engine_profile_slot *slot);
 /* ASCII and UTF-8 paths that fopen can open. A missing file is the empty document. */
 int engine_profile_slot_load_file(struct engine_profile_slot *slot, const char *path);
 
+/* Profile frame. 1 when a JSON object was published. 0 applies nothing:
+   a parse failure or a value that is not an object. Does not fail the slot
+   and does not send the profile-read error. That error is the file reload. */
+int engine_profile_slot_apply_document(struct engine_profile_slot *slot, const char *text,
+                                       size_t length);
+
 const char *engine_profile_slot_detail(const struct engine_profile_slot *slot);
 
 void engine_state_slot_init(struct engine_state_slot *slot);
 
-/* Fills the inactive copy, then publishes it. Does not allocate. */
+/* Fills the inactive copy, then publishes it. Does not allocate.
+   Running rows and held ids are cleared. */
 void engine_state_publish(struct engine_state_slot *slot, int armed, const char *active_id,
                           const char *front);
+
+/* Publishes a full snapshot. Caps are the caller's. Does not allocate. */
+void engine_state_publish_snapshot(struct engine_state_slot *slot,
+                                   const struct engine_state_snapshot *snap);
 
 void engine_state_read(const struct engine_state_slot *slot, struct engine_state_snapshot *out);
 

@@ -13,6 +13,21 @@ static const unsigned char k_ack_command[] = {
     0x01, 0x01, 0x00, 0x00
 };
 
+/* ack-profile. ok, which profile, empty error. No id. */
+static const unsigned char k_ack_profile[] = {
+    0x4D, 0x55, 0x49, 0x31, 0x01, 0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x00,
+    0x01, 0x02, 0x00, 0x00
+};
+
+/* error-profile-read. where engine, code profile-read. */
+static const unsigned char k_error_profile[] = {
+    0x4D, 0x55, 0x49, 0x31, 0x01, 0x00, 0x04, 0x00, 0x27, 0x00, 0x00, 0x00,
+    0x01, 0x01, 0x23, 0x00, 0x74, 0x68, 0x65, 0x20, 0x73, 0x61, 0x76, 0x65,
+    0x64, 0x20, 0x70, 0x72, 0x6F, 0x66, 0x69, 0x6C, 0x65, 0x20, 0x63, 0x6F,
+    0x75, 0x6C, 0x64, 0x20, 0x6E, 0x6F, 0x74, 0x20, 0x62, 0x65, 0x20, 0x72,
+    0x65, 0x61, 0x64
+};
+
 /* ack-bad-frame. */
 static const unsigned char k_ack_bad_frame[] = {
     0x4D, 0x55, 0x49, 0x31, 0x01, 0x00, 0x03, 0x00, 0x0D, 0x00, 0x00, 0x00,
@@ -172,6 +187,11 @@ const unsigned char *engine_ack_command(int *length)
     return bytes_of(k_ack_command, (int)sizeof k_ack_command, length);
 }
 
+const unsigned char *engine_ack_profile(int *length)
+{
+    return bytes_of(k_ack_profile, (int)sizeof k_ack_profile, length);
+}
+
 const unsigned char *engine_ack_bad_frame(int *length)
 {
     return bytes_of(k_ack_bad_frame, (int)sizeof k_ack_bad_frame, length);
@@ -180,4 +200,9 @@ const unsigned char *engine_ack_bad_frame(int *length)
 const unsigned char *engine_ack_bad_version(int *length)
 {
     return bytes_of(k_ack_bad_version, (int)sizeof k_ack_bad_version, length);
+}
+
+const unsigned char *engine_error_profile_read(int *length)
+{
+    return bytes_of(k_error_profile, (int)sizeof k_error_profile, length);
 }
