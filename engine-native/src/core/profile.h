@@ -2,6 +2,7 @@
    Playback adopts a newer image and does not allocate.
    Field, AsNum, and AsBool match engine/MacroEngine.ahk.
    priority and variables are kept and not read.
+   swapClicks is read. 1, true, "true", and "1" set it.
    See docs/engine/plan.md. */
 #ifndef ENGINE_PROFILE_H
 #define ENGINE_PROFILE_H
@@ -66,6 +67,7 @@ struct engine_profile_image {
     char name[ENGINE_PROFILE_NAME_CAP];
     char active_id[ENGINE_ID_CAP];
     char focus_exe[ENGINE_PROFILE_FOCUS_CAP];
+    int swap_clicks;
     int has_variables;
     int has_configs;
     struct engine_catalog flat;

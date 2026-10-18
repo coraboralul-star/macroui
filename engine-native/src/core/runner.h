@@ -16,6 +16,10 @@
 #define ENGINE_ID_CAP 64
 #define ENGINE_MUTE_ID_CAP 256
 #define ENGINE_MUTE_SLOT_CAP 64
+#define ENGINE_ONCE_CAP 64
+#define ENGINE_LOCK_NONE 0
+#define ENGINE_LOCK_OPEN 1
+#define ENGINE_LOCK_DONE 2
 #define ENGINE_FINGER_BYTES ((ENGINE_KEY_ID_MAX / 8u) + 1u)
 
 #define ENGINE_MODE_ONCE 0
@@ -306,6 +310,13 @@ struct engine_play {
     int mute_slot_count[ENGINE_MUTE_SLOT_CAP];
     int mute_slot_resume[ENGINE_MUTE_SLOT_CAP];
     int mute_slot_used[ENGINE_MUTE_SLOT_CAP];
+    /* Once-lock. pass_count is how many locks are letting that key through.
+       pauseWatch "once" does not arm a lock. An empty slot has an empty id. */
+    uint8_t pass_count[ENGINE_SWALLOW_IDS];
+    char once_id[ENGINE_ONCE_CAP][ENGINE_ID_CAP];
+    uint16_t once_key[ENGINE_ONCE_CAP];
+    uint8_t once_state[ENGINE_ONCE_CAP];
+    uint8_t once_pass[ENGINE_ONCE_CAP];
 };
 
 void engine_macro_init(struct engine_macro *macro);
@@ -385,6 +396,31 @@ int engine_play_muted(const struct engine_play *play, const char *id);
 
 /* The mute count. 0 when id is not in the table. */
 int engine_play_mute_count(const struct engine_play *play, const char *id);
+
+/* 1 when a runner or a pending runner has this id and is not done. */
+int engine_play_has_runner(const struct engine_play *play, const char *id);
+
+/* ENGINE_LOCK_NONE, OPEN, or DONE. */
+int engine_once_state(const struct engine_play *play, const char *id);
+
+/* 1 when a once-lock is letting this key through. */
+int engine_once_passing(const struct engine_play *play, uint16_t key);
+
+/* Remember id and add one pass for key. A second call for the same id does
+   not add another pass. 0 when the table is full and id is new. */
+int engine_once_ensure(struct engine_play *play, const char *id, uint16_t key);
+
+/* State is OPEN or DONE. A missing id is left missing. */
+void engine_once_set(struct engine_play *play, const char *id, int state);
+
+/* Done. The pass stays until release. */
+void engine_once_spend(struct engine_play *play, const char *id);
+
+/* Drop the pass and the lock for each id. */
+void engine_once_release(struct engine_play *play, const char *const *ids, int count);
+
+/* A done lock with no runner keeps its pass. */
+void engine_once_refresh(struct engine_play *play);
 
 /* mode_override below 0 keeps the macro mode. restart 0 leaves a live id alone.
    Returns 1 when a runner was queued. A full list queues nothing and stops nothing. */

@@ -208,6 +208,54 @@ static void check_blocks(void)
     engine_profile_image_free(image);
 }
 
+static void check_swap_clicks(void)
+{
+    struct engine_profile_image *image;
+    struct engine_report report;
+    struct engine_send_op ops[4];
+    int count = 0;
+    const char *forms[] = {
+        "{\"swapClicks\":true,\"macros\":[]}",
+        "{\"swapClicks\":1,\"macros\":[]}",
+        "{\"swapClicks\":\"true\",\"macros\":[]}",
+        "{\"swapClicks\":\"1\",\"macros\":[]}",
+        "{\"swapClicks\":\" true \",\"macros\":[]}"
+    };
+    int i;
+
+    for (i = 0; i < 5; i++) {
+        image = compile(forms[i]);
+        if (!image)
+            continue;
+        expect(image->swap_clicks == 1, "swapClicks is on");
+        engine_profile_image_free(image);
+    }
+    image = compile("{\"swapClicks\":false,\"macros\":[]}");
+    if (image) {
+        expect(image->swap_clicks == 0, "false leaves clicks alone");
+        engine_profile_image_free(image);
+    }
+    image = compile("{\"macros\":[]}");
+    if (image) {
+        expect(image->swap_clicks == 0, "a missing swapClicks is off");
+        engine_profile_image_free(image);
+    }
+    image = compile("{\"swapClicks\":true,\"macros\":[]}");
+    if (!image)
+        return;
+    engine_report_clear(&report);
+    engine_report_push_down(&report, ENGINE_KEY_LBUTTON);
+    expect(engine_report_send(&report, image->swap_clicks, ops, 4, &count) == 1, "swapped send");
+    expect(count == 1 && ops[0].kind == ENGINE_SEND_BUTTON && ops[0].id == ENGINE_KEY_RBUTTON,
+           "profile swap sends the right button");
+    expect(engine_report_down(&report, 0) == ENGINE_KEY_LBUTTON, "profile swap leaves the image logical");
+    engine_report_clear(&report);
+    engine_report_push_down(&report, ENGINE_KEY_MBUTTON);
+    engine_report_send(&report, image->swap_clicks, ops, 4, &count);
+    expect(ops[0].id == ENGINE_KEY_MBUTTON, "profile swap leaves middle");
+    engine_profile_image_free(image);
+}
+
 static void check_run_and_ignored(void)
 {
     struct engine_profile_image *image;
@@ -383,6 +431,7 @@ int main(void)
     check_values();
     check_steps();
     check_blocks();
+    check_swap_clicks();
     check_run_and_ignored();
     check_live();
     check_swap_and_file();

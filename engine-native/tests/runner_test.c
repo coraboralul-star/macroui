@@ -3117,6 +3117,9 @@ static void check_edge_hold(void)
     expect(runner != NULL && runner->paused == 0 && engine_play_muted(&play, "spam-t") == 0 &&
                engine_play_muted(&play, "other-f") == 0,
            "once leaves tracked macros running with no lock");
+    expect(engine_once_state(&play, "spam-t") == ENGINE_LOCK_NONE &&
+               engine_once_passing(&play, spam.trigger) == 0,
+           "once does not pass the tracked key");
 
     fill_edge(&steps[0], z, 5, 80, 18, 18, 0, ENGINE_IGNORE_OFF, 1, 1, 2);
     steps[1].key = t;
@@ -3143,6 +3146,7 @@ static void check_edge_hold(void)
     runner = live_id(&play, "spam-t");
     expect(runner != NULL && runner->paused && engine_play_muted(&play, "spam-t"),
            "block mutes a tracked macro");
+    expect(engine_once_passing(&play, spam.trigger) == 0, "block keeps the tracked key swallowed");
     runner = live_id(&play, "other-f");
     expect(runner != NULL && runner->paused == 0 && engine_play_muted(&play, "other-f") == 0,
            "block leaves other macros alone");

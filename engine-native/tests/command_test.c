@@ -259,7 +259,7 @@ static void check_swallow(void)
     live.extras = &extra;
     live.macro_count = 1;
 
-    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1);
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, NULL);
     press_key(&hooks, 0x57, 10, &decision);
     expect(decision.swallow == 1 && decision.enqueued == 1,
            "an armed trigger is blocked in notepad");
@@ -267,27 +267,27 @@ static void check_swallow(void)
     expect(decision.swallow == 0 && decision.enqueued == 1,
            "a key that is not the trigger still reaches the app");
 
-    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 0);
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 0, NULL);
     press_key(&hooks, 0x57, 12, &decision);
     expect(decision.swallow == 0, "a disarmed trigger is not blocked");
 
-    engine_arm_swallow(&hooks, &live, "MacroShell.exe", NULL, 1);
+    engine_arm_swallow(&hooks, &live, "MacroShell.exe", NULL, 1, NULL);
     press_key(&hooks, 0x57, 13, &decision);
     expect(decision.swallow == 0, "the editor does not block the trigger");
 
     snprintf(live.focus_exe, sizeof live.focus_exe, "Game.exe");
-    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1);
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, NULL);
     press_key(&hooks, 0x57, 14, &decision);
     expect(decision.swallow == 0, "an unmatched focus does not block the trigger");
 
     live.focus_exe[0] = '\0';
     macro.step_count = 0;
-    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1);
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, NULL);
     press_key(&hooks, 0x57, 15, &decision);
     expect(decision.swallow == 0, "a trigger with no steps is not blocked");
 
     macro.step_count = 1;
-    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1);
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, NULL);
     expect(engine_echo_push(&hooks, 0x57, 1, 1000) == 1, "board echo stored");
     memset(&sample, 0, sizeof sample);
     sample.kind = ENGINE_HOOK_KEY;
@@ -343,10 +343,144 @@ static void check_saved_profile(void)
     expect(saw_r == 1, "the saved macro's trigger is live");
 
     engine_hook_init(&hooks);
-    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1);
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, NULL);
     press_key(&hooks, 0x52, 30, &decision);
     expect(decision.swallow == 1, "the saved trigger is blocked as soon as it is adopted");
     engine_profile_slot_shutdown(&slot);
+}
+
+static void check_once_lock(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_macro macros[2];
+    struct engine_profile_extra extras[2];
+    struct engine_step step;
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    struct engine_hook_state hooks;
+    struct engine_hook_decision decision;
+    const char *shot = "shot";
+    const char *other = "other";
+    const char *ids[2];
+    const char *missing = "nope";
+
+    if (!play) {
+        expect(0, "once play alloc");
+        return;
+    }
+    memset(&step, 0, sizeof step);
+    step.type = ENGINE_STEP_WAIT;
+    step.a = 50;
+    memset(macros, 0, sizeof macros);
+    memset(extras, 0, sizeof extras);
+    memset(&live, 0, sizeof live);
+    engine_play_init(play);
+    engine_macro_init(&macros[0]);
+    engine_macro_init(&macros[1]);
+    snprintf(macros[0].id, sizeof macros[0].id, "shot");
+    snprintf(macros[1].id, sizeof macros[1].id, "other");
+    macros[0].mode = ENGINE_MODE_REPEAT;
+    macros[0].repeat_count = 4;
+    macros[0].trigger = 0x41;
+    macros[0].steps = &step;
+    macros[0].step_count = 1;
+    macros[0].top_count = 1;
+    macros[1].mode = ENGINE_MODE_ONCE;
+    macros[1].trigger = 0x41;
+    macros[1].steps = &step;
+    macros[1].step_count = 1;
+    macros[1].top_count = 1;
+    extras[0].enabled = 1;
+    extras[1].enabled = 1;
+    live.macros = macros;
+    live.extras = extras;
+    live.macro_count = 1;
+
+    engine_hook_init(&hooks);
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, play);
+    press_key(&hooks, 0x41, 1, &decision);
+    expect(decision.swallow == 1, "the trigger is blocked before a lock");
+
+    engine_fingers_clear(&fingers);
+    engine_fingers_set(&fingers, 0x41, 0);
+    ids[0] = shot;
+    engine_once_arm(play, &live, ids, 1, &fingers);
+    expect(engine_once_state(play, "shot") == ENGINE_LOCK_OPEN, "a raised key leaves the lock open");
+    expect(engine_once_passing(play, 0x41) == 1, "an open lock passes the trigger");
+    expect(play->pending_count == 0, "an open lock does not start on a raised key");
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, play);
+    press_key(&hooks, 0x41, 2, &decision);
+    expect(decision.swallow == 0 && decision.enqueued == 1, "a locked trigger reaches the app");
+
+    engine_trigger_init(&mem);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    engine_fingers_set(&fingers, 0x41, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    expect(play->pending_count == 1, "an open lock starts on the down edge");
+    engine_play_flush(play);
+    expect(play->runners[0].mode == ENGINE_MODE_ONCE, "the lock runs a repeat as once");
+    expect(engine_once_state(play, "shot") == ENGINE_LOCK_DONE, "the start spends the lock");
+    expect(engine_once_passing(play, 0x41) == 1, "a spent lock still passes the trigger");
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    expect(play->pending_count == 0 && play->runner_count == 1, "a done lock does not start again");
+
+    ids[0] = shot;
+    engine_once_release(play, ids, 1);
+    expect(engine_once_state(play, "shot") == ENGINE_LOCK_NONE, "release clears the lock");
+    expect(engine_once_passing(play, 0x41) == 0, "release drops the pass");
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, play);
+    press_key(&hooks, 0x41, 3, &decision);
+    expect(decision.swallow == 1, "the trigger is blocked again after release");
+
+    engine_play_init(play);
+    engine_fingers_clear(&fingers);
+    engine_fingers_set(&fingers, 0x41, 1);
+    ids[0] = shot;
+    engine_once_arm(play, &live, ids, 1, &fingers);
+    expect(play->pending_count == 1 && engine_once_state(play, "shot") == ENGINE_LOCK_DONE,
+           "a held key starts once and the lock is done");
+    engine_trigger_init(&mem);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    expect(play->pending_count == 1, "a done lock does not queue a second runner");
+
+    engine_play_init(play);
+    macros[0].mode = ENGINE_MODE_WHILE_HELD;
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    engine_fingers_set(&fingers, 0x41, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    engine_fingers_set(&fingers, 0x41, 0);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    engine_fingers_set(&fingers, 0x41, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    engine_play_flush(play);
+    expect(play->runner_count == 1 && play->runners[0].done == 0, "while held is running before the lock");
+    ids[0] = shot;
+    engine_once_arm(play, &live, ids, 1, &fingers);
+    expect(engine_once_state(play, "shot") == ENGINE_LOCK_DONE && play->runner_count == 1,
+           "a live runner is marked done without a second start");
+    engine_fingers_set(&fingers, 0x41, 0);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    expect(play->runners[0].stopping == 1, "a done while-held lock asks the runner to stop");
+
+    engine_play_init(play);
+    live.macro_count = 2;
+    engine_fingers_clear(&fingers);
+    ids[0] = shot;
+    ids[1] = other;
+    engine_once_arm(play, &live, ids, 2, &fingers);
+    expect(engine_once_passing(play, 0x41) == 1, "two locks on one key still pass it once");
+    engine_once_release(play, ids, 1);
+    expect(engine_once_passing(play, 0x41) == 1, "one remaining lock keeps the pass");
+    engine_once_release(play, &other, 1);
+    expect(engine_once_passing(play, 0x41) == 0, "the last lock drops the pass");
+
+    engine_play_init(play);
+    engine_once_arm(play, &live, &missing, 1, &fingers);
+    expect(engine_once_state(play, "nope") == ENGINE_LOCK_OPEN, "a missing macro can still be locked");
+    expect(engine_once_passing(play, 0x41) == 0, "a missing macro does not pass a key");
+    free(play);
 }
 
 int main(void)
@@ -358,6 +492,7 @@ int main(void)
     check_state();
     check_swallow();
     check_saved_profile();
+    check_once_lock();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

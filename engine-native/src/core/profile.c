@@ -1223,6 +1223,7 @@ int engine_profile_compile(const char *text, size_t length, struct engine_profil
     value_text(json_object_get(&root, "name"), image->name, sizeof image->name);
     value_text(json_object_get(&root, "activeId"), image->active_id, sizeof image->active_id);
     value_text(json_object_get(&root, "focusExe"), image->focus_exe, sizeof image->focus_exe);
+    image->swap_clicks = engine_as_bool(json_object_get(&root, "swapClicks"));
     image->has_variables = json_object_get(&root, "variables") != NULL;
     image->has_configs = configs && configs->kind == JSON_ARRAY && configs->length > 0;
     image->steps = b.steps;

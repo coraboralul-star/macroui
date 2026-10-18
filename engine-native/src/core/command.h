@@ -102,10 +102,17 @@ void engine_trigger_seed(struct engine_trigger_mem *mem, const struct engine_liv
 
 /* First ENGINE_TRIGGER_MEM macros. A tapHold or tapSpam block uses whileHeld
    for the edge. Advanced blocks ask-stop when the release should finish the
-   pass. once-lock is not applied here. */
+   pass. A done once-lock does not start the macro again. An open lock starts
+   it once, then the lock is spent. */
 void engine_poll_triggers(struct engine_play *play, const struct engine_live_config *live,
                           struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
                           const char *front, const char *owner);
+
+/* ArmOnceLock. Each id passes its trigger until release. A live runner is
+   marked done. A finger that is already down starts one play, then done.
+   Anything else stays open. pauseWatch "once" does not call this. */
+void engine_once_arm(struct engine_play *play, const struct engine_live_config *live,
+                     const char *const *ids, int count, const struct engine_fingers *fingers);
 
 /* Mark a runner done when its id is not in the live catalog. */
 void engine_reap_orphans(struct engine_play *play, const struct engine_live_config *live);
@@ -115,9 +122,10 @@ void engine_reap_orphans(struct engine_play *play, const struct engine_live_conf
    hotkey, and the board low-level hook that still eats the real key.
    Unmatched focus and the editor pass the key. Pause, left click, and right
    click are not triggers. Board output is a hid echo, not a pass bit.
-   The once-lock pass list is not applied. */
+   A once-lock pass count lets that key through. A null play has no pass list. */
 void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_live_config *live,
-                        const char *front, const char *owner, int armed);
+                        const char *front, const char *owner, int armed,
+                        const struct engine_play *play);
 
 /* 0 when the frame fits. -1 when cap is too small. Held ids without a name
    are omitted. Window extras past the cap are dropped from the front. */

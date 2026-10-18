@@ -2002,6 +2002,13 @@ static int playing(const struct engine_play *play, const char *id)
     return 0;
 }
 
+int engine_play_has_runner(const struct engine_play *play, const char *id)
+{
+    if (!play || !id || !id[0])
+        return 0;
+    return playing(play, id);
+}
+
 static double raised_speed(double speed)
 {
     if (!isfinite(speed))
@@ -2448,6 +2455,144 @@ int engine_play_publish(struct engine_play *play, int64_t now)
     return engine_report_active(&play->last);
 }
 
+static int once_slot(struct engine_play *play, const char *id, int create)
+{
+    int free_at = -1;
+    int i;
+
+    if (!play || !id || !id[0])
+        return -1;
+    for (i = 0; i < ENGINE_ONCE_CAP; i++) {
+        if (!play->once_id[i][0]) {
+            if (free_at < 0)
+                free_at = i;
+            continue;
+        }
+        if (same_id(play->once_id[i], id))
+            return i;
+    }
+    if (!create || free_at < 0)
+        return -1;
+    copy_id(play->once_id[free_at], id);
+    play->once_key[free_at] = 0;
+    play->once_state[free_at] = ENGINE_LOCK_NONE;
+    play->once_pass[free_at] = 0;
+    return free_at;
+}
+
+static uint16_t once_trigger(const struct engine_play *play, const char *id)
+{
+    int i;
+
+    if (!play || !play->macros || !id)
+        return 0;
+    for (i = 0; i < play->macro_count; i++) {
+        if (same_id(play->macros[i].id, id))
+            return play->macros[i].trigger;
+    }
+    return 0;
+}
+
+int engine_once_state(const struct engine_play *play, const char *id)
+{
+    int i;
+
+    if (!play || !id || !id[0])
+        return ENGINE_LOCK_NONE;
+    for (i = 0; i < ENGINE_ONCE_CAP; i++) {
+        if (play->once_id[i][0] && same_id(play->once_id[i], id))
+            return play->once_state[i];
+    }
+    return ENGINE_LOCK_NONE;
+}
+
+int engine_once_passing(const struct engine_play *play, uint16_t key)
+{
+    if (!play || key == 0 || key > ENGINE_KEY_ID_MAX)
+        return 0;
+    return play->pass_count[key] > 0;
+}
+
+int engine_once_ensure(struct engine_play *play, const char *id, uint16_t key)
+{
+    int at;
+
+    at = once_slot(play, id, 1);
+    if (at < 0)
+        return 0;
+    if (play->once_pass[at])
+        return 1;
+    if (key == 0 || key > ENGINE_KEY_ID_MAX)
+        return 1;
+    play->once_key[at] = key;
+    play->once_pass[at] = 1;
+    if (play->pass_count[key] < 255)
+        play->pass_count[key]++;
+    return 1;
+}
+
+void engine_once_set(struct engine_play *play, const char *id, int state)
+{
+    int at;
+
+    at = once_slot(play, id, 0);
+    if (at < 0)
+        return;
+    if (state != ENGINE_LOCK_OPEN && state != ENGINE_LOCK_DONE)
+        state = ENGINE_LOCK_NONE;
+    play->once_state[at] = (uint8_t)state;
+}
+
+void engine_once_spend(struct engine_play *play, const char *id)
+{
+    engine_once_set(play, id, ENGINE_LOCK_DONE);
+}
+
+void engine_once_release(struct engine_play *play, const char *const *ids, int count)
+{
+    int i;
+
+    if (!play || !ids || count <= 0)
+        return;
+    for (i = 0; i < count; i++) {
+        int at;
+        uint16_t key;
+
+        at = once_slot(play, ids[i], 0);
+        if (at < 0)
+            continue;
+        if (play->once_pass[at]) {
+            key = play->once_key[at];
+            if (key <= ENGINE_KEY_ID_MAX && play->pass_count[key] > 0)
+                play->pass_count[key]--;
+        }
+        play->once_id[at][0] = '\0';
+        play->once_key[at] = 0;
+        play->once_state[at] = ENGINE_LOCK_NONE;
+        play->once_pass[at] = 0;
+    }
+}
+
+void engine_once_refresh(struct engine_play *play)
+{
+    int i;
+
+    if (!play)
+        return;
+    for (i = 0; i < ENGINE_ONCE_CAP; i++) {
+        uint16_t key;
+
+        if (!play->once_id[i][0] || play->once_state[i] != ENGINE_LOCK_DONE)
+            continue;
+        if (engine_play_has_runner(play, play->once_id[i]))
+            continue;
+        key = play->once_key[i];
+        if (key == 0)
+            key = once_trigger(play, play->once_id[i]);
+        engine_once_ensure(play, play->once_id[i], key);
+    }
+}
+
 void engine_play_remove_done(struct engine_play *play)
 {
     int write;
@@ -2464,6 +2609,7 @@ void engine_play_remove_done(struct engine_play *play)
         write++;
     }
     play->runner_count = write;
+    engine_once_refresh(play);
 }
 
 void engine_play_stop(struct engine_play *play, const char *id)

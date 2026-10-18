@@ -274,6 +274,32 @@ static int holds_on_release(const struct engine_macro *macro, int spam, int tap)
     return macro && (macro->mode == ENGINE_MODE_WHILE_HELD || macro->mode == ENGINE_MODE_TOGGLE);
 }
 
+static const struct engine_macro *find_macro(const struct engine_live_config *live, const char *id)
+{
+    int i;
+
+    if (!live || !live->macros || !id || !id[0])
+        return NULL;
+    for (i = 0; i < live->macro_count; i++) {
+        if (same_id(live->macros[i].id, id))
+            return &live->macros[i];
+    }
+    return NULL;
+}
+
+/* StartOncePlay. whileHeld and toggle keep the macro mode. Other modes run once. */
+static int once_start(struct engine_play *play, const struct engine_macro *macro)
+{
+    int spam = 0;
+    int tap = 0;
+    int edge = has_edge(macro, &spam, &tap);
+    int mode = edge ? ENGINE_MODE_WHILE_HELD : (macro ? macro->mode : ENGINE_MODE_ONCE);
+    int override = (mode == ENGINE_MODE_WHILE_HELD || mode == ENGINE_MODE_TOGGLE) ? -1
+                                                                                   : ENGINE_MODE_ONCE;
+
+    return engine_play_start(play, macro, override, 1);
+}
+
 static const char *macro_focus(const struct engine_live_config *live, int index)
 {
     if (live && live->extras && live->extras[index].focus_exe[0])
@@ -337,6 +363,7 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
         int down;
         int was;
         int running;
+        int once;
         int action;
 
         if (!macro->id[0])
@@ -351,18 +378,73 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
             continue;
         }
         running = runner_live(play, macro->id);
+        once = engine_once_state(play, macro->id);
+        if (once == ENGINE_LOCK_DONE) {
+            if (running) {
+                if (!down && mode == ENGINE_MODE_WHILE_HELD)
+                    engine_play_ask_stop(play, macro->id);
+            } else {
+                engine_once_ensure(play, macro->id, macro->trigger);
+            }
+            continue;
+        }
         if (macro->advanced && mode != ENGINE_MODE_ON_RELEASE) {
-            if (down && !was)
-                engine_play_start(play, macro, -1, 1);
-            else if (!down && running && holds_on_release(macro, spam, tap))
+            if (down && !was) {
+                if (once == ENGINE_LOCK_OPEN)
+                    once_start(play, macro);
+                else
+                    engine_play_start(play, macro, -1, 1);
+                if (once == ENGINE_LOCK_OPEN)
+                    engine_once_spend(play, macro->id);
+            } else if (!down && running && once != ENGINE_LOCK_OPEN &&
+                       holds_on_release(macro, spam, tap)) {
                 engine_play_ask_stop(play, macro->id);
+            }
             continue;
         }
         action = engine_trigger_action(mode, down, was, running);
-        if (action == ENGINE_TRIGGER_START)
-            engine_play_start(play, macro, edge ? ENGINE_MODE_WHILE_HELD : -1, 1);
-        else if (action == ENGINE_TRIGGER_STOP)
+        if (action == ENGINE_TRIGGER_START) {
+            if (once == ENGINE_LOCK_OPEN)
+                once_start(play, macro);
+            else
+                engine_play_start(play, macro, edge ? ENGINE_MODE_WHILE_HELD : -1, 1);
+            if (once == ENGINE_LOCK_OPEN)
+                engine_once_spend(play, macro->id);
+        } else if (action == ENGINE_TRIGGER_STOP) {
             engine_play_stop(play, macro->id);
+        }
+    }
+}
+
+void engine_once_arm(struct engine_play *play, const struct engine_live_config *live,
+                     const char *const *ids, int count, const struct engine_fingers *fingers)
+{
+    int i;
+
+    if (!play || !ids || count <= 0)
+        return;
+    for (i = 0; i < count; i++) {
+        const char *id = ids[i];
+        const struct engine_macro *macro;
+        uint16_t key = 0;
+
+        if (!id || !id[0])
+            continue;
+        macro = find_macro(live, id);
+        if (macro)
+            key = macro->trigger;
+        if (!engine_once_ensure(play, id, key))
+            continue;
+        if (engine_play_has_runner(play, id)) {
+            engine_once_set(play, id, ENGINE_LOCK_DONE);
+            continue;
+        }
+        if (macro && key && engine_fingers_down(fingers, key)) {
+            once_start(play, macro);
+            engine_once_set(play, id, ENGINE_LOCK_DONE);
+            continue;
+        }
+        engine_once_set(play, id, ENGINE_LOCK_OPEN);
     }
 }
 
@@ -392,7 +474,8 @@ void engine_reap_orphans(struct engine_play *play, const struct engine_live_conf
 }
 
 void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_live_config *live,
-                        const char *front, const char *owner, int armed)
+                        const char *front, const char *owner, int armed,
+                        const struct engine_play *play)
 {
     uint8_t *bits;
     uint8_t swallow[ENGINE_SWALLOW_IDS];
@@ -426,9 +509,12 @@ void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_liv
         }
     }
     for (i = 0; i < ENGINE_SWALLOW_IDS; i++) {
-        if (!swallow[i])
-            continue;
-        engine_swallow_set(bits, (uint16_t)i, 1, 0);
+        int pass = play && play->pass_count[i] > 0;
+
+        if (pass)
+            engine_swallow_set(bits, (uint16_t)i, 0, 1);
+        else if (swallow[i])
+            engine_swallow_set(bits, (uint16_t)i, 1, 0);
     }
     engine_swallow_publish(hooks);
 }

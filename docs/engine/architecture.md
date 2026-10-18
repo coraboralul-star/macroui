@@ -286,7 +286,7 @@ Linux prints `macroui-engine 0` and exits 0. Windows does that for `--self-test`
 | #48 | Process lifecycle is the Windows entry in `src/win/win_entry.c`. Single instance is `Local\MacroUI.Engine`. Exit releases keys, then unhooks, then closes the timer, the pipe, and the mutex. The shell adopts the native pid. |
 | #49 | Fake-clock harness is `tests/runner_test.c`. Windows CI runs the AHK `--self-test`. The trace corpus is `bench/`. Diffs against AHK are empty. |
 | #50 | Shell switch. `shell/EngineLink.cs` speaks JSON to AutoHotkey and frames to the native engine. One engine at a time. Two native start failures fall back to AutoHotkey. |
-| #70 | Native applies `start`, `stop`, `reload`, `profile`, and `output`. `start` arms. Triggers start runners. State carries running rows, held names, and windows. `swapClicks` and the once-lock pass list stay out. |
+| #70 | Native applies `start`, `stop`, `reload`, `profile`, and `output`. `start` arms. Triggers start runners. State carries running rows, held names, and windows. `swapClicks` swaps software buttons. The once-lock pass list is consulted, and `pauseWatch` `"once"` does not fill it. |
 | #54 | Native becomes the default, then AHK leaves. |
 
 Block ideas stay out. `priority` and `variables` stay stored and ignored.
