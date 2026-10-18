@@ -458,18 +458,25 @@ public partial class MainWindow : Window
                 return;
             }
             RememberSwap(profile);
+            string json;
             try
             {
-                WriteProfileFile(profile.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                json = profile.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+                WriteProfileFile(json);
             }
             catch
             {
                 SendToPage(ErrorJson("shell", "profile-write", "could not save the profile to disk"));
                 return;
             }
-            // The engine re-reads the file. Piping the whole profile parsed it on
-            // the hook thread, and a long stall there makes Windows drop the hook.
-            _ = WriteCommand("reload");
+            // AutoHotkey re-reads the file. The document itself is not piped
+            // there: parsing it on the hook thread makes Windows drop the hook.
+            // Native parses on the IPC thread, then playback adopts that image
+            // on the next tick. A reload would race the file replace.
+            if (_wire == "native")
+                _ = WriteNativeSavedProfile(json);
+            else
+                _ = WriteCommand("reload");
             return;
         }
         if (type == "command")
@@ -618,6 +625,20 @@ public partial class MainWindow : Window
         if (inbound.State)
             _lastState = inbound.Json;
         SendToPage(inbound.Json);
+    }
+
+    async Task WriteNativeSavedProfile(string json)
+    {
+        var bytes = new UTF8Encoding(false).GetBytes(json);
+        try
+        {
+            await WritePipeBytes(EngineLink.Profile(bytes)).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log("native profile " + ex.Message);
+            await WritePipeBytes(EngineLink.Command("reload")).ConfigureAwait(false);
+        }
     }
 
     async Task WriteCommand(string action, string? ahkJson = null)

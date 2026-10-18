@@ -392,11 +392,11 @@ void engine_reap_orphans(struct engine_play *play, const struct engine_live_conf
 }
 
 void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_live_config *live,
-                        const char *front, const char *owner, int armed, int board)
+                        const char *front, const char *owner, int armed)
 {
     uint8_t *bits;
     uint8_t swallow[ENGINE_SWALLOW_IDS];
-    uint8_t pass[ENGINE_SWALLOW_IDS];
+    int focus_ok = 0;
     int i;
 
     if (!hooks)
@@ -405,15 +405,14 @@ void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_liv
     if (!bits)
         return;
     memset(swallow, 0, sizeof swallow);
-    memset(pass, 0, sizeof pass);
+    /* SwallowTriggers is the live profile focus, not each macro's focusExe.
+       A macro can run on its own focus while the key still passes. */
     if (armed && live && live->macros && live->macro_count > 0) {
         int n = live->macro_count;
 
+        focus_ok = engine_focus_swallow(live->focus_exe, front, owner);
         for (i = 0; i < n; i++) {
             const struct engine_macro *macro = &live->macros[i];
-            struct engine_swallow_rule rule;
-            int do_swallow = 0;
-            int do_pass = 0;
             uint16_t id = macro->trigger;
 
             if (!macro_enabled(live, i))
@@ -422,21 +421,14 @@ void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_liv
                 continue;
             if (!engine_can_trigger(id))
                 continue;
-            memset(&rule, 0, sizeof rule);
-            rule.is_trigger = 1;
-            rule.focus_ok = engine_focus_swallow(macro_focus(live, i), front, owner);
-            rule.pass = board ? 1 : 0;
-            engine_swallow_for_trigger(&rule, &do_swallow, &do_pass);
-            if (do_swallow)
+            if (focus_ok)
                 swallow[id] = 1;
-            if (do_pass)
-                pass[id] = 1;
         }
     }
     for (i = 0; i < ENGINE_SWALLOW_IDS; i++) {
-        if (!swallow[i] && !pass[i])
+        if (!swallow[i])
             continue;
-        engine_swallow_set(bits, (uint16_t)i, swallow[i], pass[i] && !swallow[i]);
+        engine_swallow_set(bits, (uint16_t)i, 1, 0);
     }
     engine_swallow_publish(hooks);
 }

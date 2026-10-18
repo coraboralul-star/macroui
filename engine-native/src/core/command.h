@@ -110,10 +110,14 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
 /* Mark a runner done when its id is not in the live catalog. */
 void engine_reap_orphans(struct engine_play *play, const struct engine_live_config *live);
 
-/* Empty when disarmed. Board mode sets the pass bit. Software swallows a
-   focused trigger. Pause, left click, and right click are not triggers. */
+/* Empty when disarmed. An armed keyboard trigger is swallowed when the live
+   profile focus says so, for software and for a board. That is the AHK $*
+   hotkey, and the board low-level hook that still eats the real key.
+   Unmatched focus and the editor pass the key. Pause, left click, and right
+   click are not triggers. Board output is a hid echo, not a pass bit.
+   The once-lock pass list is not applied. */
 void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_live_config *live,
-                        const char *front, const char *owner, int armed, int board);
+                        const char *front, const char *owner, int armed);
 
 /* 0 when the frame fits. -1 when cap is too small. Held ids without a name
    are omitted. Window extras past the cap are dropped from the front. */

@@ -225,6 +225,130 @@ static void check_state(void)
     expect(n == (int)sizeof sample && memcmp(buf, sample, sizeof sample) == 0, "state sample");
 }
 
+static void press_key(struct engine_hook_state *st, uint32_t vk, int64_t now,
+                      struct engine_hook_decision *out)
+{
+    struct engine_hook_sample sample;
+
+    memset(&sample, 0, sizeof sample);
+    sample.kind = ENGINE_HOOK_KEY;
+    sample.msg = ENGINE_MSG_KEYDOWN;
+    sample.vk = vk;
+    sample.now = now;
+    engine_hook_classify(st, &sample, out);
+}
+
+static void check_swallow(void)
+{
+    struct engine_hook_state hooks;
+    struct engine_macro macro;
+    struct engine_profile_extra extra;
+    struct engine_live_config live;
+    struct engine_hook_decision decision;
+    struct engine_hook_sample sample;
+
+    engine_hook_init(&hooks);
+    engine_macro_init(&macro);
+    memset(&extra, 0, sizeof extra);
+    memset(&live, 0, sizeof live);
+    snprintf(macro.id, sizeof macro.id, "w");
+    macro.trigger = 0x57;
+    macro.step_count = 1;
+    extra.enabled = 1;
+    live.macros = &macro;
+    live.extras = &extra;
+    live.macro_count = 1;
+
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1);
+    press_key(&hooks, 0x57, 10, &decision);
+    expect(decision.swallow == 1 && decision.enqueued == 1,
+           "an armed trigger is blocked in notepad");
+    press_key(&hooks, 0x47, 11, &decision);
+    expect(decision.swallow == 0 && decision.enqueued == 1,
+           "a key that is not the trigger still reaches the app");
+
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 0);
+    press_key(&hooks, 0x57, 12, &decision);
+    expect(decision.swallow == 0, "a disarmed trigger is not blocked");
+
+    engine_arm_swallow(&hooks, &live, "MacroShell.exe", NULL, 1);
+    press_key(&hooks, 0x57, 13, &decision);
+    expect(decision.swallow == 0, "the editor does not block the trigger");
+
+    snprintf(live.focus_exe, sizeof live.focus_exe, "Game.exe");
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1);
+    press_key(&hooks, 0x57, 14, &decision);
+    expect(decision.swallow == 0, "an unmatched focus does not block the trigger");
+
+    live.focus_exe[0] = '\0';
+    macro.step_count = 0;
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1);
+    press_key(&hooks, 0x57, 15, &decision);
+    expect(decision.swallow == 0, "a trigger with no steps is not blocked");
+
+    macro.step_count = 1;
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1);
+    expect(engine_echo_push(&hooks, 0x57, 1, 1000) == 1, "board echo stored");
+    memset(&sample, 0, sizeof sample);
+    sample.kind = ENGINE_HOOK_KEY;
+    sample.msg = ENGINE_MSG_KEYDOWN;
+    sample.vk = 0x57;
+    sample.now = 20;
+    engine_hook_classify(&hooks, &sample, &decision);
+    expect(decision.swallow == 0 && decision.enqueued == 0,
+           "a board echo of the trigger key passes and is not a finger");
+}
+
+static void check_saved_profile(void)
+{
+    static const char *first =
+        "{\"version\":1,\"name\":\"Default\",\"variables\":{},\"macros\":["
+        "{\"id\":\"w\",\"name\":\"W\",\"enabled\":true,\"playMode\":\"whileHeld\","
+        "\"trigger\":{\"kind\":\"key\",\"button\":\"w\"},"
+        "\"steps\":[{\"type\":\"key\",\"action\":\"down\",\"key\":\"g\"}]}]}";
+    static const char *saved =
+        "{\"version\":1,\"name\":\"Default\",\"variables\":{},\"macros\":["
+        "{\"id\":\"w\",\"name\":\"W\",\"enabled\":true,\"playMode\":\"whileHeld\","
+        "\"trigger\":{\"kind\":\"key\",\"button\":\"w\"},"
+        "\"steps\":[{\"type\":\"key\",\"action\":\"down\",\"key\":\"g\"}]},"
+        "{\"id\":\"r\",\"name\":\"R\",\"enabled\":true,\"playMode\":\"once\","
+        "\"trigger\":{\"kind\":\"key\",\"button\":\"r\"},"
+        "\"steps\":[{\"type\":\"key\",\"action\":\"down\",\"key\":\"a\"}]}]}";
+    struct engine_profile_slot slot;
+    struct engine_live_config live;
+    struct engine_hook_state hooks;
+    struct engine_hook_decision decision;
+    const struct engine_profile_image *image;
+    int saw_r = 0;
+    int i;
+
+    engine_profile_slot_init(&slot);
+    expect(engine_profile_slot_apply_document(&slot, first, strlen(first)) == 1,
+           "the first profile publishes");
+    image = engine_profile_slot_adopt(&slot);
+    engine_profile_pick(image, "notepad.exe", "", &live);
+    expect(live.macro_count == 1 && live.macros && live.macros[0].trigger == 0x57,
+           "playback adopts the trigger on w");
+
+    expect(engine_profile_slot_apply_document(&slot, saved, strlen(saved)) == 1,
+           "a saved profile publishes");
+    image = engine_profile_slot_adopt(&slot);
+    expect(image && image->sequence == 2, "the save is the next image");
+    engine_profile_pick(image, "notepad.exe", image->active_id, &live);
+    expect(live.macro_count == 2, "playback adopts the saved macro");
+    for (i = 0; i < live.macro_count; i++) {
+        if (live.macros[i].trigger == 0x52)
+            saw_r = 1;
+    }
+    expect(saw_r == 1, "the saved macro's trigger is live");
+
+    engine_hook_init(&hooks);
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1);
+    press_key(&hooks, 0x52, 30, &decision);
+    expect(decision.swallow == 1, "the saved trigger is blocked as soon as it is adopted");
+    engine_profile_slot_shutdown(&slot);
+}
+
 int main(void)
 {
     check_frames();
@@ -232,6 +356,8 @@ int main(void)
     check_actions();
     check_poll();
     check_state();
+    check_swallow();
+    check_saved_profile();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

@@ -704,20 +704,40 @@ static int load_resident_profile(void)
     return rc;
 }
 
-static void send_play_report(const struct engine_report *report, int mode)
+/* Pico keys have no dwExtraInfo. A 150 ms token lets that tap through and
+   keeps it from counting as the finger. A real trigger is not in this list. */
+static void note_board_echo(const struct engine_report *report, int64_t now)
+{
+    struct engine_report_echo echo[64];
+    int64_t freq;
+    int64_t until;
+    int n;
+    int i;
+
+    if (!report)
+        return;
+    freq = g.clock.qpc_freq > 0 ? g.clock.qpc_freq : 1000;
+    until = now + engine_ms_to_ticks(150, freq);
+    n = engine_report_echoes(report, echo, 64);
+    for (i = 0; i < n; i++)
+        engine_echo_push(&g.hooks, echo[i].id, echo[i].down != 0, until);
+}
+
+static void send_play_report(const struct engine_report *report, int mode, int64_t now)
 {
     if (!g.play || !report || !engine_report_active(report))
         return;
     if (mode == ENGINE_OUTPUT_SOFTWARE)
         engine_win_send_report(report, g.play->output.swap_clicks);
     else {
+        note_board_echo(report, now);
         engine_report_slot_publish(&g.reports, report);
         if (g.ipc_wake)
             SetEvent(g.ipc_wake);
     }
 }
 
-static void apply_commands(void)
+static void apply_commands(int64_t now)
 {
     struct engine_cmd_item item;
 
@@ -746,7 +766,7 @@ static void apply_commands(void)
             int sent = ENGINE_OUTPUT_SOFTWARE;
 
             if (engine_output_set_mode(&g.play->output, item.mode, &release, &rebind, &sent))
-                send_play_report(&release, sent);
+                send_play_report(&release, sent, now);
         }
     }
 }
@@ -919,17 +939,16 @@ static void playback_tick(int64_t now)
     pointer.client_y = focus.client_y;
     engine_play_set_pointer(g.play, &pointer);
 
-    apply_commands();
+    apply_commands(now);
     watch_hooks(now);
     drain_fingers();
     engine_play_set_fingers(g.play, &g.fingers);
     if (g.armed)
         engine_poll_triggers(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner);
     engine_play_tick(g.play, now);
-    send_play_report(&g.play->last, g.play->output.mode);
+    send_play_report(&g.play->last, g.play->output.mode, now);
     publish_play_state(&live, &focus);
-    engine_arm_swallow(&g.hooks, &live, focus.name, focus.owner, g.armed,
-                       g.play->output.mode != ENGINE_OUTPUT_SOFTWARE);
+    engine_arm_swallow(&g.hooks, &live, focus.name, focus.owner, g.armed);
     engine_hook_set_wake(&g.hooks, g.armed || engine_play_alive(g.play) > 0 || g.play->pending_count > 0);
 }
 
