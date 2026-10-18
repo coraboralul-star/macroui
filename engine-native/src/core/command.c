@@ -371,6 +371,8 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
         down = engine_fingers_down(fingers, macro->trigger);
         was = mem->prev[i] ? 1 : 0;
         mem->prev[i] = (uint8_t)(down ? 1 : 0);
+        if (!engine_can_trigger(macro->trigger))
+            continue;
         if (engine_play_muted(play, macro->id))
             continue;
         if (!macro_enabled(live, i) || !engine_focus_swallow(macro_focus(live, i), front, owner)) {
@@ -439,7 +441,7 @@ void engine_once_arm(struct engine_play *play, const struct engine_live_config *
             engine_once_set(play, id, ENGINE_LOCK_DONE);
             continue;
         }
-        if (macro && key && engine_fingers_down(fingers, key)) {
+        if (macro && key && engine_can_trigger(key) && engine_fingers_down(fingers, key)) {
             once_start(play, macro);
             engine_once_set(play, id, ENGINE_LOCK_DONE);
             continue;
@@ -505,8 +507,8 @@ void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_liv
             if (!engine_can_trigger(id))
                 continue;
             /* Keyboard triggers are swallowed for software and for a board.
-               A mouse trigger is the AHK hotkey: software eats the click,
-               and a board lets it through. Left and right are included. */
+               Middle and both side buttons are swallowed only in software.
+               A board lets those clicks through. Left and right never reach here. */
             if (focus_ok &&
                 (!engine_is_mouse_button(id) || !play ||
                  play->output.mode == ENGINE_OUTPUT_SOFTWARE))

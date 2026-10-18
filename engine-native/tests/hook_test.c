@@ -80,8 +80,8 @@ static void check_trigger_rules(void)
     expect(engine_can_trigger(0x42) == 1, "a letter can trigger");
     expect(engine_can_trigger(ENGINE_KEY_MBUTTON) == 1, "middle can trigger");
     expect(engine_can_trigger(ENGINE_KEY_XBUTTON1) == 1, "side button can trigger");
-    expect(engine_can_trigger(ENGINE_KEY_LBUTTON) == 1, "left click can trigger");
-    expect(engine_can_trigger(ENGINE_KEY_RBUTTON) == 1, "right click can trigger");
+    expect(engine_can_trigger(ENGINE_KEY_LBUTTON) == 0, "left click is not a trigger");
+    expect(engine_can_trigger(ENGINE_KEY_RBUTTON) == 0, "right click is not a trigger");
     expect(engine_can_trigger(ENGINE_KEY_XBUTTON2) == 1, "second side button can trigger");
     expect(engine_can_trigger(ENGINE_KEY_PAUSE) == 0, "pause is not a trigger");
     expect(engine_panic_edge(ENGINE_KEY_PAUSE, 0, 1) == 1, "pause down is panic");
@@ -310,13 +310,23 @@ static void check_classify(void)
 
     bits = engine_swallow_begin(&state);
     engine_swallow_set(bits, ENGINE_KEY_LBUTTON, 1, 0);
+    engine_swallow_set(bits, ENGINE_KEY_RBUTTON, 1, 0);
+    engine_swallow_set(bits, ENGINE_KEY_MBUTTON, 1, 0);
     engine_swallow_publish(&state);
     sample.msg = ENGINE_MSG_LBUTTONDOWN;
     sample.now = 100;
     engine_hook_classify(&state, &sample, &decision);
-    expect(decision.swallow == 1 && decision.enqueued == 1, "a mapped mouse button is swallowed");
+    expect(decision.swallow == 0 && decision.enqueued == 1, "left click always passes");
     expect(pop_id(&finger) == 1 && finger.id == ENGINE_KEY_LBUTTON && finger.down == 1,
            "left button queued");
+    sample.msg = ENGINE_MSG_RBUTTONDOWN;
+    engine_hook_classify(&state, &sample, &decision);
+    expect(decision.swallow == 0 && decision.enqueued == 1, "right click always passes");
+    pop_id(&finger);
+    sample.msg = ENGINE_MSG_MBUTTONDOWN;
+    engine_hook_classify(&state, &sample, &decision);
+    expect(decision.swallow == 1 && decision.enqueued == 1, "a mapped middle click is swallowed");
+    pop_id(&finger);
     expect(atomic_load_explicit(&state.mouse_stamp, memory_order_acquire) == 100,
            "a button marks the mouse hook");
 

@@ -509,11 +509,12 @@ static void press_button(struct engine_hook_state *st, uint16_t id, int down, ui
 
 static void check_mouse_triggers(void)
 {
-    static const uint16_t ids[] = {
-        ENGINE_KEY_LBUTTON, ENGINE_KEY_RBUTTON, ENGINE_KEY_MBUTTON,
-        ENGINE_KEY_XBUTTON1, ENGINE_KEY_XBUTTON2
+    static const uint16_t triggers[] = {
+        ENGINE_KEY_MBUTTON, ENGINE_KEY_XBUTTON1, ENGINE_KEY_XBUTTON2
     };
-    static const char *names[] = { "left", "right", "middle", "mouse 4", "mouse 5" };
+    static const char *trigger_names[] = { "middle", "mouse 4", "mouse 5" };
+    static const uint16_t passed[] = { ENGINE_KEY_LBUTTON, ENGINE_KEY_RBUTTON };
+    static const char *passed_names[] = { "left", "right" };
     struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
     struct engine_macro macro;
     struct engine_profile_extra extra;
@@ -542,45 +543,72 @@ static void check_mouse_triggers(void)
     live.extras = &extra;
     live.macro_count = 1;
 
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < 3; i++) {
         engine_play_init(play);
         engine_trigger_init(&mem);
         engine_fingers_clear(&fingers);
-        macro.trigger = ids[i];
-        engine_fingers_set(&fingers, ids[i], 1);
+        macro.trigger = triggers[i];
+        engine_fingers_set(&fingers, triggers[i], 1);
         engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
-        snprintf(label, sizeof label, "%s held at arm does not start", names[i]);
+        snprintf(label, sizeof label, "%s held at arm does not start", trigger_names[i]);
         expect(play->pending_count == 0, label);
-        engine_fingers_set(&fingers, ids[i], 0);
+        engine_fingers_set(&fingers, triggers[i], 0);
         engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
-        engine_fingers_set(&fingers, ids[i], 1);
+        engine_fingers_set(&fingers, triggers[i], 1);
         engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
-        snprintf(label, sizeof label, "%s while held starts on the down edge", names[i]);
+        snprintf(label, sizeof label, "%s while held starts on the down edge", trigger_names[i]);
         expect(play->pending_count == 1, label);
         engine_play_flush(play);
-        engine_fingers_set(&fingers, ids[i], 0);
+        engine_fingers_set(&fingers, triggers[i], 0);
         engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
-        snprintf(label, sizeof label, "%s while held stops when the finger comes up", names[i]);
+        snprintf(label, sizeof label, "%s while held stops when the finger comes up", trigger_names[i]);
         expect(play->runners[0].done == 1, label);
+    }
+
+    for (i = 0; i < 2; i++) {
+        const char *id = "click";
+
+        engine_play_init(play);
+        engine_trigger_init(&mem);
+        engine_fingers_clear(&fingers);
+        macro.trigger = passed[i];
+        engine_fingers_set(&fingers, passed[i], 0);
+        engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+        engine_fingers_set(&fingers, passed[i], 1);
+        engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+        snprintf(label, sizeof label, "%s never starts a macro", passed_names[i]);
+        expect(play->pending_count == 0 && play->runner_count == 0, label);
+        engine_once_arm(play, &live, &id, 1, &fingers);
+        snprintf(label, sizeof label, "a held %s does not arm a play", passed_names[i]);
+        expect(play->pending_count == 0, label);
     }
 
     engine_hook_init(&hooks);
     play->output.mode = ENGINE_OUTPUT_SOFTWARE;
-    for (i = 0; i < 5; i++) {
-        macro.trigger = ids[i];
+    for (i = 0; i < 3; i++) {
+        macro.trigger = triggers[i];
         engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, play);
-        press_button(&hooks, ids[i], 1, 0, 0, 40 + i, &decision);
-        snprintf(label, sizeof label, "software swallows %s", names[i]);
+        press_button(&hooks, triggers[i], 1, 0, 0, 40 + i, &decision);
+        snprintf(label, sizeof label, "software swallows %s", trigger_names[i]);
         expect(decision.swallow == 1 && decision.enqueued == 1, label);
-        expect(engine_event_pop(&hooks, &ev) == 1 && ev.id == ids[i], "the swallowed click is still a finger");
+        expect(engine_event_pop(&hooks, &ev) == 1 && ev.id == triggers[i],
+               "the swallowed click is still a finger");
+    }
+    for (i = 0; i < 2; i++) {
+        macro.trigger = passed[i];
+        engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, play);
+        press_button(&hooks, passed[i], 1, 0, 0, 46 + i, &decision);
+        snprintf(label, sizeof label, "software passes %s", passed_names[i]);
+        expect(decision.swallow == 0 && decision.enqueued == 1, label);
+        engine_event_pop(&hooks, &ev);
     }
 
     play->output.mode = ENGINE_OUTPUT_RP2350;
-    for (i = 0; i < 5; i++) {
-        macro.trigger = ids[i];
+    for (i = 0; i < 3; i++) {
+        macro.trigger = triggers[i];
         engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, play);
-        press_button(&hooks, ids[i], 1, 0, 0, 50 + i, &decision);
-        snprintf(label, sizeof label, "a board passes %s", names[i]);
+        press_button(&hooks, triggers[i], 1, 0, 0, 50 + i, &decision);
+        snprintf(label, sizeof label, "a board passes %s", trigger_names[i]);
         expect(decision.swallow == 0 && decision.enqueued == 1, label);
         engine_event_pop(&hooks, &ev);
     }

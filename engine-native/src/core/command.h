@@ -121,8 +121,9 @@ void engine_reap_orphans(struct engine_play *play, const struct engine_live_conf
    profile focus says so, for software and for a board. That is the AHK $*
    hotkey, and the board low-level hook that still eats the real key.
    A mouse trigger is swallowed only in software. Board output passes the
-   click. Unmatched focus and the editor pass the button. Pause is not a
-   trigger. Left, right, middle, and both side buttons are. A once-lock pass
+   click. Unmatched focus and the editor pass the button. Pause, left click,
+   and right click are not triggers, so those clicks always pass and never
+   start a macro. Middle and both side buttons are triggers. A once-lock pass
    count lets that button through. A null play has no pass list and treats
    output as software. */
 void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_live_config *live,
