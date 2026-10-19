@@ -580,21 +580,25 @@ void engine_hook_watch(const struct engine_hook_watch_in *in,
 
     key_stamp = in->key_stamp;
     mouse_stamp = in->mouse_stamp;
-    if (in->need_mouse && !in->mouse_installed) {
+    /* A missing mouse hook is not proof the thread is alive. Do not let that
+       pretend-fresh stamp keep a dead keyboard hook from coming back. */
+    if (in->need_mouse && !in->mouse_installed)
         push_op(out, ENGINE_HOOK_RAISE_MOUSE);
-        mouse_stamp = in->now;
-    }
+    else if (!in->need_mouse && in->mouse_installed)
+        push_op(out, ENGINE_HOOK_RAISE_MOUSE);
     if (key_stamp == 0)
         key_stamp = in->now;
     if (mouse_stamp == 0)
         mouse_stamp = in->now;
 
-    /* CheckPhysicalHook passes armed as true once the idle return is past. */
-    if (engine_needs_key_raise(key_stamp, mouse_stamp, in->need_mouse, 1,
+    /* CheckPhysicalHook passes armed as true once the idle return is past.
+       Mouse activity keeps the keyboard hook only while that mouse hook is up. */
+    if (engine_needs_key_raise(key_stamp, mouse_stamp,
+                               in->need_mouse && in->mouse_installed, 1,
                                in->now, in->silence))
         push_op(out, ENGINE_HOOK_RAISE_KEY);
-    if (engine_needs_mouse_raise(mouse_stamp, in->need_mouse, 1,
-                                 in->now, in->silence))
+    if (in->mouse_installed &&
+        engine_needs_mouse_raise(mouse_stamp, in->need_mouse, 1, in->now, in->silence))
         push_op(out, ENGINE_HOOK_RAISE_MOUSE);
 }
 

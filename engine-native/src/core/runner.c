@@ -2224,6 +2224,69 @@ int engine_fingers_down(const struct engine_fingers *fingers, uint16_t id)
     return (fingers->down[id / 8u] >> (id % 8u)) & 1;
 }
 
+void engine_finger_at_touch(int64_t *at, int count, uint16_t id, int64_t now)
+{
+    if (!at || id == 0 || (int)id >= count)
+        return;
+    at[id] = now;
+}
+
+static int release_one(struct engine_fingers *fingers, uint16_t id, uint16_t *out, int cap, int n)
+{
+    engine_fingers_set(fingers, id, 0);
+    if (out && n < cap)
+        out[n] = id;
+    return n + 1;
+}
+
+int engine_fingers_release_quiet(struct engine_fingers *fingers, const int64_t *at, int count,
+                                 int64_t now, int64_t quiet, uint16_t *out, int cap)
+{
+    int n = 0;
+    uint16_t id;
+    int limit;
+
+    if (!fingers || !at || count <= 1 || quiet <= 0)
+        return 0;
+    limit = count - 1;
+    if (limit > (int)ENGINE_KEY_ID_MAX)
+        limit = (int)ENGINE_KEY_ID_MAX;
+    for (id = 1; id <= (uint16_t)limit; id++) {
+        int64_t seen;
+
+        if (engine_is_mouse_button(id) || !engine_fingers_down(fingers, id))
+            continue;
+        seen = at[id];
+        if (seen == 0 || now < seen || (now - seen) < quiet)
+            continue;
+        n = release_one(fingers, id, out, cap, n);
+    }
+    return n;
+}
+
+int engine_fingers_release_down(struct engine_fingers *fingers, int keys, int mouse,
+                                uint16_t *out, int cap)
+{
+    int n = 0;
+    uint16_t id;
+
+    if (!fingers)
+        return 0;
+    for (id = 1; id <= ENGINE_KEY_ID_MAX; id++) {
+        int button;
+
+        if (!engine_fingers_down(fingers, id))
+            continue;
+        button = engine_is_mouse_button(id);
+        if (button && !mouse)
+            continue;
+        if (!button && !keys)
+            continue;
+        n = release_one(fingers, id, out, cap, n);
+    }
+    return n;
+}
+
 void engine_play_set_fingers(struct engine_play *play, const struct engine_fingers *fingers)
 {
     if (!play)

@@ -130,6 +130,10 @@ void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_liv
                         const char *front, const char *owner, int armed,
                         const struct engine_play *play);
 
+/* 1 when a live enabled macro with steps triggers on middle or a side button.
+   Left, right, and keyboard triggers do not install the mouse hook. */
+int engine_live_needs_mouse(const struct engine_live_config *live);
+
 /* 0 when the frame fits. -1 when cap is too small. Held ids without a name
    are omitted. Window extras past the cap are dropped from the front. */
 int engine_state_frame(const struct engine_state_snapshot *snap,

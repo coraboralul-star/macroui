@@ -105,6 +105,13 @@ struct engine_resident {
     uint64_t profile_seq;
     int armed;
     HANDLE play_wake;
+    int64_t finger_at[ENGINE_KEY_ID_MAX + 1];
+    uint16_t defer_down[8];
+    int defer_count;
+    int release_keys_hook;
+    int release_mouse_hook;
+    int64_t log_beat;
+    wchar_t log_path[ENGINE_PROFILE_CAP];
 };
 
 static unsigned char g_state_buf[65536];
@@ -771,39 +778,244 @@ static void apply_commands(int64_t now)
     }
 }
 
-static void drain_fingers(void)
+static void engine_log(const char *text)
+{
+    SYSTEMTIME st;
+    char buf[700];
+    HANDLE file;
+    DWORD wrote = 0;
+    int n;
+
+    if (!g.log_path[0] || !text || !text[0])
+        return;
+    GetLocalTime(&st);
+    n = snprintf(buf, sizeof buf, "%04u-%02u-%02u %02u:%02u:%02u %s\r\n",
+                 (unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay,
+                 (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond, text);
+    if (n <= 0)
+        return;
+    if (n >= (int)sizeof buf)
+        n = (int)sizeof buf - 1;
+    file = CreateFileW(g.log_path, FILE_APPEND_DATA,
+                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_ALWAYS,
+                       FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE)
+        return;
+    WriteFile(file, buf, (DWORD)n, &wrote, NULL);
+    CloseHandle(file);
+}
+
+static void set_engine_log(const char *profile)
+{
+    wchar_t wide[ENGINE_PROFILE_CAP];
+    wchar_t *slash;
+    size_t dir;
+    int chars;
+
+    g.log_path[0] = L'\0';
+    if (!profile || !profile[0])
+        return;
+    chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, profile, -1, wide, ENGINE_PROFILE_CAP);
+    if (chars <= 0)
+        return;
+    slash = wcsrchr(wide, L'\\');
+    if (!slash)
+        slash = wcsrchr(wide, L'/');
+    if (!slash || slash == wide)
+        return;
+    dir = (size_t)(slash - wide + 1);
+    if (dir + 11 >= ENGINE_PROFILE_CAP)
+        return;
+    memcpy(g.log_path, wide, dir * sizeof(wchar_t));
+    memcpy(g.log_path + dir, L"engine.log", 11 * sizeof(wchar_t));
+}
+
+static void log_released(const uint16_t *ids, int n, const char *reason)
+{
+    char line[128];
+    int i;
+    int shown = n > 16 ? 16 : n;
+
+    for (i = 0; i < shown; i++) {
+        const char *name = engine_key_name(ids[i]);
+
+        if (name)
+            snprintf(line, sizeof line, "release %s reason=%s", name, reason);
+        else
+            snprintf(line, sizeof line, "release %u reason=%s", (unsigned)ids[i], reason);
+        engine_log(line);
+    }
+    if (n > shown) {
+        snprintf(line, sizeof line, "release more count=%d reason=%s", n - shown, reason);
+        engine_log(line);
+    }
+}
+
+static void drain_fingers(int64_t now)
 {
     struct engine_finger ev;
     int pause;
 
     if (!g.play)
         return;
+    g.defer_count = 0;
     pause = engine_fingers_down(&g.fingers, ENGINE_KEY_PAUSE);
     while (engine_event_pop(&g.hooks, &ev)) {
+        int repeat_down = ev.down && engine_is_mouse_button(ev.id) &&
+                          engine_fingers_down(&g.fingers, ev.id);
+
         if (ev.id == ENGINE_KEY_PAUSE && engine_panic_edge(ev.id, pause, ev.down))
             engine_play_stop_all(g.play);
-        engine_fingers_set(&g.fingers, ev.id, ev.down);
+        if (repeat_down) {
+            char line[128];
+            const char *name = engine_key_name(ev.id);
+
+            if (name)
+                snprintf(line, sizeof line, "release %s reason=second-down", name);
+            else
+                snprintf(line, sizeof line, "release %u reason=second-down", (unsigned)ev.id);
+            engine_log(line);
+            engine_fingers_set(&g.fingers, ev.id, 0);
+            if (g.defer_count < 8)
+                g.defer_down[g.defer_count++] = ev.id;
+        } else {
+            engine_fingers_set(&g.fingers, ev.id, ev.down);
+        }
+        engine_finger_at_touch(g.finger_at, ENGINE_KEY_ID_MAX + 1, ev.id, ev.qpc ? ev.qpc : now);
         if (ev.id == ENGINE_KEY_PAUSE)
             pause = ev.down ? 1 : 0;
     }
     if (engine_event_overflow(&g.hooks)) {
         engine_event_clear_overflow(&g.hooks);
         engine_play_stop_all(g.play);
+        engine_log("event ring overflow");
     }
 }
 
-static void watch_hooks(int64_t now)
+static void recover_fingers(int64_t now)
+{
+    uint16_t ids[16];
+    int64_t freq = g.clock.qpc_freq > 0 ? g.clock.qpc_freq : 1000;
+    int64_t quiet = engine_ms_to_ticks(ENGINE_FINGER_QUIET_MS, freq);
+    int n = 0;
+
+    if (g.release_keys_hook || g.release_mouse_hook) {
+        n = engine_fingers_release_down(&g.fingers, g.release_keys_hook, g.release_mouse_hook, ids, 16);
+        if (n > 0)
+            log_released(ids, n, "hook");
+        g.release_keys_hook = 0;
+        g.release_mouse_hook = 0;
+    }
+    n = engine_fingers_release_quiet(&g.fingers, g.finger_at, ENGINE_KEY_ID_MAX + 1, now, quiet, ids, 16);
+    if (n > 0)
+        log_released(ids, n, "missed-up");
+}
+
+static void apply_deferred(int64_t now)
+{
+    int i;
+
+    for (i = 0; i < g.defer_count; i++) {
+        engine_fingers_set(&g.fingers, g.defer_down[i], 1);
+        engine_finger_at_touch(g.finger_at, ENGINE_KEY_ID_MAX + 1, g.defer_down[i], now);
+    }
+    g.defer_count = 0;
+}
+
+static const char *mode_name(int mode)
+{
+    switch (mode) {
+    case ENGINE_MODE_ONCE: return "once";
+    case ENGINE_MODE_REPEAT: return "repeat";
+    case ENGINE_MODE_WHILE_HELD: return "whileHeld";
+    case ENGINE_MODE_TOGGLE: return "toggle";
+    case ENGINE_MODE_ON_RELEASE: return "onRelease";
+    default: return "mode";
+    }
+}
+
+static void log_state(int64_t now)
+{
+    char held[160];
+    char runs[240];
+    char line[520];
+    int64_t freq = g.clock.qpc_freq > 0 ? g.clock.qpc_freq : 1000;
+    int64_t beat = engine_ms_to_ticks(2000, freq);
+    int64_t key_stamp;
+    int64_t key_age = 0;
+    int held_pos = 0;
+    int run_pos = 0;
+    int any = 0;
+    uint16_t id;
+    int i;
+
+    if (!g.armed || !g.play)
+        return;
+    if (g.log_beat != 0 && now >= g.log_beat && (now - g.log_beat) < beat)
+        return;
+    held[0] = '\0';
+    for (id = 1; id <= ENGINE_KEY_ID_MAX; id++) {
+        const char *name;
+        int wrote;
+
+        if (!engine_fingers_down(&g.fingers, id))
+            continue;
+        any = 1;
+        name = engine_key_name(id);
+        wrote = snprintf(held + held_pos, sizeof held - (size_t)held_pos, "%s%s",
+                         held_pos ? "," : "", name ? name : "?");
+        if (wrote <= 0 || held_pos + wrote >= (int)sizeof held)
+            break;
+        held_pos += wrote;
+    }
+    runs[0] = '\0';
+    for (i = 0; i < g.play->runner_count; i++) {
+        const struct engine_runner *runner = &g.play->runners[i];
+        int64_t age = 0;
+        int wrote;
+
+        if (runner->done)
+            continue;
+        any = 1;
+        if (runner->freq > 0 && now >= runner->started_at)
+            age = (now - runner->started_at) * 1000 / runner->freq;
+        else if (freq > 0 && now >= runner->started_at)
+            age = (now - runner->started_at) * 1000 / freq;
+        wrote = snprintf(runs + run_pos, sizeof runs - (size_t)run_pos, "%s%s:%s:%lldms%s",
+                         run_pos ? "," : "", runner->id[0] ? runner->id : "?",
+                         mode_name(runner->mode), (long long)age, runner->scan_wait ? ":scan" : "");
+        if (wrote <= 0 || run_pos + wrote >= (int)sizeof runs)
+            break;
+        run_pos += wrote;
+    }
+    if (g.play->runner_count + g.play->pending_count >= ENGINE_RUNNER_CAP)
+        any = 1;
+    if (!any)
+        return;
+    key_stamp = (int64_t)atomic_load_explicit(&g.hooks.key_stamp, memory_order_acquire);
+    if (key_stamp > 0 && now >= key_stamp && freq > 0)
+        key_age = (now - key_stamp) * 1000 / freq;
+    snprintf(line, sizeof line,
+             "state held=%s runners=%s pending=%d hookKeyAge=%lldms hookMouse=%s",
+             held_pos ? held : "-", run_pos ? runs : "-", g.play->pending_count, (long long)key_age,
+             atomic_load_explicit(&g.hooks.mouse_installed, memory_order_acquire) ? "on" : "off");
+    engine_log(line);
+    g.log_beat = now;
+}
+
+static void watch_hooks(int64_t now, int need_mouse)
 {
     struct engine_hook_watch_in in;
     struct engine_hook_watch_out watch;
     int64_t freq = g.clock.qpc_freq > 0 ? g.clock.qpc_freq : 1000;
+    int i;
 
     if (!g.play)
         return;
     memset(&in, 0, sizeof in);
     in.key_installed = atomic_load_explicit(&g.hooks.key_installed, memory_order_acquire);
     in.mouse_installed = atomic_load_explicit(&g.hooks.mouse_installed, memory_order_acquire);
-    in.need_mouse = g.armed;
+    in.need_mouse = need_mouse;
     in.armed = g.armed;
     in.running = engine_play_alive(g.play) > 0;
     in.pending = g.play->pending_count > 0;
@@ -812,7 +1024,7 @@ static void watch_hooks(int64_t now)
     in.mouse_stamp = atomic_load_explicit(&g.hooks.mouse_stamp, memory_order_acquire);
     in.now = now;
     in.silence = engine_ms_to_ticks(ENGINE_HOOK_SILENCE_MS, freq);
-    engine_hook_set_need_mouse(&g.hooks, g.armed);
+    engine_hook_set_need_mouse(&g.hooks, need_mouse);
     engine_hook_watch(&in, &watch);
     if (watch.clear_suspect)
         atomic_store_explicit(&g.hooks.suspect, 0, memory_order_release);
@@ -820,6 +1032,32 @@ static void watch_hooks(int64_t now)
     /* The hook thread applies a raise only after GetMessage returns.
        A keyboard hook is already installed. The mouse hook is not, so a
        mouse trigger never arrives unless this posts a message. */
+    for (i = 0; i < watch.count; i++) {
+        char line[160];
+        int mouse = watch.op[i] == ENGINE_HOOK_RAISE_MOUSE;
+        int64_t stamp = mouse ? in.mouse_stamp : in.key_stamp;
+        int64_t age = 0;
+        const char *reason = "silent";
+
+        if (in.suspect)
+            reason = "suspect";
+        else if (!mouse && !in.key_installed)
+            reason = "missing";
+        else if (mouse && !in.need_mouse)
+            reason = "drop";
+        else if (mouse && !in.mouse_installed)
+            reason = "missing";
+        if (stamp > 0 && in.now >= stamp && freq > 0)
+            age = (in.now - stamp) * 1000 / freq;
+        snprintf(line, sizeof line, "hook %s %s reason=%s age=%lldms",
+                 mouse ? "mouse" : "key",
+                 (mouse && !in.need_mouse) ? "remove" : "reinstall", reason, (long long)age);
+        engine_log(line);
+        if (!mouse && in.key_installed)
+            g.release_keys_hook = 1;
+        if (mouse && in.mouse_installed)
+            g.release_mouse_hook = 1;
+    }
     if (watch.count > 0)
         engine_win_hook_kick(&g.hook);
 }
@@ -947,12 +1185,15 @@ static void playback_tick(int64_t now)
     engine_play_set_pointer(g.play, &pointer);
 
     apply_commands(now);
-    watch_hooks(now);
-    drain_fingers();
+    watch_hooks(now, engine_live_needs_mouse(&live));
+    drain_fingers(now);
+    recover_fingers(now);
     engine_play_set_fingers(g.play, &g.fingers);
     if (g.armed)
         engine_poll_triggers(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner);
     engine_play_tick(g.play, now);
+    apply_deferred(now);
+    log_state(now);
     send_play_report(&g.play->last, g.play->output.mode, now);
     publish_play_state(&live, &focus);
     engine_arm_swallow(&g.hooks, &live, focus.name, focus.owner, g.armed, g.play);
@@ -1179,6 +1420,8 @@ static int run_resident(const struct engine_args *args)
     atomic_init(&g.front_seq, 0);
     if (args)
         g.args = *args;
+    set_engine_log(g.args.profile);
+    engine_log("engine start");
     engine_profile_slot_init(&g.profiles);
     engine_state_slot_init(&g.state_slot);
     engine_hook_init(&g.hooks);

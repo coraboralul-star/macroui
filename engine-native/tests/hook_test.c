@@ -210,6 +210,25 @@ static void check_watch_plan(void)
     engine_hook_watch(&in, &out);
     expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE,
            "a missing mouse hook is installed before the silence check");
+
+    in.need_mouse = 1;
+    in.mouse_installed = 0;
+    in.running = 1;
+    in.key_stamp = 1;
+    in.mouse_stamp = 8000;
+    in.now = 9000;
+    engine_hook_watch(&in, &out);
+    expect(out.count == 2 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE &&
+               out.op[1] == ENGINE_HOOK_RAISE_KEY,
+           "a missing mouse hook does not hide a dead keyboard hook");
+
+    in.need_mouse = 0;
+    in.mouse_installed = 1;
+    in.key_stamp = 9000;
+    in.mouse_stamp = 9000;
+    engine_hook_watch(&in, &out);
+    expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE,
+           "a keyboard-only profile removes the mouse hook");
 }
 
 static int pop_id(struct engine_finger *finger)

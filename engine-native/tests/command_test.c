@@ -649,6 +649,68 @@ static void check_mouse_triggers(void)
     free(play);
 }
 
+static void check_recover(void)
+{
+    struct engine_macro macro;
+    struct engine_profile_extra extra;
+    struct engine_live_config live;
+    struct engine_fingers fingers;
+    int64_t at[ENGINE_KEY_ID_MAX + 1];
+    uint16_t ids[4];
+    int n;
+
+    memset(&macro, 0, sizeof macro);
+    memset(&extra, 0, sizeof extra);
+    memset(&live, 0, sizeof live);
+    engine_macro_init(&macro);
+    snprintf(macro.id, sizeof macro.id, "ability");
+    macro.trigger = 0x45;
+    macro.step_count = 1;
+    extra.enabled = 1;
+    live.macros = &macro;
+    live.extras = &extra;
+    live.macro_count = 1;
+    expect(!engine_live_needs_mouse(&live), "a key trigger does not need the mouse hook");
+    macro.trigger = ENGINE_KEY_LBUTTON;
+    expect(!engine_live_needs_mouse(&live), "left click does not need the mouse hook");
+    macro.trigger = ENGINE_KEY_RBUTTON;
+    expect(!engine_live_needs_mouse(&live), "right click does not need the mouse hook");
+    macro.trigger = ENGINE_KEY_XBUTTON1;
+    expect(engine_live_needs_mouse(&live) == 1, "mouse 4 needs the mouse hook");
+    macro.trigger = ENGINE_KEY_MBUTTON;
+    expect(engine_live_needs_mouse(&live) == 1, "middle needs the mouse hook");
+    extra.enabled = 0;
+    expect(!engine_live_needs_mouse(&live), "a disabled side button does not need the mouse hook");
+    extra.enabled = 1;
+    macro.step_count = 0;
+    expect(!engine_live_needs_mouse(&live), "a side button with no steps does not need the mouse hook");
+
+    memset(at, 0, sizeof at);
+    engine_fingers_clear(&fingers);
+    engine_fingers_set(&fingers, 0x45, 1);
+    at[0x45] = 1000;
+    n = engine_fingers_release_quiet(&fingers, at, ENGINE_KEY_ID_MAX + 1, 2000, 2500, ids, 4);
+    expect(n == 0 && engine_fingers_down(&fingers, 0x45), "a fresh hold stays down");
+    n = engine_fingers_release_quiet(&fingers, at, ENGINE_KEY_ID_MAX + 1, 3500, 2500, ids, 4);
+    expect(n == 1 && ids[0] == 0x45 && !engine_fingers_down(&fingers, 0x45),
+           "a quiet key is released");
+
+    engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON1, 1);
+    at[ENGINE_KEY_XBUTTON1] = 1000;
+    n = engine_fingers_release_quiet(&fingers, at, ENGINE_KEY_ID_MAX + 1, 10000, 2500, ids, 4);
+    expect(n == 0 && engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1),
+           "a quiet mouse button stays down");
+    n = engine_fingers_release_down(&fingers, 0, 1, ids, 4);
+    expect(n == 1 && ids[0] == ENGINE_KEY_XBUTTON1 && !engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1),
+           "a hook reinstall releases the mouse button");
+
+    engine_fingers_set(&fingers, 0x45, 1);
+    engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+    n = engine_fingers_release_down(&fingers, 1, 0, ids, 4);
+    expect(n == 1 && ids[0] == 0x45 && engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+           "a key reinstall leaves the mouse button down");
+}
+
 int main(void)
 {
     check_frames();
@@ -660,6 +722,7 @@ int main(void)
     check_saved_profile();
     check_once_lock();
     check_mouse_triggers();
+    check_recover();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

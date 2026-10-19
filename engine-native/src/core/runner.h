@@ -21,6 +21,9 @@
 #define ENGINE_LOCK_OPEN 1
 #define ENGINE_LOCK_DONE 2
 #define ENGINE_FINGER_BYTES ((ENGINE_KEY_ID_MAX / 8u) + 1u)
+/* A real hold auto-repeats into the keyboard hook. Longer than this with no
+   repeat means the key-up was missed. Mouse buttons do not repeat. */
+#define ENGINE_FINGER_QUIET_MS 2500
 
 #define ENGINE_MODE_ONCE 0
 #define ENGINE_MODE_REPEAT 1
@@ -386,6 +389,21 @@ int engine_fingers_down(const struct engine_fingers *fingers, uint16_t id);
 
 /* 1 when the id was reported, including a report that it is up. */
 int engine_fingers_seen(const struct engine_fingers *fingers, uint16_t id);
+
+/* at[id] is the last event for that id, in the same unit as now. count is the
+   length of at. Id 0 and an id past count are ignored. */
+void engine_finger_at_touch(int64_t *at, int count, uint16_t id, int64_t now);
+
+/* A keyboard id that is down, and whose last event is at least quiet old, is
+   released. Mouse buttons are left down. Writes the released ids. Returns how
+   many were released, which can be more than cap. */
+int engine_fingers_release_quiet(struct engine_fingers *fingers, const int64_t *at, int count,
+                                 int64_t now, int64_t quiet, uint16_t *out, int cap);
+
+/* Releases every down id. keys 1 includes non-mouse ids. mouse 1 includes
+   mouse buttons. Writes the released ids. Returns how many were released. */
+int engine_fingers_release_down(struct engine_fingers *fingers, int keys, int mouse,
+                                uint16_t *out, int cap);
 
 /* Copies the snapshot. A null pointer clears it.
    A missing snapshot is not a finger: holdLoop does not treat it as a release. */

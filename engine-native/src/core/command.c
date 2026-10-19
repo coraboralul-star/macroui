@@ -316,6 +316,23 @@ static int macro_enabled(const struct engine_live_config *live, int index)
     return live->extras[index].enabled ? 1 : 0;
 }
 
+int engine_live_needs_mouse(const struct engine_live_config *live)
+{
+    int i;
+
+    if (!live || !live->macros || live->macro_count <= 0)
+        return 0;
+    for (i = 0; i < live->macro_count; i++) {
+        uint16_t id = live->macros[i].trigger;
+
+        if (!macro_enabled(live, i) || live->macros[i].step_count == 0)
+            continue;
+        if (engine_can_trigger(id) && engine_is_mouse_button(id))
+            return 1;
+    }
+    return 0;
+}
+
 void engine_trigger_seed(struct engine_trigger_mem *mem, const struct engine_live_config *live,
                          const struct engine_fingers *fingers)
 {
