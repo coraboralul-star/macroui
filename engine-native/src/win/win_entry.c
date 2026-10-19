@@ -87,8 +87,13 @@ struct engine_resident {
     struct engine_state_slot state_slot;
     struct engine_focus focus_pub;
     atomic_uint front_seq;
-    char prefer[ENGINE_ID_CAP];
-    uint64_t prefer_seq;
+    char live_id[ENGINE_ID_CAP];
+    char logged_config[ENGINE_ID_CAP];
+    char live_name[ENGINE_PROFILE_NAME_CAP];
+    char live_focus[ENGINE_PROFILE_FOCUS_CAP];
+    char live_front[ENGINE_PROFILE_FOCUS_CAP];
+    struct engine_focus focus_last;
+    int focus_have;
     struct engine_play *play;
     struct engine_cmd_ring cmds;
     struct engine_trigger_mem triggers;
@@ -108,8 +113,6 @@ struct engine_resident {
     int64_t finger_at[ENGINE_KEY_ID_MAX + 1];
     uint16_t defer_down[8];
     int defer_count;
-    int release_keys_hook;
-    int release_mouse_hook;
     int64_t log_beat;
     wchar_t log_path[ENGINE_PROFILE_CAP];
 };
@@ -483,8 +486,14 @@ static void read_focus(struct engine_focus *dst)
         if (atomic_load_explicit(&g.front_seq, memory_order_relaxed) != seq)
             continue;
         *dst = tmp;
+        g.focus_last = tmp;
+        g.focus_have = 1;
         return;
     }
+    /* A torn read is not "no window". An empty name would miss every
+       focusExe and fall through to the empty-focus config. */
+    if (g.focus_have)
+        *dst = g.focus_last;
 }
 
 static void copy_image_base(const wchar_t *path, char *dst, size_t cap)
@@ -766,7 +775,6 @@ static void apply_commands(int64_t now)
             engine_play_stop_all(g.play);
         } else if (item.kind == ENGINE_CMD_RELOAD) {
             engine_trigger_reseed(&g.triggers);
-            engine_hook_set_suspect(&g.hooks);
         } else if (item.kind == ENGINE_CMD_OUTPUT) {
             struct engine_report release;
             int rebind = 0;
@@ -899,13 +907,6 @@ static void recover_fingers(int64_t now)
     int64_t quiet = engine_ms_to_ticks(ENGINE_FINGER_QUIET_MS, freq);
     int n = 0;
 
-    if (g.release_keys_hook || g.release_mouse_hook) {
-        n = engine_fingers_release_down(&g.fingers, g.release_keys_hook, g.release_mouse_hook, ids, 16);
-        if (n > 0)
-            log_released(ids, n, "hook");
-        g.release_keys_hook = 0;
-        g.release_mouse_hook = 0;
-    }
     n = engine_fingers_release_quiet(&g.fingers, g.finger_at, ENGINE_KEY_ID_MAX + 1, now, quiet, ids, 16);
     if (n > 0)
         log_released(ids, n, "missed-up");
@@ -934,11 +935,23 @@ static const char *mode_name(int mode)
     }
 }
 
+static void log_config(void)
+{
+    char line[640];
+
+    snprintf(line, sizeof line, "config name=\"%s\" id=%s focus=%s front=%s",
+             g.live_name[0] ? g.live_name : "-",
+             g.live_id[0] ? g.live_id : "-",
+             g.live_focus[0] ? g.live_focus : "-",
+             g.live_front[0] ? g.live_front : "-");
+    engine_log(line);
+}
+
 static void log_state(int64_t now)
 {
     char held[160];
     char runs[240];
-    char line[520];
+    char line[640];
     int64_t freq = g.clock.qpc_freq > 0 ? g.clock.qpc_freq : 1000;
     int64_t beat = engine_ms_to_ticks(2000, freq);
     int64_t key_stamp;
@@ -996,7 +1009,11 @@ static void log_state(int64_t now)
     if (key_stamp > 0 && now >= key_stamp && freq > 0)
         key_age = (now - key_stamp) * 1000 / freq;
     snprintf(line, sizeof line,
-             "state held=%s runners=%s pending=%d hookKeyAge=%lldms hookMouse=%s",
+             "state config=\"%s\" id=%s focus=%s front=%s held=%s runners=%s pending=%d hookKeyAge=%lldms hookMouse=%s",
+             g.live_name[0] ? g.live_name : "-",
+             g.live_id[0] ? g.live_id : "-",
+             g.live_focus[0] ? g.live_focus : "-",
+             g.live_front[0] ? g.live_front : "-",
              held_pos ? held : "-", run_pos ? runs : "-", g.play->pending_count, (long long)key_age,
              atomic_load_explicit(&g.hooks.mouse_installed, memory_order_acquire) ? "on" : "off");
     engine_log(line);
@@ -1053,10 +1070,6 @@ static void watch_hooks(int64_t now, int need_mouse)
                  mouse ? "mouse" : "key",
                  (mouse && !in.need_mouse) ? "remove" : "reinstall", reason, (long long)age);
         engine_log(line);
-        if (!mouse && in.key_installed)
-            g.release_keys_hook = 1;
-        if (mouse && in.mouse_installed)
-            g.release_mouse_hook = 1;
     }
     if (watch.count > 0)
         engine_win_hook_kick(&g.hook);
@@ -1157,19 +1170,28 @@ static void playback_tick(int64_t now)
     /* Software swaps while building SendInput. The report image stays logical. */
     engine_output_set_swap(&g.play->output, image && image->swap_clicks);
     seq = image ? image->sequence : 0;
-    if (seq != g.prefer_seq) {
-        g.prefer_seq = seq;
-        snprintf(g.prefer, sizeof g.prefer, "%s", image ? image->active_id : "");
-    }
     read_focus(&focus);
-    engine_profile_pick(image, focus.name, g.prefer, &live);
-    snprintf(g.prefer, sizeof g.prefer, "%s", live.prefer);
+    /* ApplyLiveConfig passes activeId every time. The last live id is not the tie-break. */
+    engine_profile_pick(image, focus.name, image ? image->active_id : "", &live);
     engine_play_set_macros(g.play, live.macros, live.macro_count);
     if (seq != g.profile_seq) {
         g.profile_seq = seq;
         engine_reap_orphans(g.play, &live);
+    }
+    /* A new profile image is parsed on the IPC thread, so it does not stall
+       the hook thread. Reseed only when the live config changes, which is
+       when ApplyLiveConfig seeds. A reinstall must not clear a held trigger. */
+    if (strcmp(g.live_id, live.live_id) != 0) {
+        snprintf(g.live_id, sizeof g.live_id, "%s", live.live_id);
+        engine_reap_orphans(g.play, &live);
         engine_trigger_reseed(&g.triggers);
-        engine_hook_set_suspect(&g.hooks);
+    }
+    snprintf(g.live_name, sizeof g.live_name, "%s", live.name);
+    snprintf(g.live_focus, sizeof g.live_focus, "%s", live.focus_exe);
+    if (strcmp(g.live_front, focus.name) != 0 || strcmp(g.logged_config, live.live_id) != 0) {
+        snprintf(g.live_front, sizeof g.live_front, "%s", focus.name);
+        snprintf(g.logged_config, sizeof g.logged_config, "%s", live.live_id);
+        log_config();
     }
     g.play->dpi = focus.dpi ? focus.dpi : 96;
     memset(&pointer, 0, sizeof pointer);

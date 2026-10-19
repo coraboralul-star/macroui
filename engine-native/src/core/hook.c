@@ -64,6 +64,15 @@ static int stem_copy(const char *s, char *out, int cap)
     end = begin + strlen(begin);
     while (end > begin && (end[-1] == ' ' || end[-1] == '\t'))
         end--;
+    /* ahk_exe and WinGetProcessName compare the file name, not the directory. */
+    {
+        const char *p;
+
+        for (p = begin; p < end; p++) {
+            if (*p == '\\' || *p == '/')
+                begin = p + 1;
+        }
+    }
     n = (int)(end - begin);
     if (n >= cap)
         return -1;

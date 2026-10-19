@@ -115,6 +115,12 @@ static void check_focus(void)
            "ue editor matches shipping exe");
     expect(engine_focus_match("notepad.exe", "notepad++.exe") == 0,
            "notepad does not match notepad++");
+    expect(engine_focus_match("Notepad.exe", "NOTEPAD.EXE") == 1,
+           "focus match ignores case");
+    expect(engine_focus_match("Notepad.exe", "C:\\Windows\\System32\\notepad.exe") == 1,
+           "focus match uses the file name");
+    expect(engine_focus_match("C:/Windows/notepad.exe", "notepad.exe") == 1,
+           "a path in focusExe still matches the file name");
     expect(engine_focus_match("chrome.exe", "Dawnwalker.exe") == 0,
            "unrelated exe does not match");
     expect(engine_focus_swallow("", "notepad.exe", NULL) == 1,

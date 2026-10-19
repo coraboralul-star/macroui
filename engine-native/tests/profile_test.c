@@ -311,9 +311,9 @@ static void check_live(void)
     const char *text =
         "{\"activeId\":\"home\",\"macros\":[{\"id\":\"flat\",\"steps\":[{\"type\":\"wait\",\"ms\":1}]}],"
         "\"configs\":["
-        "{\"id\":\"home\",\"focusExe\":\"\",\"macros\":[{\"id\":\"a\",\"trigger\":{\"kind\":\"key\",\"button\":\"b\"},"
+        "{\"id\":\"home\",\"name\":\"Home\",\"focusExe\":\"\",\"macros\":[{\"id\":\"a\",\"trigger\":{\"kind\":\"key\",\"button\":\"b\"},"
         "\"steps\":[]}]},"
-        "{\"id\":\"game\",\"focusExe\":\"Game.exe\",\"macros\":[{\"id\":\"g\",\"steps\":[{\"type\":\"wait\",\"ms\":2}]}]},"
+        "{\"id\":\"game\",\"name\":\"Game\",\"focusExe\":\"Game.exe\",\"macros\":[{\"id\":\"g\",\"steps\":[{\"type\":\"wait\",\"ms\":2}]}]},"
         "{\"id\":\"second\",\"focusExe\":\"\",\"macros\":[{\"id\":\"s\",\"steps\":[]}]}"
         "]}";
 
@@ -329,7 +329,11 @@ static void check_live(void)
     engine_profile_pick(image, "Game.exe", "home", &live);
     expect(strcmp(live.live_id, "game") == 0 && strcmp(live.active_id, "game") == 0,
            "foreground exe picks that config");
-    expect(strcmp(live.prefer, "game") == 0, "a picked config becomes the next prefer");
+    expect(strcmp(live.name, "Game") == 0, "the chosen config keeps its name");
+    expect(strcmp(live.prefer, "home") == 0, "prefer stays the activeId that was passed");
+
+    engine_profile_pick(image, "c:\\\\games\\\\GAME.EXE", "home", &live);
+    expect(strcmp(live.live_id, "game") == 0, "focusExe matches the file name, ignoring case and directory");
 
     engine_profile_pick(image, "Game-Win64-Shipping.exe", "home", &live);
     expect(strcmp(live.live_id, "game") == 0, "shipping exe still matches the stem");
