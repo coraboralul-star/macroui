@@ -113,6 +113,8 @@ struct engine_resident {
     int64_t finger_at[ENGINE_KEY_ID_MAX + 1];
     uint16_t defer_down[8];
     int defer_count;
+    int desktop_known;
+    int desktop_open;
     int64_t log_beat;
     wchar_t log_path[ENGINE_PROFILE_CAP];
 };
@@ -869,8 +871,8 @@ static void drain_fingers(int64_t now)
     g.defer_count = 0;
     pause = engine_fingers_down(&g.fingers, ENGINE_KEY_PAUSE);
     while (engine_event_pop(&g.hooks, &ev)) {
-        int repeat_down = ev.down && engine_is_mouse_button(ev.id) &&
-                          engine_fingers_down(&g.fingers, ev.id);
+        int repeat_down = engine_repeat_is_missed_up(
+            ev.id, ev.down, engine_fingers_down(&g.fingers, ev.id));
 
         if (ev.id == ENGINE_KEY_PAUSE && engine_panic_edge(ev.id, pause, ev.down))
             engine_play_stop_all(g.play);
@@ -900,16 +902,93 @@ static void drain_fingers(int64_t now)
     }
 }
 
-static void recover_fingers(int64_t now)
+static int input_desktop_open(void)
+{
+    HDESK desk = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+
+    if (!desk)
+        return 0;
+    CloseDesktop(desk);
+    return 1;
+}
+
+static int finger_vk(uint16_t id, int *vk)
+{
+    if (id == ENGINE_KEY_LBUTTON) {
+        *vk = VK_LBUTTON;
+        return 1;
+    }
+    if (id == ENGINE_KEY_RBUTTON) {
+        *vk = VK_RBUTTON;
+        return 1;
+    }
+    if (id == ENGINE_KEY_MBUTTON) {
+        *vk = VK_MBUTTON;
+        return 1;
+    }
+    if (id == ENGINE_KEY_XBUTTON1) {
+        *vk = VK_XBUTTON1;
+        return 1;
+    }
+    if (id == ENGINE_KEY_XBUTTON2) {
+        *vk = VK_XBUTTON2;
+        return 1;
+    }
+    if (id == ENGINE_KEY_NUMPAD_ENTER) {
+        *vk = VK_RETURN;
+        return 1;
+    }
+    if (id > 0 && id < 256) {
+        *vk = (int)id;
+        return 1;
+    }
+    return 0;
+}
+
+/* The first sample only records which desktop is current. Later, a closed
+   input desktop is the lock screen. Coming back is a return. */
+static int note_desktop(void)
+{
+    int open = input_desktop_open();
+    int returned = 0;
+
+    if (!g.desktop_known) {
+        g.desktop_known = 1;
+        g.desktop_open = open;
+        return 0;
+    }
+    if (!g.desktop_open && open)
+        returned = 1;
+    g.desktop_open = open;
+    return returned;
+}
+
+static void reconcile_fingers(void)
 {
     uint16_t ids[16];
-    int64_t freq = g.clock.qpc_freq > 0 ? g.clock.qpc_freq : 1000;
-    int64_t quiet = engine_ms_to_ticks(ENGINE_FINGER_QUIET_MS, freq);
-    int n = 0;
+    uint8_t up[ENGINE_FINGER_BYTES];
+    uint16_t id;
+    int n;
 
-    n = engine_fingers_release_quiet(&g.fingers, g.finger_at, ENGINE_KEY_ID_MAX + 1, now, quiet, ids, 16);
+    if (!g.desktop_open) {
+        n = engine_fingers_release_down(&g.fingers, 1, 1, ids, 16);
+        if (n > 0)
+            log_released(ids, n, "desktop");
+        return;
+    }
+    memset(up, 0, sizeof up);
+    for (id = 1; id <= ENGINE_KEY_ID_MAX; id++) {
+        int vk;
+
+        if (!engine_fingers_down(&g.fingers, id) || !finger_vk(id, &vk))
+            continue;
+        if (GetAsyncKeyState(vk) & 0x8000)
+            continue;
+        up[id / 8u] = (uint8_t)(up[id / 8u] | (uint8_t)(1u << (id % 8u)));
+    }
+    n = engine_fingers_release_os_up(&g.fingers, up, ids, 16);
     if (n > 0)
-        log_released(ids, n, "missed-up");
+        log_released(ids, n, "async");
 }
 
 static void apply_deferred(int64_t now)
@@ -1037,10 +1116,10 @@ static void watch_hooks(int64_t now, int need_mouse)
     in.running = engine_play_alive(g.play) > 0;
     in.pending = g.play->pending_count > 0;
     in.suspect = atomic_load_explicit(&g.hooks.suspect, memory_order_acquire);
+    in.desktop = note_desktop();
     in.key_stamp = atomic_load_explicit(&g.hooks.key_stamp, memory_order_acquire);
     in.mouse_stamp = atomic_load_explicit(&g.hooks.mouse_stamp, memory_order_acquire);
     in.now = now;
-    in.silence = engine_ms_to_ticks(ENGINE_HOOK_SILENCE_MS, freq);
     engine_hook_set_need_mouse(&g.hooks, need_mouse);
     engine_hook_watch(&in, &watch);
     if (watch.clear_suspect)
@@ -1054,9 +1133,11 @@ static void watch_hooks(int64_t now, int need_mouse)
         int mouse = watch.op[i] == ENGINE_HOOK_RAISE_MOUSE;
         int64_t stamp = mouse ? in.mouse_stamp : in.key_stamp;
         int64_t age = 0;
-        const char *reason = "silent";
+        const char *reason = "missing";
 
-        if (in.suspect)
+        if (in.desktop)
+            reason = "desktop";
+        else if (in.suspect)
             reason = "suspect";
         else if (!mouse && !in.key_installed)
             reason = "missing";
@@ -1209,7 +1290,7 @@ static void playback_tick(int64_t now)
     apply_commands(now);
     watch_hooks(now, engine_live_needs_mouse(&live));
     drain_fingers(now);
-    recover_fingers(now);
+    reconcile_fingers();
     engine_play_set_fingers(g.play, &g.fingers);
     if (g.armed)
         engine_poll_triggers(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner);

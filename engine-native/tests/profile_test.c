@@ -2,6 +2,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 
+#include "command.h"
 #include "profile.h"
 #include "report.h"
 
@@ -439,9 +440,91 @@ static void check_swap_and_file(void)
            "active id is on the snapshot");
 }
 
+static void check_empty_trigger(void)
+{
+    struct engine_profile_image *image;
+    struct engine_live_config live;
+    struct engine_play *play;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    uint16_t id = 1;
+    int slot;
+
+    expect(engine_key_id("", &id) == 0 && id == 0, "an empty name is not a key");
+    expect(engine_key_id("XButton2", &id) == 1 && id == ENGINE_KEY_XBUTTON2, "XButton2 name");
+    expect(engine_key_id("xbutton2", &id) == 1 && id == ENGINE_KEY_XBUTTON2, "xbutton2 name");
+    expect(engine_key_id("xbutton1", &id) == 1 && id == ENGINE_KEY_XBUTTON1, "xbutton1 name");
+
+    image = compile("{\"activeId\":\"ow\",\"configs\":[{\"id\":\"ow\",\"name\":\"Overwatch\","
+                    "\"focusExe\":\"Overwatch.exe\",\"macros\":["
+                    "{\"id\":\"blank\",\"enabled\":true,\"playMode\":\"whileHeld\","
+                    "\"trigger\":{\"kind\":\"key\",\"button\":\"\"},"
+                    "\"steps\":[{\"type\":\"key\",\"action\":\"tap\",\"key\":\"q\"}]},"
+                    "{\"id\":\"blank-side\",\"enabled\":true,\"playMode\":\"once\","
+                    "\"trigger\":{\"kind\":\"side\",\"button\":\"\"},"
+                    "\"steps\":[{\"type\":\"key\",\"action\":\"tap\",\"key\":\"q\"}]},"
+                    "{\"id\":\"shoot\",\"enabled\":true,\"playMode\":\"whileHeld\","
+                    "\"trigger\":{\"kind\":\"side\",\"button\":\"XButton2\"},"
+                    "\"steps\":[{\"type\":\"key\",\"action\":\"tap\",\"key\":\"q\"}]}"
+                    "]}]}");
+    if (!image)
+        return;
+    engine_profile_pick(image, "Overwatch.exe", "ow", &live);
+    expect(live.macro_count == 3, "empty triggers compile beside mouse 5");
+    expect(live.macros[0].trigger == 0 && live.macros[1].trigger == 0,
+           "an empty button compiles to no trigger");
+    expect(live.macros[2].trigger == ENGINE_KEY_XBUTTON2, "shoot compiles to mouse 5");
+    expect(live.trigger_head != NULL && live.trigger_head[0] == 0, "trigger 0 is not a chain");
+    expect(live.trigger_head[ENGINE_KEY_XBUTTON2] != 0, "mouse 5 is in the chain");
+    for (slot = 0; slot <= (int)ENGINE_KEY_ID_MAX; slot++) {
+        uint32_t head = live.trigger_head[slot];
+        int guard = 0;
+
+        while (head != 0 && guard < live.macro_count) {
+            expect(head != 1 && head != 2, "an empty macro is not in any chain");
+            if (head > (uint32_t)live.macro_count)
+                break;
+            head = live.trigger_next[head - 1u];
+            guard++;
+        }
+    }
+    expect(engine_live_needs_mouse(&live) == 1, "mouse 5 needs the mouse hook");
+
+    play = (struct engine_play *)calloc(1, sizeof *play);
+    expect(play != NULL, "empty trigger play");
+    if (play) {
+        engine_play_init(play);
+        engine_trigger_init(&mem);
+        engine_fingers_clear(&fingers);
+        engine_poll_triggers(play, &live, &mem, &fingers, "Overwatch.exe", "");
+        engine_fingers_set(&fingers, (uint16_t)'e', 1);
+        engine_fingers_set(&fingers, (uint16_t)'r', 1);
+        engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON1, 1);
+        engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+        engine_poll_triggers(play, &live, &mem, &fingers, "Overwatch.exe", "");
+        expect(play->pending_count == 1, "mouse 5 starts and an empty trigger does not");
+        engine_play_flush(play);
+        expect(play->runner_count == 1 && strcmp(play->runners[0].id, "shoot") == 0,
+               "the runner is shoot");
+        free(play);
+    }
+    engine_profile_image_free(image);
+
+    image = compile("{\"macros\":[{\"id\":\"blank\",\"enabled\":true,\"playMode\":\"whileHeld\","
+                    "\"trigger\":{\"kind\":\"key\",\"button\":\"\"},"
+                    "\"steps\":[{\"type\":\"key\",\"action\":\"tap\",\"key\":\"q\"}]}]}");
+    if (!image)
+        return;
+    engine_profile_pick(image, "Overwatch.exe", "", &live);
+    expect(live.macros[0].trigger == 0, "a lone empty button is not a trigger");
+    expect(!engine_live_needs_mouse(&live), "an empty trigger does not need the mouse hook");
+    engine_profile_image_free(image);
+}
+
 int main(void)
 {
     check_values();
+    check_empty_trigger();
     check_steps();
     check_blocks();
     check_swap_clicks();

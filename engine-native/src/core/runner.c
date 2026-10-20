@@ -102,6 +102,8 @@ static const char *alias_to(const char *key)
         {"ralt", "RAlt"},
         {"lwin", "LWin"},
         {"rwin", "RWin"},
+        {"xbutton1", "XButton1"},
+        {"xbutton2", "XButton2"},
         {"|", "\\"},
     };
     int i;
@@ -2239,25 +2241,18 @@ static int release_one(struct engine_fingers *fingers, uint16_t id, uint16_t *ou
     return n + 1;
 }
 
-int engine_fingers_release_quiet(struct engine_fingers *fingers, const int64_t *at, int count,
-                                 int64_t now, int64_t quiet, uint16_t *out, int cap)
+int engine_fingers_release_os_up(struct engine_fingers *fingers, const uint8_t *up,
+                                 uint16_t *out, int cap)
 {
     int n = 0;
     uint16_t id;
-    int limit;
 
-    if (!fingers || !at || count <= 1 || quiet <= 0)
+    if (!fingers || !up)
         return 0;
-    limit = count - 1;
-    if (limit > (int)ENGINE_KEY_ID_MAX)
-        limit = (int)ENGINE_KEY_ID_MAX;
-    for (id = 1; id <= (uint16_t)limit; id++) {
-        int64_t seen;
-
-        if (engine_is_mouse_button(id) || !engine_fingers_down(fingers, id))
+    for (id = 1; id <= ENGINE_KEY_ID_MAX; id++) {
+        if (!engine_fingers_down(fingers, id))
             continue;
-        seen = at[id];
-        if (seen == 0 || now < seen || (now - seen) < quiet)
+        if ((up[id / 8u] & (uint8_t)(1u << (id % 8u))) == 0)
             continue;
         n = release_one(fingers, id, out, cap, n);
     }

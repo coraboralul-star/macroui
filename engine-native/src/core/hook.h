@@ -123,6 +123,7 @@ struct engine_hook_watch_in {
     int running;
     int pending;
     int suspect;
+    int desktop;
     int64_t key_stamp;
     int64_t mouse_stamp;
     int64_t now;
@@ -148,7 +149,9 @@ void engine_hook_init(struct engine_hook_state *st);
 uint16_t engine_resolve_key(uint32_t vk, uint32_t scan, uint32_t flags);
 
 /* 257..261, or 0 when the message is not a button.
-   down is 1 on a button-down message. */
+   down is 1 on a button-down message.
+   An X button is the high word, or the low word when the high word is 0.
+   Mouse 4 and mouse 5 use that same rule. */
 uint16_t engine_resolve_mouse(uint32_t msg, uint32_t mouse_data, int *down);
 
 /* Protocol names. NULL means the id is omitted from held. */
@@ -156,7 +159,11 @@ const char *engine_key_name(uint16_t id);
 
 int engine_is_mouse_button(uint16_t id);
 
-/* Pause, left click, and right click are not triggers.
+/* A second down while that mouse button is already down is a missed up.
+   Mouse 4 and mouse 5 both count. A keyboard auto-repeat does not. */
+int engine_repeat_is_missed_up(uint16_t id, int down, int already);
+
+/* Pause, left click, right click, and an empty id are not triggers.
    Middle and both side buttons are. */
 int engine_can_trigger(uint16_t id);
 
@@ -206,14 +213,8 @@ int engine_event_pop(struct engine_hook_state *st, struct engine_finger *finger)
 int engine_event_overflow(struct engine_hook_state *st);
 void engine_event_clear_overflow(struct engine_hook_state *st);
 
-/* The self-test predicates. silence is in the same unit as the stamps.
-   A quiet keyboard hook is not raised when the mouse hook has seen input. */
-int engine_needs_key_raise(int64_t key_stamp, int64_t mouse_stamp, int need_mouse,
-                           int armed, int64_t now, int64_t silence);
-int engine_needs_mouse_raise(int64_t mouse_stamp, int need_mouse, int armed,
-                             int64_t now, int64_t silence);
-
-/* Step 4. A missing keyboard hook or a suspect flag re-raises both, even when idle.
+/* A missing keyboard hook, a suspect flag, or a return from the lock screen
+   re-raises, even when idle. A quiet hook stays. silence is ignored.
    Idle with a live hook does not re-raise. Ops run in order. Each op unhooks first. */
 void engine_hook_watch(const struct engine_hook_watch_in *in,
                        struct engine_hook_watch_out *out);

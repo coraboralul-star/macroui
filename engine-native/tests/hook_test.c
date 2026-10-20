@@ -69,6 +69,23 @@ static void check_resolve(void)
     expect(engine_resolve_key(0, 0, 0) == 0, "vk 0 is empty");
     expect(engine_is_mouse_button(ENGINE_KEY_MBUTTON) == 1, "middle is a mouse button");
     expect(engine_is_mouse_button(0x42) == 0, "a letter is not a mouse button");
+    expect(engine_resolve_mouse(ENGINE_MSG_XBUTTONDOWN, 1u << 16, NULL) == ENGINE_KEY_XBUTTON1,
+           "high word 1 is mouse 4");
+    expect(engine_resolve_mouse(ENGINE_MSG_XBUTTONDOWN, 2u << 16, NULL) == ENGINE_KEY_XBUTTON2,
+           "high word 2 is mouse 5");
+    expect(engine_resolve_mouse(ENGINE_MSG_XBUTTONDOWN, 1u, NULL) == ENGINE_KEY_XBUTTON1,
+           "low word 1 is mouse 4");
+    expect(engine_resolve_mouse(ENGINE_MSG_XBUTTONDOWN, 2u, NULL) == ENGINE_KEY_XBUTTON2,
+           "low word 2 is mouse 5");
+    expect(engine_resolve_mouse(ENGINE_MSG_XBUTTONUP, 2u, NULL) == ENGINE_KEY_XBUTTON2,
+           "mouse 5 up uses the same word");
+    expect(engine_repeat_is_missed_up(ENGINE_KEY_XBUTTON1, 1, 1) == 1,
+           "a second mouse 4 down is a missed up");
+    expect(engine_repeat_is_missed_up(ENGINE_KEY_XBUTTON2, 1, 1) == 1,
+           "a second mouse 5 down is a missed up");
+    expect(engine_repeat_is_missed_up(0x45, 1, 1) == 0, "a keyboard repeat is not a missed up");
+    expect(engine_repeat_is_missed_up(ENGINE_KEY_XBUTTON2, 1, 0) == 0,
+           "the first mouse 5 down is not a missed up");
 }
 
 static void check_trigger_rules(void)
@@ -77,6 +94,7 @@ static void check_trigger_rules(void)
     int swallow = 0;
     int pass = 0;
 
+    expect(engine_can_trigger(0) == 0, "an empty trigger is not a key");
     expect(engine_can_trigger(0x42) == 1, "a letter can trigger");
     expect(engine_can_trigger(ENGINE_KEY_MBUTTON) == 1, "middle can trigger");
     expect(engine_can_trigger(ENGINE_KEY_XBUTTON1) == 1, "side button can trigger");
@@ -139,32 +157,6 @@ static void check_focus(void)
            "a set focus does not swallow an empty foreground");
 }
 
-static void check_watch_predicates(void)
-{
-    expect(!engine_needs_key_raise(0, 1000, 1, 0, 9000, 8000),
-           "idle engine leaves the keyboard hook");
-    expect(engine_needs_key_raise(0, 0, 0, 1, 9000, 8000) == 1,
-           "a quiet keyboard hook is put back");
-    expect(!engine_needs_key_raise(0, 8000, 1, 1, 9000, 8000),
-           "mouse activity keeps the keyboard hook");
-    expect(!engine_needs_key_raise(0, 10000, 1, 1, 9000, 8000),
-           "a future mouse stamp keeps the keyboard hook");
-    expect(!engine_needs_key_raise(1000, 0, 0, 1, 8999, 8000),
-           "7999 ms leaves the keyboard hook");
-    expect(engine_needs_key_raise(1000, 0, 0, 1, 9000, 8000) == 1,
-           "8000 ms puts the keyboard hook back");
-    expect(engine_needs_mouse_raise(0, 1, 1, 9000, 8000) == 1,
-           "a quiet mouse hook is put back");
-    expect(!engine_needs_mouse_raise(8000, 1, 1, 9000, 8000),
-           "a live mouse hook stays");
-    expect(!engine_needs_mouse_raise(0, 0, 1, 9000, 8000),
-           "no mouse trigger means no mouse hook");
-    expect(engine_needs_mouse_raise(1000, 1, 1, 9000, 8000) == 1,
-           "8000 ms puts the mouse hook back");
-    expect(!engine_needs_mouse_raise(1001, 1, 1, 9000, 8000),
-           "7999 ms leaves the mouse hook");
-}
-
 static void check_watch_plan(void)
 {
     struct engine_hook_watch_in in;
@@ -192,41 +184,36 @@ static void check_watch_plan(void)
     in.running = 1;
     in.key_stamp = 1;
     in.need_mouse = 0;
+    in.silence = 8000;
+    in.now = 9000;
     engine_hook_watch(&in, &out);
-    expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_KEY,
-           "a running engine puts a quiet keyboard hook back");
+    expect(out.count == 0, "a quiet keyboard hook stays");
 
     in.need_mouse = 1;
     in.mouse_installed = 1;
-    in.mouse_stamp = 8000;
+    in.mouse_stamp = 1;
     in.key_stamp = 1;
     engine_hook_watch(&in, &out);
-    expect(out.count == 0, "mouse activity keeps the plan quiet");
-
-    in.mouse_stamp = 1;
-    in.key_stamp = 8000;
-    engine_hook_watch(&in, &out);
-    expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE,
-           "a quiet mouse hook is in the plan");
+    expect(out.count == 0, "a quiet mouse hook stays");
 
     in.mouse_installed = 0;
-    in.key_stamp = 9000;
+    in.key_stamp = 1;
     in.mouse_stamp = 0;
     in.now = 9000;
     engine_hook_watch(&in, &out);
     expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE,
-           "a missing mouse hook is installed before the silence check");
+           "a missing mouse hook is installed");
 
     in.need_mouse = 1;
     in.mouse_installed = 0;
     in.running = 1;
     in.key_stamp = 1;
-    in.mouse_stamp = 8000;
-    in.now = 9000;
+    in.mouse_stamp = 1;
+    in.now = 20000;
+    in.silence = 8000;
     engine_hook_watch(&in, &out);
-    expect(out.count == 2 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE &&
-               out.op[1] == ENGINE_HOOK_RAISE_KEY,
-           "a missing mouse hook does not hide a dead keyboard hook");
+    expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE,
+           "silence does not reinstall a live keyboard hook");
 
     in.need_mouse = 0;
     in.mouse_installed = 1;
@@ -235,6 +222,20 @@ static void check_watch_plan(void)
     engine_hook_watch(&in, &out);
     expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE,
            "a keyboard-only profile removes the mouse hook");
+
+    memset(&in, 0, sizeof in);
+    in.key_installed = 1;
+    in.mouse_installed = 1;
+    in.need_mouse = 1;
+    in.desktop = 1;
+    in.key_stamp = 1;
+    in.mouse_stamp = 1;
+    in.now = 9000;
+    in.silence = 8000;
+    engine_hook_watch(&in, &out);
+    expect(out.count == 2 && out.op[0] == ENGINE_HOOK_RAISE_KEY &&
+               out.op[1] == ENGINE_HOOK_RAISE_MOUSE,
+           "returning from the lock screen reinstalls both hooks");
 }
 
 static int pop_id(struct engine_finger *finger)
@@ -360,6 +361,13 @@ static void check_classify(void)
     engine_hook_classify(&state, &sample, &decision);
     expect(decision.swallow == 0 && decision.enqueued == 1, "an unmapped side button is passed");
     expect(pop_id(&finger) == 1 && finger.id == ENGINE_KEY_XBUTTON2, "x2 queued");
+    sample.mouse_data = 2u;
+    engine_hook_classify(&state, &sample, &decision);
+    expect(decision.enqueued == 1, "low word mouse 5 is queued");
+    expect(pop_id(&finger) == 1 && finger.id == ENGINE_KEY_XBUTTON2, "low word mouse 5 is mouse 5");
+    sample.mouse_data = 1u;
+    engine_hook_classify(&state, &sample, &decision);
+    expect(pop_id(&finger) == 1 && finger.id == ENGINE_KEY_XBUTTON1, "low word mouse 4 is mouse 4");
 
     sample.msg = ENGINE_MSG_LBUTTONDOWN;
     sample.flags = ENGINE_MOUSE_INJECTED;
@@ -452,7 +460,6 @@ int main(void)
     check_resolve();
     check_trigger_rules();
     check_focus();
-    check_watch_predicates();
     check_watch_plan();
     check_classify();
     check_ops();

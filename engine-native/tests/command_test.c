@@ -646,6 +646,48 @@ static void check_mouse_triggers(void)
     engine_fingers_set(&fingers, ev.id, ev.down);
     engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
     expect(play->runners[0].done == 1, "the real mouse 4 release ends the hold");
+
+    engine_play_init(play);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    engine_hook_init(&hooks);
+    macro.trigger = ENGINE_KEY_XBUTTON2;
+    macro.step_count = 1;
+    extra.enabled = 1;
+    {
+        struct engine_hook_sample sample;
+
+        memset(&sample, 0, sizeof sample);
+        sample.kind = ENGINE_HOOK_MOUSE;
+        sample.msg = ENGINE_MSG_XBUTTONDOWN;
+        sample.mouse_data = 2u;
+        sample.now = 90;
+        engine_hook_classify(&hooks, &sample, &decision);
+    }
+    expect(engine_event_pop(&hooks, &ev) == 1 && ev.id == ENGINE_KEY_XBUTTON2 && ev.down == 1,
+           "low word mouse 5 is a finger");
+    engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 0);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    expect(play->pending_count == 1, "mouse 5 while held starts like mouse 4");
+    engine_play_flush(play);
+
+    engine_play_init(play);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    macro.trigger = 0;
+    macro.step_count = 4;
+    engine_fingers_set(&fingers, (uint16_t)'e', 1);
+    engine_fingers_set(&fingers, (uint16_t)'r', 1);
+    engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON1, 1);
+    engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    expect(play->pending_count == 0 && play->runner_count == 0, "an empty trigger starts nothing");
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, play);
+    press_button(&hooks, ENGINE_KEY_XBUTTON2, 1, 0, 0, 91, &decision);
+    expect(decision.swallow == 0, "an empty trigger does not swallow mouse 5");
+    engine_event_pop(&hooks, &ev);
     free(play);
 }
 
@@ -655,7 +697,6 @@ static void check_recover(void)
     struct engine_profile_extra extra;
     struct engine_live_config live;
     struct engine_fingers fingers;
-    int64_t at[ENGINE_KEY_ID_MAX + 1];
     uint16_t ids[4];
     int n;
 
@@ -677,6 +718,8 @@ static void check_recover(void)
     expect(!engine_live_needs_mouse(&live), "right click does not need the mouse hook");
     macro.trigger = ENGINE_KEY_XBUTTON1;
     expect(engine_live_needs_mouse(&live) == 1, "mouse 4 needs the mouse hook");
+    macro.trigger = ENGINE_KEY_XBUTTON2;
+    expect(engine_live_needs_mouse(&live) == 1, "mouse 5 needs the mouse hook");
     macro.trigger = ENGINE_KEY_MBUTTON;
     expect(engine_live_needs_mouse(&live) == 1, "middle needs the mouse hook");
     extra.enabled = 0;
@@ -684,22 +727,38 @@ static void check_recover(void)
     extra.enabled = 1;
     macro.step_count = 0;
     expect(!engine_live_needs_mouse(&live), "a side button with no steps does not need the mouse hook");
+    macro.trigger = 0;
+    macro.step_count = 4;
+    expect(!engine_can_trigger(0), "an empty trigger is not a key");
+    expect(!engine_live_needs_mouse(&live), "an empty trigger does not need the mouse hook");
 
-    memset(at, 0, sizeof at);
-    engine_fingers_clear(&fingers);
-    engine_fingers_set(&fingers, 0x45, 1);
-    at[0x45] = 1000;
-    n = engine_fingers_release_quiet(&fingers, at, ENGINE_KEY_ID_MAX + 1, 2000, 2500, ids, 4);
-    expect(n == 0 && engine_fingers_down(&fingers, 0x45), "a fresh hold stays down");
-    n = engine_fingers_release_quiet(&fingers, at, ENGINE_KEY_ID_MAX + 1, 3500, 2500, ids, 4);
-    expect(n == 1 && ids[0] == 0x45 && !engine_fingers_down(&fingers, 0x45),
-           "a quiet key is released");
+    {
+        struct engine_fingers up;
 
-    engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON1, 1);
-    at[ENGINE_KEY_XBUTTON1] = 1000;
-    n = engine_fingers_release_quiet(&fingers, at, ENGINE_KEY_ID_MAX + 1, 10000, 2500, ids, 4);
-    expect(n == 0 && engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1),
-           "a quiet mouse button stays down");
+        engine_fingers_clear(&fingers);
+        engine_fingers_clear(&up);
+        engine_fingers_set(&fingers, 0x45, 1);
+        engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON1, 1);
+        engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+        n = engine_fingers_release_os_up(&fingers, up.down, ids, 4);
+        expect(n == 0 && engine_fingers_down(&fingers, 0x45) &&
+                   engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1) &&
+                   engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+               "no timer releases a held key or side button");
+        engine_fingers_set(&up, 0x45, 1);
+        n = engine_fingers_release_os_up(&fingers, up.down, ids, 4);
+        expect(n == 1 && ids[0] == 0x45 && !engine_fingers_down(&fingers, 0x45) &&
+                   engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1) &&
+                   engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+               "os up releases only the key that is up");
+        engine_fingers_clear(&up);
+        engine_fingers_set(&up, ENGINE_KEY_XBUTTON2, 1);
+        n = engine_fingers_release_os_up(&fingers, up.down, ids, 4);
+        expect(n == 1 && ids[0] == ENGINE_KEY_XBUTTON2 &&
+                   !engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2) &&
+                   engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1),
+               "os up releases mouse 5 and leaves mouse 4");
+    }
     n = engine_fingers_release_down(&fingers, 0, 1, ids, 4);
     expect(n == 1 && ids[0] == ENGINE_KEY_XBUTTON1 && !engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1),
            "a hook reinstall releases the mouse button");

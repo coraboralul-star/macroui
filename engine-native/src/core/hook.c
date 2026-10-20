@@ -26,13 +26,6 @@ static int mouse_motion(uint32_t msg)
         || msg == ENGINE_MSG_MOUSEHWHEEL;
 }
 
-static int silent_for(int64_t stamp, int64_t now, int64_t silence)
-{
-    if (silence <= 0 || now < stamp)
-        return 0;
-    return (now - stamp) >= silence;
-}
-
 static void push_op(struct engine_hook_watch_out *out, uint8_t op)
 {
     if (out->count >= 4)
@@ -204,6 +197,8 @@ uint16_t engine_resolve_mouse(uint32_t msg, uint32_t mouse_data, int *down)
         pressed = msg == ENGINE_MSG_MBUTTONDOWN;
     } else if (msg == ENGINE_MSG_XBUTTONDOWN || msg == ENGINE_MSG_XBUTTONUP) {
         button = (mouse_data >> 16) & 0xffffu;
+        if (button == 0)
+            button = mouse_data & 0xffffu;
         pressed = msg == ENGINE_MSG_XBUTTONDOWN;
         if (button == 1)
             id = ENGINE_KEY_XBUTTON1;
@@ -262,6 +257,11 @@ const char *engine_key_name(uint16_t id)
 int engine_is_mouse_button(uint16_t id)
 {
     return id >= ENGINE_KEY_LBUTTON && id <= ENGINE_KEY_XBUTTON2;
+}
+
+int engine_repeat_is_missed_up(uint16_t id, int down, int already)
+{
+    return down && already && engine_is_mouse_button(id);
 }
 
 int engine_can_trigger(uint16_t id)
@@ -540,33 +540,9 @@ void engine_hook_classify(struct engine_hook_state *st,
         out->swallow = 1;
 }
 
-int engine_needs_key_raise(int64_t key_stamp, int64_t mouse_stamp, int need_mouse,
-                           int armed, int64_t now, int64_t silence)
-{
-    if (!armed)
-        return 0;
-    if (!silent_for(key_stamp, now, silence))
-        return 0;
-    /* A mouse stamp inside the window, including one ahead of now, keeps the key hook. */
-    if (need_mouse && mouse_stamp != 0 && !silent_for(mouse_stamp, now, silence))
-        return 0;
-    return 1;
-}
-
-int engine_needs_mouse_raise(int64_t mouse_stamp, int need_mouse, int armed,
-                             int64_t now, int64_t silence)
-{
-    if (!armed || !need_mouse)
-        return 0;
-    return silent_for(mouse_stamp, now, silence);
-}
-
 void engine_hook_watch(const struct engine_hook_watch_in *in,
                        struct engine_hook_watch_out *out)
 {
-    int64_t key_stamp;
-    int64_t mouse_stamp;
-
     if (!out)
         return;
     memset(out, 0, sizeof *out);
@@ -584,30 +560,20 @@ void engine_hook_watch(const struct engine_hook_watch_in *in,
         push_op(out, ENGINE_HOOK_RAISE_MOUSE);
         return;
     }
+    /* The lock screen can remove a hook whose handle still looks valid.
+       Coming back is the evidence. A quiet stamp is not. */
+    if (in->desktop) {
+        push_op(out, ENGINE_HOOK_RAISE_KEY);
+        if (in->need_mouse || in->mouse_installed)
+            push_op(out, ENGINE_HOOK_RAISE_MOUSE);
+        return;
+    }
     if (!in->armed && !in->running && !in->pending)
         return;
 
-    key_stamp = in->key_stamp;
-    mouse_stamp = in->mouse_stamp;
-    /* A missing mouse hook is not proof the thread is alive. Do not let that
-       pretend-fresh stamp keep a dead keyboard hook from coming back. */
     if (in->need_mouse && !in->mouse_installed)
         push_op(out, ENGINE_HOOK_RAISE_MOUSE);
     else if (!in->need_mouse && in->mouse_installed)
-        push_op(out, ENGINE_HOOK_RAISE_MOUSE);
-    if (key_stamp == 0)
-        key_stamp = in->now;
-    if (mouse_stamp == 0)
-        mouse_stamp = in->now;
-
-    /* CheckPhysicalHook passes armed as true once the idle return is past.
-       Mouse activity keeps the keyboard hook only while that mouse hook is up. */
-    if (engine_needs_key_raise(key_stamp, mouse_stamp,
-                               in->need_mouse && in->mouse_installed, 1,
-                               in->now, in->silence))
-        push_op(out, ENGINE_HOOK_RAISE_KEY);
-    if (in->mouse_installed &&
-        engine_needs_mouse_raise(mouse_stamp, in->need_mouse, 1, in->now, in->silence))
         push_op(out, ENGINE_HOOK_RAISE_MOUSE);
 }
 
