@@ -871,12 +871,12 @@ static void drain_fingers(int64_t now)
     g.defer_count = 0;
     pause = engine_fingers_down(&g.fingers, ENGINE_KEY_PAUSE);
     while (engine_event_pop(&g.hooks, &ev)) {
-        int repeat_down = engine_repeat_is_missed_up(
-            ev.id, ev.down, engine_fingers_down(&g.fingers, ev.id));
+        int deferred;
 
         if (ev.id == ENGINE_KEY_PAUSE && engine_panic_edge(ev.id, pause, ev.down))
             engine_play_stop_all(g.play);
-        if (repeat_down) {
+        deferred = engine_finger_note(&g.fingers, ev.id, ev.down, g.defer_down, &g.defer_count, 8);
+        if (deferred) {
             char line[128];
             const char *name = engine_key_name(ev.id);
 
@@ -885,11 +885,6 @@ static void drain_fingers(int64_t now)
             else
                 snprintf(line, sizeof line, "release %u reason=second-down", (unsigned)ev.id);
             engine_log(line);
-            engine_fingers_set(&g.fingers, ev.id, 0);
-            if (g.defer_count < 8)
-                g.defer_down[g.defer_count++] = ev.id;
-        } else {
-            engine_fingers_set(&g.fingers, ev.id, ev.down);
         }
         engine_finger_at_touch(g.finger_at, ENGINE_KEY_ID_MAX + 1, ev.id, ev.qpc ? ev.qpc : now);
         if (ev.id == ENGINE_KEY_PAUSE)
@@ -910,39 +905,6 @@ static int input_desktop_open(void)
         return 0;
     CloseDesktop(desk);
     return 1;
-}
-
-static int finger_vk(uint16_t id, int *vk)
-{
-    if (id == ENGINE_KEY_LBUTTON) {
-        *vk = VK_LBUTTON;
-        return 1;
-    }
-    if (id == ENGINE_KEY_RBUTTON) {
-        *vk = VK_RBUTTON;
-        return 1;
-    }
-    if (id == ENGINE_KEY_MBUTTON) {
-        *vk = VK_MBUTTON;
-        return 1;
-    }
-    if (id == ENGINE_KEY_XBUTTON1) {
-        *vk = VK_XBUTTON1;
-        return 1;
-    }
-    if (id == ENGINE_KEY_XBUTTON2) {
-        *vk = VK_XBUTTON2;
-        return 1;
-    }
-    if (id == ENGINE_KEY_NUMPAD_ENTER) {
-        *vk = VK_RETURN;
-        return 1;
-    }
-    if (id > 0 && id < 256) {
-        *vk = (int)id;
-        return 1;
-    }
-    return 0;
 }
 
 /* The first sample only records which desktop is current. Later, a closed
@@ -966,29 +928,16 @@ static int note_desktop(void)
 static void reconcile_fingers(void)
 {
     uint16_t ids[16];
-    uint8_t up[ENGINE_FINGER_BYTES];
-    uint16_t id;
     int n;
 
-    if (!g.desktop_open) {
-        n = engine_fingers_release_down(&g.fingers, 1, 1, ids, 16);
-        if (n > 0)
-            log_released(ids, n, "desktop");
+    /* A swallowed trigger never updates GetAsyncKeyState, so that call would
+       release it on the same tick as the press. The hook's own up is the
+       release. The lock screen is the other one. */
+    if (g.desktop_open)
         return;
-    }
-    memset(up, 0, sizeof up);
-    for (id = 1; id <= ENGINE_KEY_ID_MAX; id++) {
-        int vk;
-
-        if (!engine_fingers_down(&g.fingers, id) || !finger_vk(id, &vk))
-            continue;
-        if (GetAsyncKeyState(vk) & 0x8000)
-            continue;
-        up[id / 8u] = (uint8_t)(up[id / 8u] | (uint8_t)(1u << (id % 8u)));
-    }
-    n = engine_fingers_release_os_up(&g.fingers, up, ids, 16);
+    n = engine_fingers_release_down(&g.fingers, 1, 1, ids, 16);
     if (n > 0)
-        log_released(ids, n, "async");
+        log_released(ids, n, "desktop");
 }
 
 static void apply_deferred(int64_t now)

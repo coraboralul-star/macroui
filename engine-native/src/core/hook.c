@@ -261,7 +261,9 @@ int engine_is_mouse_button(uint16_t id)
 
 int engine_repeat_is_missed_up(uint16_t id, int down, int already)
 {
-    return down && already && engine_is_mouse_button(id);
+    if (!down || !already)
+        return 0;
+    return id == ENGINE_KEY_XBUTTON1 || id == ENGINE_KEY_XBUTTON2;
 }
 
 int engine_can_trigger(uint16_t id)

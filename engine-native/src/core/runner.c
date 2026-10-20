@@ -2242,7 +2242,7 @@ static int release_one(struct engine_fingers *fingers, uint16_t id, uint16_t *ou
 }
 
 int engine_fingers_release_os_up(struct engine_fingers *fingers, const uint8_t *up,
-                                 uint16_t *out, int cap)
+                                 const uint8_t *blocked, uint16_t *out, int cap)
 {
     int n = 0;
     uint16_t id;
@@ -2250,13 +2250,43 @@ int engine_fingers_release_os_up(struct engine_fingers *fingers, const uint8_t *
     if (!fingers || !up)
         return 0;
     for (id = 1; id <= ENGINE_KEY_ID_MAX; id++) {
+        uint8_t bit = (uint8_t)(1u << (id % 8u));
+
         if (!engine_fingers_down(fingers, id))
             continue;
-        if ((up[id / 8u] & (uint8_t)(1u << (id % 8u))) == 0)
+        if (blocked && (blocked[id / 8u] & bit) != 0)
+            continue;
+        if ((up[id / 8u] & bit) == 0)
             continue;
         n = release_one(fingers, id, out, cap, n);
     }
     return n;
+}
+
+int engine_finger_note(struct engine_fingers *fingers, uint16_t id, int down,
+                       uint16_t *defer, int *defer_count, int cap)
+{
+    int i;
+    int kept;
+
+    if (!fingers)
+        return 0;
+    if (engine_repeat_is_missed_up(id, down, engine_fingers_down(fingers, id))) {
+        engine_fingers_set(fingers, id, 0);
+        if (defer && defer_count && *defer_count < cap)
+            defer[(*defer_count)++] = id;
+        return 1;
+    }
+    engine_fingers_set(fingers, id, down);
+    if (down || !defer || !defer_count)
+        return 0;
+    kept = 0;
+    for (i = 0; i < *defer_count; i++) {
+        if (defer[i] != id)
+            defer[kept++] = defer[i];
+    }
+    *defer_count = kept;
+    return 0;
 }
 
 int engine_fingers_release_down(struct engine_fingers *fingers, int keys, int mouse,

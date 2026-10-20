@@ -83,6 +83,10 @@ static void check_resolve(void)
            "a second mouse 4 down is a missed up");
     expect(engine_repeat_is_missed_up(ENGINE_KEY_XBUTTON2, 1, 1) == 1,
            "a second mouse 5 down is a missed up");
+    expect(engine_repeat_is_missed_up(ENGINE_KEY_LBUTTON, 1, 1) == 0,
+           "a second left click is not a missed up");
+    expect(engine_repeat_is_missed_up(ENGINE_KEY_MBUTTON, 1, 1) == 0,
+           "a second middle click is not a missed up");
     expect(engine_repeat_is_missed_up(0x45, 1, 1) == 0, "a keyboard repeat is not a missed up");
     expect(engine_repeat_is_missed_up(ENGINE_KEY_XBUTTON2, 1, 0) == 0,
            "the first mouse 5 down is not a missed up");

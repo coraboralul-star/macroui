@@ -391,12 +391,19 @@ int engine_fingers_seen(const struct engine_fingers *fingers, uint16_t id);
    length of at. Id 0 and an id past count are ignored. */
 void engine_finger_at_touch(int64_t *at, int count, uint16_t id, int64_t now);
 
-/* up uses the same bit layout as fingers->down. A set bit means that id is up.
-   Only an id that is currently down, and marked up, is released. A key with
-   no bit stays down: Windows repeats only the latest key, so a quiet hold is
-   still a hold. Writes the released ids. Returns how many were released. */
+/* up and blocked use the same bit layout as fingers->down. A set up bit means
+   that id looks up. A set blocked bit is a key the engine swallows: it stays
+   down, because a swallowed key never reaches GetAsyncKeyState. A null
+   blocked mask blocks nothing. Writes the released ids. Returns how many. */
 int engine_fingers_release_os_up(struct engine_fingers *fingers, const uint8_t *up,
-                                 uint16_t *out, int cap);
+                                 const uint8_t *blocked, uint16_t *out, int cap);
+
+/* Apply one hook event. A second down of mouse 4 or 5 clears the finger and
+   appends id to defer. A later up of that id removes the defer and leaves the
+   finger up, so a click in one batch does not stay held. Every other event,
+   including a second left click, applies immediately. Returns 1 when deferred. */
+int engine_finger_note(struct engine_fingers *fingers, uint16_t id, int down,
+                       uint16_t *defer, int *defer_count, int cap);
 
 /* Releases every down id. keys 1 includes non-mouse ids. mouse 1 includes
    mouse buttons. Writes the released ids. Returns how many were released. */

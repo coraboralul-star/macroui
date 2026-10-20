@@ -740,20 +740,20 @@ static void check_recover(void)
         engine_fingers_set(&fingers, 0x45, 1);
         engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON1, 1);
         engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
-        n = engine_fingers_release_os_up(&fingers, up.down, ids, 4);
+        n = engine_fingers_release_os_up(&fingers, up.down, NULL, ids, 4);
         expect(n == 0 && engine_fingers_down(&fingers, 0x45) &&
                    engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1) &&
                    engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
                "no timer releases a held key or side button");
         engine_fingers_set(&up, 0x45, 1);
-        n = engine_fingers_release_os_up(&fingers, up.down, ids, 4);
+        n = engine_fingers_release_os_up(&fingers, up.down, NULL, ids, 4);
         expect(n == 1 && ids[0] == 0x45 && !engine_fingers_down(&fingers, 0x45) &&
                    engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1) &&
                    engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
                "os up releases only the key that is up");
         engine_fingers_clear(&up);
         engine_fingers_set(&up, ENGINE_KEY_XBUTTON2, 1);
-        n = engine_fingers_release_os_up(&fingers, up.down, ids, 4);
+        n = engine_fingers_release_os_up(&fingers, up.down, NULL, ids, 4);
         expect(n == 1 && ids[0] == ENGINE_KEY_XBUTTON2 &&
                    !engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2) &&
                    engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1),
@@ -768,6 +768,53 @@ static void check_recover(void)
     n = engine_fingers_release_down(&fingers, 1, 0, ids, 4);
     expect(n == 1 && ids[0] == 0x45 && engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
            "a key reinstall leaves the mouse button down");
+
+    {
+        struct engine_fingers up;
+        struct engine_fingers blocked;
+        uint16_t defer[4];
+        int defer_count = 0;
+        int i;
+
+        engine_fingers_clear(&fingers);
+        engine_fingers_clear(&up);
+        engine_fingers_clear(&blocked);
+        engine_fingers_set(&fingers, (uint16_t)'r', 1);
+        engine_fingers_set(&up, (uint16_t)'r', 1);
+        engine_fingers_set(&blocked, (uint16_t)'r', 1);
+        n = engine_fingers_release_os_up(&fingers, up.down, blocked.down, ids, 4);
+        expect(n == 0 && engine_fingers_down(&fingers, (uint16_t)'r'),
+               "a swallowed trigger stays held when async says up");
+        engine_fingers_clear(&blocked);
+        n = engine_fingers_release_os_up(&fingers, up.down, blocked.down, ids, 4);
+        expect(n == 1 && !engine_fingers_down(&fingers, (uint16_t)'r'),
+               "the same key is released when it is not swallowed");
+
+        engine_fingers_clear(&fingers);
+        engine_fingers_set(&fingers, ENGINE_KEY_LBUTTON, 1);
+        defer_count = 0;
+        expect(engine_finger_note(&fingers, ENGINE_KEY_LBUTTON, 1, defer, &defer_count, 4) == 0,
+               "a second left click is applied");
+        expect(engine_finger_note(&fingers, ENGINE_KEY_LBUTTON, 0, defer, &defer_count, 4) == 0 &&
+                   defer_count == 0 && !engine_fingers_down(&fingers, ENGINE_KEY_LBUTTON),
+               "the left click up clears a stuck left button");
+
+        engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+        defer_count = 0;
+        expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1, defer, &defer_count, 4) == 1,
+               "a second mouse 5 down is deferred");
+        expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 0, defer, &defer_count, 4) == 0 &&
+                   defer_count == 0 && !engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+               "mouse 5 up in the same batch cancels the defer");
+
+        engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+        defer_count = 0;
+        engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1, defer, &defer_count, 4);
+        for (i = 0; i < defer_count; i++)
+            engine_fingers_set(&fingers, defer[i], 1);
+        expect(engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+               "mouse 5 stays down when the new press has no up yet");
+    }
 }
 
 int main(void)

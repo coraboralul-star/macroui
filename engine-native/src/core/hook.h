@@ -159,8 +159,8 @@ const char *engine_key_name(uint16_t id);
 
 int engine_is_mouse_button(uint16_t id);
 
-/* A second down while that mouse button is already down is a missed up.
-   Mouse 4 and mouse 5 both count. A keyboard auto-repeat does not. */
+/* A second down of mouse 4 or mouse 5, while that button is already down, is
+   a missed up. Left, right, middle, and a keyboard auto-repeat are not. */
 int engine_repeat_is_missed_up(uint16_t id, int down, int already);
 
 /* Pause, left click, right click, and an empty id are not triggers.
