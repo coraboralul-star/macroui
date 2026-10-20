@@ -124,6 +124,9 @@ struct engine_hook_watch_in {
     int pending;
     int suspect;
     int desktop;
+    /* The live config id just changed. Reinstall the mouse hook when this
+       config has a middle or side trigger. A keyboard-only config still drops it. */
+    int switched;
     int64_t key_stamp;
     int64_t mouse_stamp;
     int64_t now;
@@ -215,7 +218,8 @@ void engine_event_clear_overflow(struct engine_hook_state *st);
 
 /* A missing keyboard hook, a suspect flag, or a return from the lock screen
    re-raises, even when idle. A quiet hook stays. silence is ignored.
-   Idle with a live hook does not re-raise. Ops run in order. Each op unhooks first. */
+   Idle with a live hook does not re-raise. A config switch reinstalls the
+   mouse hook when the new config needs one. Ops run in order. Each op unhooks first. */
 void engine_hook_watch(const struct engine_hook_watch_in *in,
                        struct engine_hook_watch_out *out);
 

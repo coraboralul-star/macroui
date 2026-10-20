@@ -521,10 +521,90 @@ static void check_empty_trigger(void)
     engine_profile_image_free(image);
 }
 
+static void check_named_keys(void)
+{
+    struct engine_profile_image *image;
+    struct engine_live_config live;
+    struct engine_play *play;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    uint16_t id = 0;
+
+    expect(engine_key_id("e", &id) == 1 && id == 0x45, "e is VK_E");
+    expect(engine_key_id("E", &id) == 1 && id == 0x45, "E is VK_E");
+    expect(engine_key_name(0x45) && strcmp(engine_key_name(0x45), "e") == 0, "held name of e");
+    expect(engine_key_id("CapsLock", &id) == 1 && id == 0x14, "CapsLock is VK_CAPITAL");
+    expect(engine_key_id("capslock", &id) == 1 && id == 0x14, "capslock alias");
+    expect(engine_key_id("\\", &id) == 1 && id == 0xDC, "backslash is VK_OEM_5");
+    expect(engine_key_id("|", &id) == 1 && id == 0xDC, "pipe is the backslash key");
+    expect(engine_key_name(0x14) && strcmp(engine_key_name(0x14), "CapsLock") == 0, "CapsLock name");
+    expect(engine_key_name(0xDC) && strcmp(engine_key_name(0xDC), "\\") == 0, "backslash name");
+
+    image = compile("{\"activeId\":\"som\",\"configs\":[{\"id\":\"som\",\"name\":\"SOM Test\","
+                    "\"focusExe\":\"ShadowOfMordor.exe\",\"macros\":["
+                    "{\"id\":\"space\",\"enabled\":true,\"playMode\":\"once\",\"advanced\":true,"
+                    "\"trigger\":{\"kind\":\"key\",\"button\":\"space\"},"
+                    "\"blocks\":[{\"type\":\"whileHeld\",\"steps\":["
+                    "{\"type\":\"key\",\"action\":\"down\",\"key\":\"space\"},"
+                    "{\"type\":\"wait\",\"ms\":350},"
+                    "{\"type\":\"key\",\"action\":\"up\",\"key\":\"space\"}]}]},"
+                    "{\"id\":\"m5\",\"enabled\":true,\"playMode\":\"once\",\"advanced\":true,"
+                    "\"trigger\":{\"kind\":\"side\",\"button\":\"XButton2\"},"
+                    "\"blocks\":[{\"type\":\"whileHeld\",\"steps\":["
+                    "{\"type\":\"key\",\"action\":\"tap\",\"key\":\"t\"}]}]},"
+                    "{\"id\":\"e-mac\",\"enabled\":true,\"playMode\":\"once\",\"advanced\":true,"
+                    "\"trigger\":{\"kind\":\"key\",\"button\":\"e\"},"
+                    "\"blocks\":[{\"type\":\"whileHeld\",\"steps\":["
+                    "{\"type\":\"key\",\"action\":\"down\",\"key\":\"e\"},"
+                    "{\"type\":\"wait\",\"ms\":18},"
+                    "{\"type\":\"key\",\"action\":\"up\",\"key\":\"e\"}]}]},"
+                    "{\"id\":\"caps\",\"enabled\":true,\"playMode\":\"whileHeld\",\"advanced\":true,"
+                    "\"trigger\":{\"kind\":\"key\",\"button\":\"CapsLock\"},"
+                    "\"blocks\":[{\"type\":\"whileHeld\",\"steps\":["
+                    "{\"type\":\"key\",\"action\":\"tap\",\"key\":\"q\"}]}]},"
+                    "{\"id\":\"menu\",\"enabled\":true,\"playMode\":\"once\","
+                    "\"trigger\":{\"kind\":\"key\",\"button\":\"\\\\\"},"
+                    "\"steps\":[{\"type\":\"key\",\"action\":\"tap\",\"key\":\"q\"}]}"
+                    "]}]}");
+    if (!image)
+        return;
+    engine_profile_pick(image, "ShadowOfMordor.exe", "som", &live);
+    expect(live.macro_count == 5, "SOM shaped catalog");
+    expect(live.macros[2].trigger == 0x45, "the e macro triggers on VK_E");
+    expect(live.macros[1].trigger == ENGINE_KEY_XBUTTON2, "M5 triggers on XButton2");
+    expect(live.macros[3].trigger == 0x14, "CapsLock compiles");
+    expect(live.macros[4].trigger == 0xDC, "backslash compiles");
+    expect(engine_live_needs_mouse(&live) == 1, "SOM Test needs the mouse hook");
+    expect(engine_live_claims(&live, 0x45) == 1, "e matches a macro");
+    expect(engine_live_claims(&live, (uint16_t)'w') == 0, "w matches nothing");
+    expect(engine_live_claims(&live, 0x30) == 0, "digit 0 matches nothing");
+
+    play = (struct engine_play *)calloc(1, sizeof *play);
+    expect(play != NULL, "SOM play");
+    if (play) {
+        engine_play_init(play);
+        engine_play_set_macros(play, live.macros, live.macro_count);
+        engine_trigger_init(&mem);
+        engine_fingers_clear(&fingers);
+        engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+        engine_fingers_set(&fingers, 0x45, 1);
+        engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+        engine_play_flush(play);
+        expect(play->runner_count == 1 && strcmp(play->runners[0].id, "e-mac") == 0,
+               "e starts the once macro");
+        play->runners[0].done = 1;
+        engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+        expect(play->pending_count == 1, "e starts again while the finger stays down");
+        free(play);
+    }
+    engine_profile_image_free(image);
+}
+
 int main(void)
 {
     check_values();
     check_empty_trigger();
+    check_named_keys();
     check_steps();
     check_blocks();
     check_swap_clicks();

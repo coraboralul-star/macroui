@@ -97,6 +97,8 @@ struct engine_resident {
     struct engine_play *play;
     struct engine_cmd_ring cmds;
     struct engine_trigger_mem triggers;
+    struct engine_fingers edge_fingers;
+    int edge_ready;
     struct engine_fingers fingers;
     struct engine_report_slot reports;
     uint32_t report_seen;
@@ -1037,18 +1039,56 @@ static void log_state(int64_t now)
     if (key_stamp > 0 && now >= key_stamp && freq > 0)
         key_age = (now - key_stamp) * 1000 / freq;
     snprintf(line, sizeof line,
-             "state config=\"%s\" id=%s focus=%s front=%s held=%s runners=%s pending=%d hookKeyAge=%lldms hookMouse=%s",
+             "state config=\"%s\" id=%s focus=%s front=%s held=%s runners=%s pending=%d hookKeyAge=%lldms hookMouse=%s mouseNeed=%s",
              g.live_name[0] ? g.live_name : "-",
              g.live_id[0] ? g.live_id : "-",
              g.live_focus[0] ? g.live_focus : "-",
              g.live_front[0] ? g.live_front : "-",
              held_pos ? held : "-", run_pos ? runs : "-", g.play->pending_count, (long long)key_age,
-             atomic_load_explicit(&g.hooks.mouse_installed, memory_order_acquire) ? "on" : "off");
+             atomic_load_explicit(&g.hooks.mouse_installed, memory_order_acquire) ? "on" : "off",
+             atomic_load_explicit(&g.hooks.need_mouse, memory_order_acquire) ? "on" : "off");
     engine_log(line);
     g.log_beat = now;
 }
 
-static void watch_hooks(int64_t now, int need_mouse)
+static void log_unmatched(const struct engine_live_config *live)
+{
+    struct engine_fingers now;
+    uint16_t id;
+
+    if (!g.armed || !live || live->macro_count <= 0)
+        return;
+    now = g.fingers;
+    if (!g.edge_ready) {
+        g.edge_fingers = now;
+        g.edge_ready = 1;
+        return;
+    }
+    for (id = 1; id <= ENGINE_KEY_ID_MAX; id++) {
+        char line[320];
+        const char *name;
+
+        if (!engine_fingers_down(&now, id) || engine_fingers_down(&g.edge_fingers, id))
+            continue;
+        if (id == ENGINE_KEY_LBUTTON || id == ENGINE_KEY_RBUTTON || id == ENGINE_KEY_PAUSE)
+            continue;
+        if (engine_live_claims(live, id))
+            continue;
+        name = engine_key_name(id);
+        if (name)
+            snprintf(line, sizeof line, "trigger %s unmatched config=\"%s\" id=%s",
+                     name, g.live_name[0] ? g.live_name : "-",
+                     g.live_id[0] ? g.live_id : "-");
+        else
+            snprintf(line, sizeof line, "trigger %u unmatched config=\"%s\" id=%s",
+                     (unsigned)id, g.live_name[0] ? g.live_name : "-",
+                     g.live_id[0] ? g.live_id : "-");
+        engine_log(line);
+    }
+    g.edge_fingers = now;
+}
+
+static void watch_hooks(int64_t now, int need_mouse, int switched)
 {
     struct engine_hook_watch_in in;
     struct engine_hook_watch_out watch;
@@ -1066,6 +1106,7 @@ static void watch_hooks(int64_t now, int need_mouse)
     in.pending = g.play->pending_count > 0;
     in.suspect = atomic_load_explicit(&g.hooks.suspect, memory_order_acquire);
     in.desktop = note_desktop();
+    in.switched = switched;
     in.key_stamp = atomic_load_explicit(&g.hooks.key_stamp, memory_order_acquire);
     in.mouse_stamp = atomic_load_explicit(&g.hooks.mouse_stamp, memory_order_acquire);
     in.now = now;
@@ -1078,7 +1119,7 @@ static void watch_hooks(int64_t now, int need_mouse)
        A keyboard hook is already installed. The mouse hook is not, so a
        mouse trigger never arrives unless this posts a message. */
     for (i = 0; i < watch.count; i++) {
-        char line[160];
+        char line[420];
         int mouse = watch.op[i] == ENGINE_HOOK_RAISE_MOUSE;
         int64_t stamp = mouse ? in.mouse_stamp : in.key_stamp;
         int64_t age = 0;
@@ -1088,17 +1129,19 @@ static void watch_hooks(int64_t now, int need_mouse)
             reason = "desktop";
         else if (in.suspect)
             reason = "suspect";
-        else if (!mouse && !in.key_installed)
-            reason = "missing";
         else if (mouse && !in.need_mouse)
             reason = "drop";
+        else if (mouse && in.switched)
+            reason = "switch";
         else if (mouse && !in.mouse_installed)
             reason = "missing";
         if (stamp > 0 && in.now >= stamp && freq > 0)
             age = (in.now - stamp) * 1000 / freq;
-        snprintf(line, sizeof line, "hook %s %s reason=%s age=%lldms",
+        snprintf(line, sizeof line, "hook %s %s reason=%s config=\"%s\" id=%s age=%lldms",
                  mouse ? "mouse" : "key",
-                 (mouse && !in.need_mouse) ? "remove" : "reinstall", reason, (long long)age);
+                 (mouse && !in.need_mouse) ? "remove" : "reinstall", reason,
+                 g.live_name[0] ? g.live_name : "-",
+                 g.live_id[0] ? g.live_id : "-", (long long)age);
         engine_log(line);
     }
     if (watch.count > 0)
@@ -1191,6 +1234,7 @@ static void playback_tick(int64_t now)
     struct engine_focus focus;
     struct engine_pointer pointer;
     uint64_t seq;
+    int switched = 0;
 
     if (!g.play)
         return;
@@ -1210,8 +1254,11 @@ static void playback_tick(int64_t now)
     }
     /* A new profile image is parsed on the IPC thread, so it does not stall
        the hook thread. Reseed only when the live config changes, which is
-       when ApplyLiveConfig seeds. A reinstall must not clear a held trigger. */
-    if (strcmp(g.live_id, live.live_id) != 0) {
+       when ApplyLiveConfig seeds. A reinstall must not clear a held trigger.
+       The mouse hook is reinstalled on that same change when the new config
+       has a middle or side trigger. */
+    switched = strcmp(g.live_id, live.live_id) != 0;
+    if (switched) {
         snprintf(g.live_id, sizeof g.live_id, "%s", live.live_id);
         engine_reap_orphans(g.play, &live);
         engine_trigger_reseed(&g.triggers);
@@ -1237,8 +1284,9 @@ static void playback_tick(int64_t now)
     engine_play_set_pointer(g.play, &pointer);
 
     apply_commands(now);
-    watch_hooks(now, engine_live_needs_mouse(&live));
+    watch_hooks(now, engine_live_needs_mouse(&live), switched);
     drain_fingers(now);
+    log_unmatched(&live);
     reconcile_fingers();
     engine_play_set_fingers(g.play, &g.fingers);
     if (g.armed)

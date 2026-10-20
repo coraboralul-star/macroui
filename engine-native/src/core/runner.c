@@ -105,6 +105,8 @@ static const char *alias_to(const char *key)
         {"xbutton1", "XButton1"},
         {"xbutton2", "XButton2"},
         {"|", "\\"},
+        {"capslock", "CapsLock"},
+        {"backslash", "\\"},
     };
     int i;
 
@@ -206,6 +208,23 @@ static int map_name(const char *name, uint16_t *id)
     if (strcmp(name, "MButton") == 0) { *id = ENGINE_KEY_MBUTTON; return 1; }
     if (strcmp(name, "XButton1") == 0) { *id = ENGINE_KEY_XBUTTON1; return 1; }
     if (strcmp(name, "XButton2") == 0) { *id = ENGINE_KEY_XBUTTON2; return 1; }
+    if (strcmp(name, "CapsLock") == 0) { *id = 0x14; return 1; }
+    if (!name[1]) {
+        switch (name[0]) {
+        case '-': *id = 0xBD; return 1;
+        case '=': *id = 0xBB; return 1;
+        case '[': *id = 0xDB; return 1;
+        case ']': *id = 0xDD; return 1;
+        case '\\': *id = 0xDC; return 1;
+        case ';': *id = 0xBA; return 1;
+        case '\'': *id = 0xDE; return 1;
+        case ',': *id = 0xBC; return 1;
+        case '.': *id = 0xBE; return 1;
+        case '/': *id = 0xBF; return 1;
+        case '`': *id = 0xC0; return 1;
+        default: break;
+        }
+    }
     return 0;
 }
 

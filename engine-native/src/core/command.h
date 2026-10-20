@@ -62,6 +62,11 @@ struct engine_trigger_mem {
     int need_seed;
     int count;
     uint8_t prev[ENGINE_TRIGGER_MEM];
+    /* Set on a real down edge. Cleared on the up and on a reseed.
+       A hold that is still down uses it to start again after the runner
+       stops. The seed poll does not set it, so a key already held at arm
+       stays quiet. */
+    uint8_t latched[ENGINE_TRIGGER_MEM];
 };
 
 struct engine_state_window {
@@ -103,7 +108,9 @@ void engine_trigger_seed(struct engine_trigger_mem *mem, const struct engine_liv
 /* First ENGINE_TRIGGER_MEM macros. A tapHold or tapSpam block uses whileHeld
    for the edge. Advanced blocks ask-stop when the release should finish the
    pass. A done once-lock does not start the macro again. An open lock starts
-   it once, then the lock is spent. */
+   it once, then the lock is spent. A while-held macro, or a once macro whose
+   block is a hold loop, starts again when that down edge already happened
+   and the finger is still down but the runner is gone. */
 void engine_poll_triggers(struct engine_play *play, const struct engine_live_config *live,
                           struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
                           const char *front, const char *owner);
@@ -133,6 +140,9 @@ void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_liv
 /* 1 when a live enabled macro with steps triggers on middle or a side button.
    Left, right, and keyboard triggers do not install the mouse hook. */
 int engine_live_needs_mouse(const struct engine_live_config *live);
+
+/* 1 when an enabled macro with steps uses this id as its trigger. */
+int engine_live_claims(const struct engine_live_config *live, uint16_t id);
 
 /* 0 when the frame fits. -1 when cap is too small. Held ids without a name
    are omitted. Window extras past the cap are dropped from the front. */

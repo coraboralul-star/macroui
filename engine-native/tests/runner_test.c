@@ -100,7 +100,9 @@ static void check_names(void)
     expect(kid("MButton") == ENGINE_KEY_MBUTTON, "middle button");
     expect(kid("XButton1") == ENGINE_KEY_XBUTTON1, "side button");
     expect(kid("XButton2") == ENGINE_KEY_XBUTTON2, "second side button");
-    expect(kid("nope") == 0 && kid("|") == 0, "unknown name");
+    expect(kid("nope") == 0, "unknown name");
+    expect(kid("|") == 0xDC && kid("\\") == 0xDC, "pipe and backslash are VK_OEM_5");
+    expect(kid("CapsLock") == 0x14, "CapsLock is VK_CAPITAL");
     expect(engine_step_kind("key") == ENGINE_STEP_KEY, "kind key");
     expect(engine_step_kind("randomWait") == ENGINE_STEP_RANDOM_WAIT, "kind random");
     expect(engine_step_kind("steps") == ENGINE_STEP_REPEAT, "steps is a repeat");

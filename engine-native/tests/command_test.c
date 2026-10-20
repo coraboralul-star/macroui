@@ -817,6 +817,88 @@ static void check_recover(void)
     }
 }
 
+static void check_held_again(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_macro macro;
+    struct engine_step step;
+    struct engine_profile_extra extra;
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+
+    if (!play) {
+        expect(0, "held play alloc");
+        return;
+    }
+    engine_play_init(play);
+    engine_macro_init(&macro);
+    memset(&step, 0, sizeof step);
+    memset(&extra, 0, sizeof extra);
+    memset(&live, 0, sizeof live);
+    step.type = ENGINE_STEP_HOLD_LOOP;
+    extra.enabled = 1;
+    snprintf(macro.id, sizeof macro.id, "e-hold");
+    macro.mode = ENGINE_MODE_ONCE;
+    macro.advanced = 1;
+    macro.trigger = 0x45;
+    macro.steps = &step;
+    macro.step_count = 1;
+    macro.top_count = 1;
+    live.macros = &macro;
+    live.extras = &extra;
+    live.macro_count = 1;
+
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+    engine_fingers_set(&fingers, 0x45, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+    expect(play->pending_count == 1, "e starts on the down edge");
+    expect(engine_live_claims(&live, 0x45) == 1, "e is claimed");
+    expect(engine_live_claims(&live, (uint16_t)'w') == 0, "w is not claimed");
+    engine_play_flush(play);
+    play->runners[0].done = 1;
+    engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+    expect(play->pending_count == 1, "a hold loop starts again while e stays down");
+
+    engine_play_init(play);
+    macro.advanced = 0;
+    macro.steps = NULL;
+    macro.step_count = 0;
+    macro.top_count = 0;
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+    engine_fingers_set(&fingers, 0x45, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+    expect(play->pending_count == 1, "a plain once still starts on the edge");
+    engine_play_flush(play);
+    play->runners[0].done = 1;
+    engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+    expect(play->pending_count == 0, "a plain once does not start again while the key stays down");
+
+    engine_play_init(play);
+    macro.mode = ENGINE_MODE_WHILE_HELD;
+    macro.step_count = 1;
+    macro.steps = &step;
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    engine_fingers_set(&fingers, 0x35, 1);
+    macro.trigger = 0x35;
+    engine_poll_triggers(play, &live, &mem, &fingers, "game.exe", "");
+    expect(play->pending_count == 0, "5 held at arm does not start");
+    engine_fingers_set(&fingers, 0x35, 0);
+    engine_poll_triggers(play, &live, &mem, &fingers, "game.exe", "");
+    engine_fingers_set(&fingers, 0x35, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "game.exe", "");
+    engine_play_flush(play);
+    play->runners[0].done = 1;
+    engine_poll_triggers(play, &live, &mem, &fingers, "game.exe", "");
+    expect(play->pending_count == 1, "while held starts again while 5 stays down");
+    free(play);
+}
+
 int main(void)
 {
     check_frames();
@@ -829,6 +911,7 @@ int main(void)
     check_once_lock();
     check_mouse_triggers();
     check_recover();
+    check_held_again();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

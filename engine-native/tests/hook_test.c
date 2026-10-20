@@ -240,6 +240,35 @@ static void check_watch_plan(void)
     expect(out.count == 2 && out.op[0] == ENGINE_HOOK_RAISE_KEY &&
                out.op[1] == ENGINE_HOOK_RAISE_MOUSE,
            "returning from the lock screen reinstalls both hooks");
+
+    memset(&in, 0, sizeof in);
+    in.key_installed = 1;
+    in.mouse_installed = 1;
+    in.need_mouse = 1;
+    in.armed = 1;
+    in.switched = 1;
+    engine_hook_watch(&in, &out);
+    expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE,
+           "a config switch reinstalls the mouse hook");
+
+    in.switched = 0;
+    engine_hook_watch(&in, &out);
+    expect(out.count == 0, "the same mouse config does not reinstall again");
+
+    in.need_mouse = 0;
+    in.switched = 1;
+    engine_hook_watch(&in, &out);
+    expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE,
+           "switching to a keyboard-only config drops the mouse hook");
+
+    in.armed = 0;
+    in.running = 0;
+    in.pending = 0;
+    in.need_mouse = 1;
+    in.mouse_installed = 1;
+    in.switched = 1;
+    engine_hook_watch(&in, &out);
+    expect(out.count == 0, "an idle config switch leaves the hook alone");
 }
 
 static int pop_id(struct engine_finger *finger)

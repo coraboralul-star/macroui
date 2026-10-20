@@ -250,6 +250,18 @@ const char *engine_key_name(uint16_t id)
     case ENGINE_KEY_MBUTTON: return "MButton";
     case ENGINE_KEY_XBUTTON1: return "XButton1";
     case ENGINE_KEY_XBUTTON2: return "XButton2";
+    case 0x14: return "CapsLock";
+    case 0xBA: return ";";
+    case 0xBB: return "=";
+    case 0xBC: return ",";
+    case 0xBD: return "-";
+    case 0xBE: return ".";
+    case 0xBF: return "/";
+    case 0xC0: return "`";
+    case 0xDB: return "[";
+    case 0xDC: return "\\";
+    case 0xDD: return "]";
+    case 0xDE: return "'";
     default: return NULL;
     }
 }
@@ -573,6 +585,12 @@ void engine_hook_watch(const struct engine_hook_watch_in *in,
     if (!in->armed && !in->running && !in->pending)
         return;
 
+    /* A new live config gets a fresh mouse hook when it has a middle or side
+       trigger, even if the previous config left one installed. */
+    if (in->switched && in->need_mouse) {
+        push_op(out, ENGINE_HOOK_RAISE_MOUSE);
+        return;
+    }
     if (in->need_mouse && !in->mouse_installed)
         push_op(out, ENGINE_HOOK_RAISE_MOUSE);
     else if (!in->need_mouse && in->mouse_installed)
