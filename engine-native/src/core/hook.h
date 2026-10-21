@@ -96,6 +96,14 @@ struct engine_hook_state {
     atomic_int suspect;
     atomic_uint pending_ops;
     atomic_int stop;
+
+    /* Hook thread only. A key-up follows its own down: swallowed when the
+       down was swallowed, passed when it was passed. win_passed is a LWin or
+       RWin down that Windows saw. blocked_in_win is a key or button the hook
+       swallowed since then. */
+    uint8_t down_blocked[ENGINE_SWALLOW_IDS];
+    uint8_t win_passed[2];
+    uint8_t blocked_in_win;
 };
 
 struct engine_hook_sample {
@@ -113,7 +121,13 @@ struct engine_hook_decision {
     int swallow;
     int enqueued;
     int wake;
+    /* LWin or RWin. The caller swallows this up and sends the mask key, then
+       that up, tagged with ENGINE_EXTRA_ECHO, like AHK's #MenuMaskKey. */
+    uint16_t mask_win;
 };
+
+/* AHK's default #MenuMaskKey. Unassigned, so no window acts on it. */
+#define ENGINE_MENU_MASK_VK 0xE8u
 
 struct engine_hook_watch_in {
     int key_installed;

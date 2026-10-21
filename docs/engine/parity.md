@@ -26,7 +26,9 @@ This is the native vs `engine/MacroEngine.ahk` review for #76. Rows marked kept 
 | Panic source | Hook edge of Pause | `GetKeyState("Pause", "P")` | Kept |
 | `FingerDown` for a key never seen | Up | `GetKeyState("P")` | Kept |
 | Swallow after a focus change | From the map published by the previous tick | Hotkeys, at once | Kept |
-| An up swallowed after its down passed | Can leave the key down in the game | Same | Kept in both |
+| A key-up after the map changed | Follows its own down, swallowed or passed | Follows the hotkey state at the up | Fixed on native. AHK can leave the key down in the game |
+| Win key and Start | Swallowed Win never reaches Windows. A passed Win down with a swallowed key before its up is masked with `vkE8` | `#MenuMaskKey`, default `vkE8` | Same |
+| Board HID usage | Key id named like AHK, then `HidMap` | Key name, then `HidMap` | Fixed. Native dropped punctuation, arrows, Tab, Esc, Backspace, Insert, Delete, and CapsLock on a board |
 | Play modes, exclusive, busy, mute skip, focus, enabled, once-lock, blocks | Same | Same | Same. The trace corpus has no diffs |
 
 ## Ported

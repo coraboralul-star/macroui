@@ -91,6 +91,35 @@ static int stem_prefix(const char *host, const char *stem)
     return host[n] == '-';
 }
 
+/* Windows opens Start on a Win up when it saw the Win down and nothing
+   between. Keys this hook swallowed are nothing to Windows. */
+static void note_win(struct engine_hook_state *st, uint16_t id, int down,
+                     struct engine_hook_decision *out)
+{
+    int w = id == 0x5B ? 0 : id == 0x5C ? 1 : -1;
+
+    if (w < 0) {
+        if (out->swallow && (st->win_passed[0] || st->win_passed[1]))
+            st->blocked_in_win = 1;
+        return;
+    }
+    if (down) {
+        if (!out->swallow && !st->win_passed[w]) {
+            if (!st->win_passed[w ^ 1])
+                st->blocked_in_win = 0;
+            st->win_passed[w] = 1;
+        }
+        return;
+    }
+    if (!out->swallow && st->win_passed[w] && st->blocked_in_win) {
+        out->swallow = 1;
+        out->mask_win = id;
+    }
+    st->win_passed[w] = 0;
+    if (!st->win_passed[w ^ 1])
+        st->blocked_in_win = 0;
+}
+
 static uint8_t swallow_bits(struct engine_hook_state *st, uint16_t id)
 {
     unsigned index;
@@ -508,6 +537,7 @@ void engine_hook_classify(struct engine_hook_state *st,
         out->swallow = 0;
         out->enqueued = 0;
         out->wake = 0;
+        out->mask_win = 0;
     }
     if (!st || !sample || !out)
         return;
@@ -550,8 +580,17 @@ void engine_hook_classify(struct engine_hook_state *st,
     if (id == ENGINE_KEY_LBUTTON || id == ENGINE_KEY_RBUTTON)
         return;
     bits = swallow_bits(st, id);
-    if ((bits & ENGINE_SWALLOW_BIT) && !(bits & ENGINE_PASS_BIT))
-        out->swallow = 1;
+    if (down) {
+        out->swallow = (bits & ENGINE_SWALLOW_BIT) && !(bits & ENGINE_PASS_BIT);
+        st->down_blocked[id] = (uint8_t)out->swallow;
+    } else {
+        /* The map can change between a down and its up. Swallowing an up
+           whose down passed leaves the key down in Windows. Passing an up
+           whose down was swallowed hands Windows a lone up. */
+        out->swallow = st->down_blocked[id] ? 1 : 0;
+        st->down_blocked[id] = 0;
+    }
+    note_win(st, id, down, out);
 }
 
 void engine_hook_watch(const struct engine_hook_watch_in *in,

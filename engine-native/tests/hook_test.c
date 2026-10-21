@@ -512,6 +512,92 @@ static void check_ops(void)
     expect(engine_hook_take_ops(&state, &got) == 0, "the plan is taken once");
 }
 
+static void set_map(uint16_t id, int swallow)
+{
+    uint8_t *bits = engine_swallow_begin(&state);
+
+    if (id)
+        engine_swallow_set(bits, id, swallow, 0);
+    engine_swallow_publish(&state);
+}
+
+static struct engine_hook_decision win_key(uint32_t vk, uint32_t msg, int64_t now)
+{
+    struct engine_hook_sample sample = key_sample(vk, vk, ENGINE_KEY_EXTENDED, msg, now);
+    struct engine_hook_decision decision;
+    struct engine_finger finger;
+
+    engine_hook_classify(&state, &sample, &decision);
+    while (pop_id(&finger))
+        ;
+    return decision;
+}
+
+/* Fortnite Test triggers on LWin. A swallowed Win never reaches the shell,
+   so the Start menu cannot open. An up follows its own down, so a focus
+   change mid-hold cannot leave Win, or any key, stuck in Windows. A Win
+   down that Windows did see, with a swallowed key before its up, is masked
+   the way AHK's #MenuMaskKey does it. */
+static void check_win_key(void)
+{
+    struct engine_hook_decision d;
+
+    reset();
+    set_map(0x5B, 1);
+    d = win_key(0x5B, ENGINE_MSG_KEYDOWN, 10);
+    expect(d.swallow == 1 && d.enqueued == 1 && d.mask_win == 0, "a LWin trigger down is swallowed and queued");
+    d = win_key(0x5B, ENGINE_MSG_KEYDOWN, 40);
+    expect(d.swallow == 1, "a LWin auto-repeat stays swallowed");
+    set_map(0, 0);
+    d = win_key(0x5B, ENGINE_MSG_KEYUP, 50);
+    expect(d.swallow == 1 && d.mask_win == 0,
+           "the up of a swallowed LWin is swallowed after a focus change, so Start does not see a lone up");
+
+    d = win_key(0x5C, ENGINE_MSG_KEYDOWN, 60);
+    expect(d.swallow == 0, "RWin passes when it is not a trigger");
+    set_map(0x5C, 1);
+    d = win_key(0x5C, ENGINE_MSG_KEYUP, 70);
+    expect(d.swallow == 0 && d.mask_win == 0,
+           "the up of a passed RWin passes even when RWin became a trigger, so it does not stick");
+
+    set_map(0x41, 1);
+    d = win_key(0x5B, ENGINE_MSG_KEYDOWN, 80);
+    expect(d.swallow == 0, "LWin passes when only a is a trigger");
+    d = win_key(0x41, ENGINE_MSG_KEYDOWN, 90);
+    expect(d.swallow == 1, "a is swallowed while Windows holds LWin");
+    d = win_key(0x41, ENGINE_MSG_KEYUP, 100);
+    d = win_key(0x5B, ENGINE_MSG_KEYUP, 110);
+    expect(d.swallow == 1 && d.mask_win == 0x5B,
+           "that LWin up is held back and masked, so Start does not open");
+
+    d = win_key(0x5B, ENGINE_MSG_KEYDOWN, 120);
+    d = win_key(0x5B, ENGINE_MSG_KEYUP, 130);
+    expect(d.swallow == 0 && d.mask_win == 0, "a plain LWin tap still opens Start");
+
+    reset();
+    set_map(ENGINE_KEY_XBUTTON2, 1);
+    {
+        struct engine_hook_sample sample;
+        struct engine_hook_decision md;
+        struct engine_finger finger;
+
+        memset(&sample, 0, sizeof sample);
+        sample.kind = ENGINE_HOOK_MOUSE;
+        sample.msg = ENGINE_MSG_XBUTTONDOWN;
+        sample.mouse_data = 2u << 16;
+        sample.now = 200;
+        engine_hook_classify(&state, &sample, &md);
+        expect(md.swallow == 1, "mouse 5 trigger down is swallowed");
+        set_map(0, 0);
+        sample.msg = ENGINE_MSG_XBUTTONUP;
+        sample.now = 210;
+        engine_hook_classify(&state, &sample, &md);
+        expect(md.swallow == 1, "its up follows the down after the map changed");
+        while (pop_id(&finger))
+            ;
+    }
+}
+
 int main(void)
 {
     check_names();
@@ -520,6 +606,7 @@ int main(void)
     check_focus();
     check_watch_plan();
     check_classify();
+    check_win_key();
     check_ops();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);

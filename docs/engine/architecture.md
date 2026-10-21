@@ -26,7 +26,7 @@ message pump                   tick, then the high-res wait    pipe, parse, wind
 
 | Thread | Owns | Does not |
 |---|---|---|
-| Hook | `WH_KEYBOARD_LL`, `WH_MOUSE_LL`, their message loop, the swallow return | Play a macro, parse, walk windows, call `SendInput`, take a lock |
+| Hook | `WH_KEYBOARD_LL`, `WH_MOUSE_LL`, their message loop, the swallow return, the Start menu mask | Play a macro, parse, walk windows, call `SendInput` for anything but the mask, take a lock |
 | Playback | Runners, the clock, `SendInput`, the report image, trigger decisions | Format text, parse JSON, call `GetForegroundWindow`, install a hook |
 | IPC | The pipe, JSON, profile load, foreground, the window list | Advance a runner, call `SendInput`, install a hook |
 
@@ -96,6 +96,8 @@ In order:
 4. A board echo that matches a token is consumed, passed through, and not enqueued. The token's window is 150 ms of QPC from when the IPC thread wrote that report frame. The match is this list, not a walk of the profile.
 5. Otherwise resolve the key id, enqueue, and wake if playback asked.
 6. The keyboard hook returns 1 when the published map says swallow. Middle and both side buttons return 1 from that same map, and only software output sets the bit. Board output passes those clicks. Left and right always call `CallNextHookEx` and never start a macro. Move and wheel always call `CallNextHookEx`.
+7. A down follows the map. Its up follows that down: the up is swallowed when the down was swallowed and passed when the down was passed, whatever the map says by then. That keeps a focus change mid-hold from leaving a key down in Windows, or from handing Windows a lone up.
+8. LWin and RWin are triggers like any key. A swallowed Win down and its up never reach Windows, so Start cannot open. When Windows did see a Win down and the hook swallowed any key or button before its up, that up is swallowed too. The hook then sends `vkE8` down and up and the Win up, tagged `0x56454E44`, the way AHK's `#MenuMaskKey` does. Windows sees a key between the Win down and up, so Start does not open. This is the only `SendInput` on the hook thread.
 
 Side keys are resolved here. Generic shift, ctrl, alt, and win become the left or right virtual key from the scan code and the extended bit. Right shift is scan `0x36`. Numpad Enter is virtual key `0x0D` with the extended bit, and its key id is 256. Every other key id is the virtual key, 1 through 255. Mouse buttons use the name-table ids 257 through 261. Those ids are not virtual keys.
 
