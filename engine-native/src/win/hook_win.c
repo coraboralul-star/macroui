@@ -160,8 +160,7 @@ int engine_win_on_mouse(struct engine_hook_state *st, int nCode, uintptr_t msg,
     sample.extra = (uint64_t)info->dwExtraInfo;
     sample.now = qpc_now();
     engine_hook_classify(st, &sample, out);
-    out->swallow = 0;
-    return 0;
+    return out->swallow ? 1 : 0;
 }
 
 static LRESULT CALLBACK key_proc(int nCode, WPARAM wParam, LPARAM lParam)
@@ -184,8 +183,12 @@ static LRESULT CALLBACK mouse_proc(int nCode, WPARAM wParam, LPARAM lParam)
     struct engine_hook_decision decision;
 
     if (nCode >= 0 && g_state && lParam) {
-        engine_win_on_mouse(g_state, nCode, (uintptr_t)wParam,
-                            (const MSLLHOOKSTRUCT *)lParam, &decision);
+        if (engine_win_on_mouse(g_state, nCode, (uintptr_t)wParam,
+                                (const MSLLHOOKSTRUCT *)lParam, &decision)) {
+            if (decision.wake && g_hook && g_hook->wake)
+                SetEvent(g_hook->wake);
+            return 1;
+        }
         if (decision.wake && g_hook && g_hook->wake)
             SetEvent(g_hook->wake);
     }

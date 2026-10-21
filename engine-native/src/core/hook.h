@@ -156,7 +156,8 @@ const char *engine_key_name(uint16_t id);
 
 int engine_is_mouse_button(uint16_t id);
 
-/* Pause, left click, and right click are not trigger hooks. */
+/* Pause, left click, and right click are not triggers.
+   Middle and both side buttons are. */
 int engine_can_trigger(uint16_t id);
 
 /* Pause, on the down edge. The caller calls StopAll. This does not. */
@@ -169,7 +170,9 @@ int engine_shell_in_front(const char *front, const char *owner);
 int engine_focus_swallow(const char *focus_exe, const char *front, const char *owner);
 
 /* Swallow when it is a trigger, focus matches, and the pass count is 0.
-   Software and board use the same bits. The mouse hook still never returns 1. */
+   Keyboard software and board use the same bits. Middle and both side buttons
+   are swallowed only for software output. Board output passes those clicks.
+   Left and right always pass. */
 void engine_swallow_for_trigger(const struct engine_swallow_rule *rule,
                                 int *swallow, int *pass);
 
@@ -192,7 +195,8 @@ int engine_echo_match(struct engine_hook_state *st, uint16_t id, int down, int64
 
 /* Read the struct fields, write at most one event, and say whether to swallow.
    Move and wheel are not events. Echo and injected input are not a finger.
-   The keyboard swallow bit is the published map. The mouse result never swallows. */
+   Keyboard, middle, and both side buttons swallow from the published map.
+   Left and right always pass. */
 void engine_hook_classify(struct engine_hook_state *st,
                           const struct engine_hook_sample *sample,
                           struct engine_hook_decision *out);

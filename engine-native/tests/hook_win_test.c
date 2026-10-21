@@ -97,15 +97,21 @@ static int check_structs(void)
 
     bits = engine_swallow_begin(&state);
     engine_swallow_set(bits, ENGINE_KEY_LBUTTON, 1, 0);
+    engine_swallow_set(bits, ENGINE_KEY_MBUTTON, 1, 0);
     engine_swallow_publish(&state);
     if (engine_win_on_mouse(&state, 0, WM_LBUTTONDOWN, &mouse, &decision) != 0)
-        return fail("mouse hook returned swallow");
+        return fail("left click was swallowed");
     if (!pop_ok(&finger, ENGINE_KEY_LBUTTON, 1))
         return fail("left button struct");
+    if (engine_win_on_mouse(&state, 0, WM_MBUTTONDOWN, &mouse, &decision) != 1)
+        return fail("a mapped middle click was passed");
+    if (!pop_ok(&finger, ENGINE_KEY_MBUTTON, 1))
+        return fail("middle button struct");
 
     memset(&mouse, 0, sizeof mouse);
     mouse.mouseData = 1u << 16;
-    engine_win_on_mouse(&state, 0, WM_XBUTTONUP, &mouse, &decision);
+    if (engine_win_on_mouse(&state, 0, WM_XBUTTONUP, &mouse, &decision) != 0)
+        return fail("an unmapped side button was swallowed");
     if (!pop_ok(&finger, ENGINE_KEY_XBUTTON1, 0))
         return fail("x1 up struct");
     return 0;

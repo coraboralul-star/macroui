@@ -817,6 +817,11 @@ static void watch_hooks(int64_t now)
     if (watch.clear_suspect)
         atomic_store_explicit(&g.hooks.suspect, 0, memory_order_release);
     engine_hook_post_ops(&g.hooks, &watch);
+    /* The hook thread applies a raise only after GetMessage returns.
+       A keyboard hook is already installed. The mouse hook is not, so a
+       mouse trigger never arrives unless this posts a message. */
+    if (watch.count > 0)
+        engine_win_hook_kick(&g.hook);
 }
 
 static void fill_running(struct engine_state_snapshot *snap, const struct engine_live_config *live)
@@ -911,6 +916,8 @@ static void playback_tick(int64_t now)
     memset(&live, 0, sizeof live);
     memset(&focus, 0, sizeof focus);
     image = engine_profile_slot_adopt(&g.profiles);
+    /* Software swaps while building SendInput. The report image stays logical. */
+    engine_output_set_swap(&g.play->output, image && image->swap_clicks);
     seq = image ? image->sequence : 0;
     if (seq != g.prefer_seq) {
         g.prefer_seq = seq;
@@ -948,7 +955,7 @@ static void playback_tick(int64_t now)
     engine_play_tick(g.play, now);
     send_play_report(&g.play->last, g.play->output.mode, now);
     publish_play_state(&live, &focus);
-    engine_arm_swallow(&g.hooks, &live, focus.name, focus.owner, g.armed);
+    engine_arm_swallow(&g.hooks, &live, focus.name, focus.owner, g.armed, g.play);
     engine_hook_set_wake(&g.hooks, g.armed || engine_play_alive(g.play) > 0 || g.play->pending_count > 0);
 }
 

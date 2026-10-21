@@ -80,8 +80,9 @@ static void check_trigger_rules(void)
     expect(engine_can_trigger(0x42) == 1, "a letter can trigger");
     expect(engine_can_trigger(ENGINE_KEY_MBUTTON) == 1, "middle can trigger");
     expect(engine_can_trigger(ENGINE_KEY_XBUTTON1) == 1, "side button can trigger");
-    expect(engine_can_trigger(ENGINE_KEY_LBUTTON) == 0, "left click is not a macro trigger");
-    expect(engine_can_trigger(ENGINE_KEY_RBUTTON) == 0, "right click is not a macro trigger");
+    expect(engine_can_trigger(ENGINE_KEY_LBUTTON) == 0, "left click is not a trigger");
+    expect(engine_can_trigger(ENGINE_KEY_RBUTTON) == 0, "right click is not a trigger");
+    expect(engine_can_trigger(ENGINE_KEY_XBUTTON2) == 1, "second side button can trigger");
     expect(engine_can_trigger(ENGINE_KEY_PAUSE) == 0, "pause is not a trigger");
     expect(engine_panic_edge(ENGINE_KEY_PAUSE, 0, 1) == 1, "pause down is panic");
     expect(engine_panic_edge(ENGINE_KEY_PAUSE, 1, 1) == 0, "pause repeat is not a new panic");
@@ -309,26 +310,70 @@ static void check_classify(void)
 
     bits = engine_swallow_begin(&state);
     engine_swallow_set(bits, ENGINE_KEY_LBUTTON, 1, 0);
+    engine_swallow_set(bits, ENGINE_KEY_RBUTTON, 1, 0);
+    engine_swallow_set(bits, ENGINE_KEY_MBUTTON, 1, 0);
     engine_swallow_publish(&state);
     sample.msg = ENGINE_MSG_LBUTTONDOWN;
     sample.now = 100;
     engine_hook_classify(&state, &sample, &decision);
-    expect(decision.swallow == 0 && decision.enqueued == 1, "the mouse hook never swallows");
+    expect(decision.swallow == 0 && decision.enqueued == 1, "left click always passes");
     expect(pop_id(&finger) == 1 && finger.id == ENGINE_KEY_LBUTTON && finger.down == 1,
            "left button queued");
+    sample.msg = ENGINE_MSG_RBUTTONDOWN;
+    engine_hook_classify(&state, &sample, &decision);
+    expect(decision.swallow == 0 && decision.enqueued == 1, "right click always passes");
+    pop_id(&finger);
+    sample.msg = ENGINE_MSG_MBUTTONDOWN;
+    engine_hook_classify(&state, &sample, &decision);
+    expect(decision.swallow == 1 && decision.enqueued == 1, "a mapped middle click is swallowed");
+    pop_id(&finger);
     expect(atomic_load_explicit(&state.mouse_stamp, memory_order_acquire) == 100,
            "a button marks the mouse hook");
 
     sample.msg = ENGINE_MSG_XBUTTONDOWN;
     sample.mouse_data = 2u << 16;
     engine_hook_classify(&state, &sample, &decision);
+    expect(decision.swallow == 0 && decision.enqueued == 1, "an unmapped side button is passed");
     expect(pop_id(&finger) == 1 && finger.id == ENGINE_KEY_XBUTTON2, "x2 queued");
 
     sample.msg = ENGINE_MSG_LBUTTONDOWN;
     sample.flags = ENGINE_MOUSE_INJECTED;
     sample.mouse_data = 0;
+    sample.extra = 0;
     engine_hook_classify(&state, &sample, &decision);
     expect(decision.enqueued == 0, "an injected click is not a finger");
+
+    sample.flags = 0;
+    sample.extra = ENGINE_EXTRA_ECHO;
+    sample.msg = ENGINE_MSG_XBUTTONDOWN;
+    sample.mouse_data = 1u << 16;
+    engine_hook_classify(&state, &sample, &decision);
+    expect(decision.enqueued == 0 && decision.swallow == 0, "a sent side button is not a finger");
+
+    {
+        static const uint32_t msgs[] = {
+            ENGINE_MSG_LBUTTONDOWN, ENGINE_MSG_RBUTTONDOWN, ENGINE_MSG_MBUTTONDOWN,
+            ENGINE_MSG_XBUTTONDOWN, ENGINE_MSG_XBUTTONDOWN
+        };
+        static const uint32_t data[] = { 0, 0, 0, 1u << 16, 2u << 16 };
+        static const uint16_t ids[] = {
+            ENGINE_KEY_LBUTTON, ENGINE_KEY_RBUTTON, ENGINE_KEY_MBUTTON,
+            ENGINE_KEY_XBUTTON1, ENGINE_KEY_XBUTTON2
+        };
+        int b;
+
+        for (b = 0; b < 5; b++) {
+            memset(&sample, 0, sizeof sample);
+            sample.kind = ENGINE_HOOK_MOUSE;
+            sample.msg = msgs[b];
+            sample.mouse_data = data[b];
+            sample.now = 110;
+            engine_hook_classify(&state, &sample, &decision);
+            expect(decision.enqueued == 1 && pop_id(&finger) == 1 && finger.id == ids[b] &&
+                       finger.down == 1,
+                   "every mouse button can be a finger");
+        }
+    }
 
     reset();
     engine_hook_set_wake(&state, 1);
