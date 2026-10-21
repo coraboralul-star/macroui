@@ -2,6 +2,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 
+#include "command.h"
 #include "profile.h"
 #include "report.h"
 
@@ -311,9 +312,9 @@ static void check_live(void)
     const char *text =
         "{\"activeId\":\"home\",\"macros\":[{\"id\":\"flat\",\"steps\":[{\"type\":\"wait\",\"ms\":1}]}],"
         "\"configs\":["
-        "{\"id\":\"home\",\"focusExe\":\"\",\"macros\":[{\"id\":\"a\",\"trigger\":{\"kind\":\"key\",\"button\":\"b\"},"
+        "{\"id\":\"home\",\"name\":\"Home\",\"focusExe\":\"\",\"macros\":[{\"id\":\"a\",\"trigger\":{\"kind\":\"key\",\"button\":\"b\"},"
         "\"steps\":[]}]},"
-        "{\"id\":\"game\",\"focusExe\":\"Game.exe\",\"macros\":[{\"id\":\"g\",\"steps\":[{\"type\":\"wait\",\"ms\":2}]}]},"
+        "{\"id\":\"game\",\"name\":\"Game\",\"focusExe\":\"Game.exe\",\"macros\":[{\"id\":\"g\",\"steps\":[{\"type\":\"wait\",\"ms\":2}]}]},"
         "{\"id\":\"second\",\"focusExe\":\"\",\"macros\":[{\"id\":\"s\",\"steps\":[]}]}"
         "]}";
 
@@ -329,7 +330,11 @@ static void check_live(void)
     engine_profile_pick(image, "Game.exe", "home", &live);
     expect(strcmp(live.live_id, "game") == 0 && strcmp(live.active_id, "game") == 0,
            "foreground exe picks that config");
-    expect(strcmp(live.prefer, "game") == 0, "a picked config becomes the next prefer");
+    expect(strcmp(live.name, "Game") == 0, "the chosen config keeps its name");
+    expect(strcmp(live.prefer, "home") == 0, "prefer stays the activeId that was passed");
+
+    engine_profile_pick(image, "c:\\\\games\\\\GAME.EXE", "home", &live);
+    expect(strcmp(live.live_id, "game") == 0, "focusExe matches the file name, ignoring case and directory");
 
     engine_profile_pick(image, "Game-Win64-Shipping.exe", "home", &live);
     expect(strcmp(live.live_id, "game") == 0, "shipping exe still matches the stem");
@@ -435,9 +440,171 @@ static void check_swap_and_file(void)
            "active id is on the snapshot");
 }
 
+static void check_empty_trigger(void)
+{
+    struct engine_profile_image *image;
+    struct engine_live_config live;
+    struct engine_play *play;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    uint16_t id = 1;
+    int slot;
+
+    expect(engine_key_id("", &id) == 0 && id == 0, "an empty name is not a key");
+    expect(engine_key_id("XButton2", &id) == 1 && id == ENGINE_KEY_XBUTTON2, "XButton2 name");
+    expect(engine_key_id("xbutton2", &id) == 1 && id == ENGINE_KEY_XBUTTON2, "xbutton2 name");
+    expect(engine_key_id("xbutton1", &id) == 1 && id == ENGINE_KEY_XBUTTON1, "xbutton1 name");
+
+    image = compile("{\"activeId\":\"ow\",\"configs\":[{\"id\":\"ow\",\"name\":\"Overwatch\","
+                    "\"focusExe\":\"Overwatch.exe\",\"macros\":["
+                    "{\"id\":\"blank\",\"enabled\":true,\"playMode\":\"whileHeld\","
+                    "\"trigger\":{\"kind\":\"key\",\"button\":\"\"},"
+                    "\"steps\":[{\"type\":\"key\",\"action\":\"tap\",\"key\":\"q\"}]},"
+                    "{\"id\":\"blank-side\",\"enabled\":true,\"playMode\":\"once\","
+                    "\"trigger\":{\"kind\":\"side\",\"button\":\"\"},"
+                    "\"steps\":[{\"type\":\"key\",\"action\":\"tap\",\"key\":\"q\"}]},"
+                    "{\"id\":\"shoot\",\"enabled\":true,\"playMode\":\"whileHeld\","
+                    "\"trigger\":{\"kind\":\"side\",\"button\":\"XButton2\"},"
+                    "\"steps\":[{\"type\":\"key\",\"action\":\"tap\",\"key\":\"q\"}]}"
+                    "]}]}");
+    if (!image)
+        return;
+    engine_profile_pick(image, "Overwatch.exe", "ow", &live);
+    expect(live.macro_count == 3, "empty triggers compile beside mouse 5");
+    expect(live.macros[0].trigger == 0 && live.macros[1].trigger == 0,
+           "an empty button compiles to no trigger");
+    expect(live.macros[2].trigger == ENGINE_KEY_XBUTTON2, "shoot compiles to mouse 5");
+    expect(live.trigger_head != NULL && live.trigger_head[0] == 0, "trigger 0 is not a chain");
+    expect(live.trigger_head[ENGINE_KEY_XBUTTON2] != 0, "mouse 5 is in the chain");
+    for (slot = 0; slot <= (int)ENGINE_KEY_ID_MAX; slot++) {
+        uint32_t head = live.trigger_head[slot];
+        int guard = 0;
+
+        while (head != 0 && guard < live.macro_count) {
+            expect(head != 1 && head != 2, "an empty macro is not in any chain");
+            if (head > (uint32_t)live.macro_count)
+                break;
+            head = live.trigger_next[head - 1u];
+            guard++;
+        }
+    }
+    expect(engine_live_needs_mouse(&live) == 1, "mouse 5 needs the mouse hook");
+
+    play = (struct engine_play *)calloc(1, sizeof *play);
+    expect(play != NULL, "empty trigger play");
+    if (play) {
+        engine_play_init(play);
+        engine_trigger_init(&mem);
+        engine_fingers_clear(&fingers);
+        engine_poll_triggers(play, &live, &mem, &fingers, "Overwatch.exe", "");
+        engine_fingers_set(&fingers, (uint16_t)'e', 1);
+        engine_fingers_set(&fingers, (uint16_t)'r', 1);
+        engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON1, 1);
+        engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+        engine_poll_triggers(play, &live, &mem, &fingers, "Overwatch.exe", "");
+        expect(play->pending_count == 1, "mouse 5 starts and an empty trigger does not");
+        engine_play_flush(play);
+        expect(play->runner_count == 1 && strcmp(play->runners[0].id, "shoot") == 0,
+               "the runner is shoot");
+        free(play);
+    }
+    engine_profile_image_free(image);
+
+    image = compile("{\"macros\":[{\"id\":\"blank\",\"enabled\":true,\"playMode\":\"whileHeld\","
+                    "\"trigger\":{\"kind\":\"key\",\"button\":\"\"},"
+                    "\"steps\":[{\"type\":\"key\",\"action\":\"tap\",\"key\":\"q\"}]}]}");
+    if (!image)
+        return;
+    engine_profile_pick(image, "Overwatch.exe", "", &live);
+    expect(live.macros[0].trigger == 0, "a lone empty button is not a trigger");
+    expect(!engine_live_needs_mouse(&live), "an empty trigger does not need the mouse hook");
+    engine_profile_image_free(image);
+}
+
+static void check_named_keys(void)
+{
+    struct engine_profile_image *image;
+    struct engine_live_config live;
+    struct engine_play *play;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    uint16_t id = 0;
+
+    expect(engine_key_id("e", &id) == 1 && id == 0x45, "e is VK_E");
+    expect(engine_key_id("E", &id) == 1 && id == 0x45, "E is VK_E");
+    expect(engine_key_name(0x45) && strcmp(engine_key_name(0x45), "e") == 0, "held name of e");
+    expect(engine_key_id("CapsLock", &id) == 1 && id == 0x14, "CapsLock is VK_CAPITAL");
+    expect(engine_key_id("capslock", &id) == 1 && id == 0x14, "capslock alias");
+    expect(engine_key_id("\\", &id) == 1 && id == 0xDC, "backslash is VK_OEM_5");
+    expect(engine_key_id("|", &id) == 1 && id == 0xDC, "pipe is the backslash key");
+    expect(engine_key_name(0x14) && strcmp(engine_key_name(0x14), "CapsLock") == 0, "CapsLock name");
+    expect(engine_key_name(0xDC) && strcmp(engine_key_name(0xDC), "\\") == 0, "backslash name");
+
+    image = compile("{\"activeId\":\"som\",\"configs\":[{\"id\":\"som\",\"name\":\"SOM Test\","
+                    "\"focusExe\":\"ShadowOfMordor.exe\",\"macros\":["
+                    "{\"id\":\"space\",\"enabled\":true,\"playMode\":\"once\",\"advanced\":true,"
+                    "\"trigger\":{\"kind\":\"key\",\"button\":\"space\"},"
+                    "\"blocks\":[{\"type\":\"whileHeld\",\"steps\":["
+                    "{\"type\":\"key\",\"action\":\"down\",\"key\":\"space\"},"
+                    "{\"type\":\"wait\",\"ms\":350},"
+                    "{\"type\":\"key\",\"action\":\"up\",\"key\":\"space\"}]}]},"
+                    "{\"id\":\"m5\",\"enabled\":true,\"playMode\":\"once\",\"advanced\":true,"
+                    "\"trigger\":{\"kind\":\"side\",\"button\":\"XButton2\"},"
+                    "\"blocks\":[{\"type\":\"whileHeld\",\"steps\":["
+                    "{\"type\":\"key\",\"action\":\"tap\",\"key\":\"t\"}]}]},"
+                    "{\"id\":\"e-mac\",\"enabled\":true,\"playMode\":\"once\",\"advanced\":true,"
+                    "\"trigger\":{\"kind\":\"key\",\"button\":\"e\"},"
+                    "\"blocks\":[{\"type\":\"whileHeld\",\"steps\":["
+                    "{\"type\":\"key\",\"action\":\"down\",\"key\":\"e\"},"
+                    "{\"type\":\"wait\",\"ms\":18},"
+                    "{\"type\":\"key\",\"action\":\"up\",\"key\":\"e\"}]}]},"
+                    "{\"id\":\"caps\",\"enabled\":true,\"playMode\":\"whileHeld\",\"advanced\":true,"
+                    "\"trigger\":{\"kind\":\"key\",\"button\":\"CapsLock\"},"
+                    "\"blocks\":[{\"type\":\"whileHeld\",\"steps\":["
+                    "{\"type\":\"key\",\"action\":\"tap\",\"key\":\"q\"}]}]},"
+                    "{\"id\":\"menu\",\"enabled\":true,\"playMode\":\"once\","
+                    "\"trigger\":{\"kind\":\"key\",\"button\":\"\\\\\"},"
+                    "\"steps\":[{\"type\":\"key\",\"action\":\"tap\",\"key\":\"q\"}]}"
+                    "]}]}");
+    if (!image)
+        return;
+    engine_profile_pick(image, "ShadowOfMordor.exe", "som", &live);
+    expect(live.macro_count == 5, "SOM shaped catalog");
+    expect(live.macros[2].trigger == 0x45, "the e macro triggers on VK_E");
+    expect(live.macros[1].trigger == ENGINE_KEY_XBUTTON2, "M5 triggers on XButton2");
+    expect(live.macros[3].trigger == 0x14, "CapsLock compiles");
+    expect(live.macros[4].trigger == 0xDC, "backslash compiles");
+    expect(engine_live_needs_mouse(&live) == 1, "SOM Test needs the mouse hook");
+    expect(engine_live_claims(&live, 0x45) == 1, "e matches a macro");
+    expect(engine_live_claims(&live, (uint16_t)'w') == 0, "w matches nothing");
+    expect(engine_live_claims(&live, 0x30) == 0, "digit 0 matches nothing");
+
+    play = (struct engine_play *)calloc(1, sizeof *play);
+    expect(play != NULL, "SOM play");
+    if (play) {
+        engine_play_init(play);
+        engine_play_set_macros(play, live.macros, live.macro_count);
+        engine_trigger_init(&mem);
+        engine_fingers_clear(&fingers);
+        engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+        engine_fingers_set(&fingers, 0x45, 1);
+        engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+        engine_play_flush(play);
+        expect(play->runner_count == 1 && strcmp(play->runners[0].id, "e-mac") == 0,
+               "e starts the once macro");
+        play->runners[0].done = 1;
+        engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+        expect(play->pending_count == 0, "e waits for a new down edge, like AHK");
+        free(play);
+    }
+    engine_profile_image_free(image);
+}
+
 int main(void)
 {
     check_values();
+    check_empty_trigger();
+    check_named_keys();
     check_steps();
     check_blocks();
     check_swap_clicks();

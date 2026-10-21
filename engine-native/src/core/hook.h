@@ -96,6 +96,14 @@ struct engine_hook_state {
     atomic_int suspect;
     atomic_uint pending_ops;
     atomic_int stop;
+
+    /* Hook thread only. A key-up follows its own down: swallowed when the
+       down was swallowed, passed when it was passed. win_passed is a LWin or
+       RWin down that Windows saw. blocked_in_win is a key or button the hook
+       swallowed since then. */
+    uint8_t down_blocked[ENGINE_SWALLOW_IDS];
+    uint8_t win_passed[2];
+    uint8_t blocked_in_win;
 };
 
 struct engine_hook_sample {
@@ -113,7 +121,13 @@ struct engine_hook_decision {
     int swallow;
     int enqueued;
     int wake;
+    /* LWin or RWin. The caller swallows this up and sends the mask key, then
+       that up, tagged with ENGINE_EXTRA_ECHO, like AHK's #MenuMaskKey. */
+    uint16_t mask_win;
 };
+
+/* AHK's default #MenuMaskKey. Unassigned, so no window acts on it. */
+#define ENGINE_MENU_MASK_VK 0xE8u
 
 struct engine_hook_watch_in {
     int key_installed;
@@ -123,16 +137,25 @@ struct engine_hook_watch_in {
     int running;
     int pending;
     int suspect;
+    int desktop;
+    /* The live config id just changed. Reinstall the mouse hook when this
+       config has a middle or side trigger. A keyboard-only config still drops it. */
+    int switched;
     int64_t key_stamp;
     int64_t mouse_stamp;
     int64_t now;
+    /* 8000 ms in stamp units. 0 turns the silence check off. */
     int64_t silence;
+    /* When the last silence raise was asked for. 0 is never. */
+    int64_t silence_at;
 };
 
 struct engine_hook_watch_out {
     int count;
     uint8_t op[4];
     int clear_suspect;
+    /* The keyboard raise in op is the silence rule. */
+    int silent;
 };
 
 struct engine_swallow_rule {
@@ -148,7 +171,9 @@ void engine_hook_init(struct engine_hook_state *st);
 uint16_t engine_resolve_key(uint32_t vk, uint32_t scan, uint32_t flags);
 
 /* 257..261, or 0 when the message is not a button.
-   down is 1 on a button-down message. */
+   down is 1 on a button-down message.
+   An X button is the high word, or the low word when the high word is 0.
+   Mouse 4 and mouse 5 use that same rule. */
 uint16_t engine_resolve_mouse(uint32_t msg, uint32_t mouse_data, int *down);
 
 /* Protocol names. NULL means the id is omitted from held. */
@@ -156,7 +181,11 @@ const char *engine_key_name(uint16_t id);
 
 int engine_is_mouse_button(uint16_t id);
 
-/* Pause, left click, and right click are not triggers.
+/* A second down of mouse 4 or mouse 5, while that button is already down, is
+   a missed up. Left, right, middle, and a keyboard auto-repeat are not. */
+int engine_repeat_is_missed_up(uint16_t id, int down, int already);
+
+/* Pause, left click, right click, and an empty id are not triggers.
    Middle and both side buttons are. */
 int engine_can_trigger(uint16_t id);
 
@@ -206,15 +235,14 @@ int engine_event_pop(struct engine_hook_state *st, struct engine_finger *finger)
 int engine_event_overflow(struct engine_hook_state *st);
 void engine_event_clear_overflow(struct engine_hook_state *st);
 
-/* The self-test predicates. silence is in the same unit as the stamps.
-   A quiet keyboard hook is not raised when the mouse hook has seen input. */
-int engine_needs_key_raise(int64_t key_stamp, int64_t mouse_stamp, int need_mouse,
-                           int armed, int64_t now, int64_t silence);
-int engine_needs_mouse_raise(int64_t mouse_stamp, int need_mouse, int armed,
-                             int64_t now, int64_t silence);
-
-/* Step 4. A missing keyboard hook or a suspect flag re-raises both, even when idle.
-   Idle with a live hook does not re-raise. Ops run in order. Each op unhooks first. */
+/* A missing keyboard hook, a suspect flag, or a return from the lock screen
+   re-raises, even when idle. Idle with a live hook does not re-raise.
+   While armed or playing, a keyboard hook with no event for silence is
+   reinstalled, like AHK NeedsKeyRaise: Windows can remove a hook and leave
+   its handle looking valid. A mouse event inside that window, while the
+   mouse hook is needed, keeps it. After a silence raise, the next one waits
+   another full window. Held fingers are not touched. A config switch reinstalls the
+   mouse hook when the new config needs one. Ops run in order. Each op unhooks first. */
 void engine_hook_watch(const struct engine_hook_watch_in *in,
                        struct engine_hook_watch_out *out);
 

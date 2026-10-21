@@ -148,34 +148,63 @@ public static class ReportBoard
         return id - 257;
     }
 
-    /* Names from engine_key_name, usages from HidMap. An omitted name is 0. */
+    /* The name AHK sends to the board for a native key id, then HidMap, so
+       both engines press the same HID usage. Ids are engine_key_id in
+       engine-native/src/core/runner.c. An id with no name is 0. */
     static int HidUsage(ushort id)
     {
-        if (id is >= 257 and <= 261)
+        var name = BoardName(id);
+        if (name == null)
             return 0;
+        return HidMap.KeyUsage(name, out var usage) ? usage : 0;
+    }
+
+    static string? BoardName(ushort id)
+    {
+        if (id is >= 257 and <= 261)
+            return null;
         if (id == 256)
-            return 0x58;
+            return "numpadenter";
         if (id is >= 0x41 and <= 0x5A)
-            return 0x04 + (id - 0x41);
-        if (id is >= 0x31 and <= 0x39)
-            return 0x1E + (id - 0x31);
-        if (id == 0x30)
-            return 0x27;
-        if (id is >= 0x70 and <= 0x7B)
-            return 0x3A + (id - 0x70);
+            return ((char)('a' + (id - 0x41))).ToString();
+        if (id is >= 0x30 and <= 0x39)
+            return ((char)('0' + (id - 0x30))).ToString();
+        if (id is >= 0x70 and <= 0x87)
+            return "f" + (id - 0x70 + 1).ToString(CultureInfo.InvariantCulture);
         return id switch
         {
-            0x0D => 0x28,
-            0x10 or 0xA0 => 0xE1,
-            0x11 or 0xA2 => 0xE0,
-            0x12 or 0xA4 => 0xE2,
-            0x20 => 0x2C,
-            0x5B => 0xE3,
-            0x5C => 0xE7,
-            0xA1 => 0xE5,
-            0xA3 => 0xE4,
-            0xA5 => 0xE6,
-            _ => 0,
+            0x08 => "backspace",
+            0x09 => "tab",
+            0x0D => "enter",
+            0x10 or 0xA0 => "lshift",
+            0x11 or 0xA2 => "lctrl",
+            0x12 or 0xA4 => "lalt",
+            0x14 => "capslock",
+            0x1B => "escape",
+            0x20 => "space",
+            0x25 => "left",
+            0x26 => "up",
+            0x27 => "right",
+            0x28 => "down",
+            0x2D => "insert",
+            0x2E => "delete",
+            0x5B => "lwin",
+            0x5C => "rwin",
+            0xA1 => "rshift",
+            0xA3 => "rctrl",
+            0xA5 => "ralt",
+            0xBA => ";",
+            0xBB => "=",
+            0xBC => ",",
+            0xBD => "-",
+            0xBE => ".",
+            0xBF => "/",
+            0xC0 => "`",
+            0xDB => "[",
+            0xDC => "\\",
+            0xDD => "]",
+            0xDE => "'",
+            _ => null,
         };
     }
 

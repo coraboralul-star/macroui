@@ -56,6 +56,7 @@ struct engine_catalog {
     struct engine_profile_extra *extras;
     int count;
     char id[ENGINE_ID_CAP];
+    char name[ENGINE_PROFILE_NAME_CAP];
     char focus_exe[ENGINE_PROFILE_FOCUS_CAP];
     uint16_t trigger_head[ENGINE_TRIGGER_SLOTS];
     uint32_t *trigger_next;
@@ -81,7 +82,7 @@ struct engine_profile_image {
 
 /* The live catalog. live_id is "-" when the file has no configs array.
    active_id is the snapshot field: the file id when live_id is "-", otherwise live_id.
-   prefer is what the next pick should pass. A miss leaves prefer unchanged. */
+   prefer is the activeId the caller passed. A hit does not replace it. */
 struct engine_live_config {
     const struct engine_macro *macros;
     const struct engine_profile_extra *extras;
@@ -91,6 +92,7 @@ struct engine_live_config {
     char live_id[ENGINE_ID_CAP];
     char active_id[ENGINE_ID_CAP];
     char prefer[ENGINE_ID_CAP];
+    char name[ENGINE_PROFILE_NAME_CAP];
     char focus_exe[ENGINE_PROFILE_FOCUS_CAP];
 };
 

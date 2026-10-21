@@ -646,6 +646,841 @@ static void check_mouse_triggers(void)
     engine_fingers_set(&fingers, ev.id, ev.down);
     engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
     expect(play->runners[0].done == 1, "the real mouse 4 release ends the hold");
+
+    engine_play_init(play);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    engine_hook_init(&hooks);
+    macro.trigger = ENGINE_KEY_XBUTTON2;
+    macro.step_count = 1;
+    extra.enabled = 1;
+    {
+        struct engine_hook_sample sample;
+
+        memset(&sample, 0, sizeof sample);
+        sample.kind = ENGINE_HOOK_MOUSE;
+        sample.msg = ENGINE_MSG_XBUTTONDOWN;
+        sample.mouse_data = 2u;
+        sample.now = 90;
+        engine_hook_classify(&hooks, &sample, &decision);
+    }
+    expect(engine_event_pop(&hooks, &ev) == 1 && ev.id == ENGINE_KEY_XBUTTON2 && ev.down == 1,
+           "low word mouse 5 is a finger");
+    engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 0);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    expect(play->pending_count == 1, "mouse 5 while held starts like mouse 4");
+    engine_play_flush(play);
+
+    engine_play_init(play);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    macro.trigger = 0;
+    macro.step_count = 4;
+    engine_fingers_set(&fingers, (uint16_t)'e', 1);
+    engine_fingers_set(&fingers, (uint16_t)'r', 1);
+    engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON1, 1);
+    engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "notepad.exe", "");
+    expect(play->pending_count == 0 && play->runner_count == 0, "an empty trigger starts nothing");
+    engine_arm_swallow(&hooks, &live, "notepad.exe", NULL, 1, play);
+    press_button(&hooks, ENGINE_KEY_XBUTTON2, 1, 0, 0, 91, &decision);
+    expect(decision.swallow == 0, "an empty trigger does not swallow mouse 5");
+    engine_event_pop(&hooks, &ev);
+    free(play);
+}
+
+static void check_recover(void)
+{
+    struct engine_macro macro;
+    struct engine_profile_extra extra;
+    struct engine_live_config live;
+    struct engine_fingers fingers;
+    uint16_t ids[4];
+    int n;
+
+    memset(&macro, 0, sizeof macro);
+    memset(&extra, 0, sizeof extra);
+    memset(&live, 0, sizeof live);
+    engine_macro_init(&macro);
+    snprintf(macro.id, sizeof macro.id, "ability");
+    macro.trigger = 0x45;
+    macro.step_count = 1;
+    extra.enabled = 1;
+    live.macros = &macro;
+    live.extras = &extra;
+    live.macro_count = 1;
+    expect(!engine_live_needs_mouse(&live), "a key trigger does not need the mouse hook");
+    macro.trigger = ENGINE_KEY_LBUTTON;
+    expect(!engine_live_needs_mouse(&live), "left click does not need the mouse hook");
+    macro.trigger = ENGINE_KEY_RBUTTON;
+    expect(!engine_live_needs_mouse(&live), "right click does not need the mouse hook");
+    macro.trigger = ENGINE_KEY_XBUTTON1;
+    expect(engine_live_needs_mouse(&live) == 1, "mouse 4 needs the mouse hook");
+    macro.trigger = ENGINE_KEY_XBUTTON2;
+    expect(engine_live_needs_mouse(&live) == 1, "mouse 5 needs the mouse hook");
+    macro.trigger = ENGINE_KEY_MBUTTON;
+    expect(engine_live_needs_mouse(&live) == 1, "middle needs the mouse hook");
+    extra.enabled = 0;
+    expect(!engine_live_needs_mouse(&live), "a disabled side button does not need the mouse hook");
+    extra.enabled = 1;
+    macro.step_count = 0;
+    expect(!engine_live_needs_mouse(&live), "a side button with no steps does not need the mouse hook");
+    macro.trigger = 0;
+    macro.step_count = 4;
+    expect(!engine_can_trigger(0), "an empty trigger is not a key");
+    expect(!engine_live_needs_mouse(&live), "an empty trigger does not need the mouse hook");
+
+    {
+        struct engine_fingers up;
+
+        engine_fingers_clear(&fingers);
+        engine_fingers_clear(&up);
+        engine_fingers_set(&fingers, 0x45, 1);
+        engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON1, 1);
+        engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+        n = engine_fingers_release_os_up(&fingers, up.down, NULL, ids, 4);
+        expect(n == 0 && engine_fingers_down(&fingers, 0x45) &&
+                   engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1) &&
+                   engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+               "no timer releases a held key or side button");
+        engine_fingers_set(&up, 0x45, 1);
+        n = engine_fingers_release_os_up(&fingers, up.down, NULL, ids, 4);
+        expect(n == 1 && ids[0] == 0x45 && !engine_fingers_down(&fingers, 0x45) &&
+                   engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1) &&
+                   engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+               "os up releases only the key that is up");
+        engine_fingers_clear(&up);
+        engine_fingers_set(&up, ENGINE_KEY_XBUTTON2, 1);
+        n = engine_fingers_release_os_up(&fingers, up.down, NULL, ids, 4);
+        expect(n == 1 && ids[0] == ENGINE_KEY_XBUTTON2 &&
+                   !engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2) &&
+                   engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1),
+               "os up releases mouse 5 and leaves mouse 4");
+    }
+    n = engine_fingers_release_down(&fingers, 0, 1, ids, 4);
+    expect(n == 1 && ids[0] == ENGINE_KEY_XBUTTON1 && !engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON1),
+           "a hook reinstall releases the mouse button");
+
+    engine_fingers_set(&fingers, 0x45, 1);
+    engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+    n = engine_fingers_release_down(&fingers, 1, 0, ids, 4);
+    expect(n == 1 && ids[0] == 0x45 && engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+           "a key reinstall leaves the mouse button down");
+
+    {
+        struct engine_fingers up;
+        struct engine_fingers blocked;
+        uint16_t defer[4];
+        int defer_count = 0;
+        int i;
+
+        engine_fingers_clear(&fingers);
+        engine_fingers_clear(&up);
+        engine_fingers_clear(&blocked);
+        engine_fingers_set(&fingers, (uint16_t)'r', 1);
+        engine_fingers_set(&up, (uint16_t)'r', 1);
+        engine_fingers_set(&blocked, (uint16_t)'r', 1);
+        n = engine_fingers_release_os_up(&fingers, up.down, blocked.down, ids, 4);
+        expect(n == 0 && engine_fingers_down(&fingers, (uint16_t)'r'),
+               "a swallowed trigger stays held when async says up");
+        engine_fingers_clear(&blocked);
+        n = engine_fingers_release_os_up(&fingers, up.down, blocked.down, ids, 4);
+        expect(n == 1 && !engine_fingers_down(&fingers, (uint16_t)'r'),
+               "the same key is released when it is not swallowed");
+
+        engine_fingers_clear(&fingers);
+        engine_fingers_set(&fingers, ENGINE_KEY_LBUTTON, 1);
+        defer_count = 0;
+        expect(engine_finger_note(&fingers, ENGINE_KEY_LBUTTON, 1, defer, &defer_count, 4) == 0,
+               "a second left click is applied");
+        expect(engine_finger_note(&fingers, ENGINE_KEY_LBUTTON, 0, defer, &defer_count, 4) == 0 &&
+                   defer_count == 0 && !engine_fingers_down(&fingers, ENGINE_KEY_LBUTTON),
+               "the left click up clears a stuck left button");
+
+        engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+        defer_count = 0;
+        expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1, defer, &defer_count, 4) == 1,
+               "a second mouse 5 down is deferred");
+        expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 0, defer, &defer_count, 4) == 0 &&
+                   defer_count == 0 && !engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+               "mouse 5 up in the same batch cancels the defer");
+
+        engine_fingers_set(&fingers, ENGINE_KEY_XBUTTON2, 1);
+        defer_count = 0;
+        engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1, defer, &defer_count, 4);
+        for (i = 0; i < defer_count; i++)
+            engine_fingers_set(&fingers, defer[i], 1);
+        expect(engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+               "mouse 5 stays down when the new press has no up yet");
+    }
+}
+
+/* AHK PollTriggers starts only on an edge. A runner that ends while the
+   key is still down stays ended until the key comes up and goes down. */
+static void check_held_again(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_macro macro;
+    struct engine_step step;
+    struct engine_profile_extra extra;
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+
+    if (!play) {
+        expect(0, "held play alloc");
+        return;
+    }
+    engine_play_init(play);
+    engine_macro_init(&macro);
+    memset(&step, 0, sizeof step);
+    memset(&extra, 0, sizeof extra);
+    memset(&live, 0, sizeof live);
+    step.type = ENGINE_STEP_HOLD_LOOP;
+    extra.enabled = 1;
+    snprintf(macro.id, sizeof macro.id, "e-hold");
+    macro.mode = ENGINE_MODE_ONCE;
+    macro.advanced = 1;
+    macro.trigger = 0x45;
+    macro.steps = &step;
+    macro.step_count = 1;
+    macro.top_count = 1;
+    live.macros = &macro;
+    live.extras = &extra;
+    live.macro_count = 1;
+
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+    engine_fingers_set(&fingers, 0x45, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+    expect(play->pending_count == 1, "e starts on the down edge");
+    expect(engine_live_claims(&live, 0x45) == 1, "e is claimed");
+    expect(engine_live_claims(&live, (uint16_t)'w') == 0, "w is not claimed");
+    engine_play_flush(play);
+    play->runners[0].done = 1;
+    engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+    expect(play->pending_count == 0, "a hold loop waits for a new down edge, like AHK");
+
+    engine_play_init(play);
+    macro.advanced = 0;
+    macro.steps = NULL;
+    macro.step_count = 0;
+    macro.top_count = 0;
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+    engine_fingers_set(&fingers, 0x45, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+    expect(play->pending_count == 1, "a plain once still starts on the edge");
+    engine_play_flush(play);
+    play->runners[0].done = 1;
+    engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
+    expect(play->pending_count == 0, "a plain once does not start again while the key stays down");
+
+    engine_play_init(play);
+    macro.mode = ENGINE_MODE_WHILE_HELD;
+    macro.step_count = 1;
+    macro.steps = &step;
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    engine_fingers_set(&fingers, 0x35, 1);
+    macro.trigger = 0x35;
+    engine_poll_triggers(play, &live, &mem, &fingers, "game.exe", "");
+    expect(play->pending_count == 0, "5 held at arm does not start");
+    engine_fingers_set(&fingers, 0x35, 0);
+    engine_poll_triggers(play, &live, &mem, &fingers, "game.exe", "");
+    engine_fingers_set(&fingers, 0x35, 1);
+    engine_poll_triggers(play, &live, &mem, &fingers, "game.exe", "");
+    engine_play_flush(play);
+    play->runners[0].done = 1;
+    engine_poll_triggers(play, &live, &mem, &fingers, "game.exe", "");
+    expect(play->pending_count == 0, "while held waits for a new down edge, like AHK");
+    free(play);
+}
+
+/* Ability in Overwatch Test: once, one onceHeld block that taps r. Five steps. */
+static void build_tap_block(struct engine_step *steps, uint16_t key)
+{
+    memset(steps, 0, 5 * sizeof *steps);
+    steps[0].type = ENGINE_STEP_ONCE_HELD;
+    steps[0].first = 1;
+    steps[0].count = 4;
+    steps[0].a = 150;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = key;
+    steps[2].type = ENGINE_STEP_WAIT;
+    steps[2].a = 18;
+    steps[3].type = ENGINE_STEP_KEY;
+    steps[3].action = ENGINE_ACT_UP;
+    steps[3].key = key;
+    steps[4].type = ENGINE_STEP_WAIT;
+    steps[4].a = 18;
+}
+
+/* One playback tick per millisecond: poll, then tick, like playback_tick. */
+static void play_ms(struct engine_play *play, const struct engine_live_config *live,
+                    struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
+                    int64_t *now, int ms, int *starts)
+{
+    int i;
+
+    for (i = 0; i < ms; i++) {
+        engine_play_set_fingers(play, fingers);
+        engine_poll_triggers(play, live, mem, fingers, "Overwatch.exe", "");
+        if (starts)
+            *starts += play->pending_count;
+        engine_play_tick(play, *now);
+        (*now)++;
+    }
+}
+
+static void check_many_starts(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_step tap[5];
+    struct engine_step loop[5];
+    struct engine_macro macros[2];
+    struct engine_profile_extra extras[2];
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    int64_t now = 1;
+    int starts = 0;
+    int typed = 0;
+    int i;
+
+    if (!play) {
+        expect(0, "many play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(tap, (uint16_t)'R');
+    build_tap_block(loop, (uint16_t)'A');
+    loop[0].type = ENGINE_STEP_HOLD_LOOP;
+    loop[0].a = 0;
+    memset(extras, 0, sizeof extras);
+    engine_macro_init(&macros[0]);
+    engine_macro_init(&macros[1]);
+    snprintf(macros[0].id, sizeof macros[0].id, "ability");
+    macros[0].mode = ENGINE_MODE_ONCE;
+    macros[0].advanced = 1;
+    macros[0].trigger = (uint16_t)'R';
+    macros[0].steps = tap;
+    macros[0].step_count = 5;
+    macros[0].top_count = 1;
+    snprintf(macros[1].id, sizeof macros[1].id, "reload");
+    macros[1].mode = ENGINE_MODE_WHILE_HELD;
+    macros[1].advanced = 1;
+    macros[1].trigger = (uint16_t)'A';
+    macros[1].steps = loop;
+    macros[1].step_count = 5;
+    macros[1].top_count = 1;
+    extras[0].enabled = 1;
+    extras[1].enabled = 1;
+    memset(&live, 0, sizeof live);
+    live.macros = macros;
+    live.extras = extras;
+    live.macro_count = 2;
+    engine_play_set_macros(play, macros, 2);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+
+    /* Reload stays held for the whole run, so its runner never leaves. */
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 5, &starts);
+    expect(starts == 1, "reload starts once and stays");
+    starts = 0;
+    for (i = 0; i < 500; i++) {
+        engine_fingers_set(&fingers, (uint16_t)'R', 1);
+        play_ms(play, &live, &mem, &fingers, &now, 1, &starts);
+        if (engine_play_has_runner(play, "ability"))
+            typed++;
+        play_ms(play, &live, &mem, &fingers, &now, 40, NULL);
+        engine_fingers_set(&fingers, (uint16_t)'R', 0);
+        play_ms(play, &live, &mem, &fingers, &now, 260, NULL);
+    }
+    expect(starts == 500, "500 taps of r start 500 runners");
+    expect(typed == 500, "every tap of r is running on its press tick");
+    expect(engine_play_has_runner(play, "reload"), "the held reload runner is still alive");
+    engine_fingers_set(&fingers, (uint16_t)'A', 0);
+    play_ms(play, &live, &mem, &fingers, &now, 100, NULL);
+    expect(engine_play_alive(play) == 0, "nothing runs once both keys are up");
+    expect(play->arena_count == 0, "the arena is empty when idle");
+    expect(play->mute_count == 0, "the mute table is empty when idle");
+    if (starts != 500)
+        fprintf(stderr, "many starts: %d of 500\n", starts);
+    free(play);
+}
+
+static void check_mute_compaction(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_step hold_x[5];
+    struct engine_step hold_y[5];
+    struct engine_step tap[5];
+    struct engine_macro macros[4];
+    struct engine_profile_extra extras[4];
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    static const int32_t mute_b[1] = { 2 };
+    static const int32_t mute_c[1] = { 3 };
+    const char *ids[4] = { "x", "y", "b", "c" };
+    const uint16_t keys[4] = { (uint16_t)'X', (uint16_t)'Y', (uint16_t)'B', (uint16_t)'C' };
+    int64_t now = 1;
+    int starts = 0;
+    int i;
+
+    if (!play) {
+        expect(0, "mute play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(hold_x, (uint16_t)'Q');
+    hold_x[0].type = ENGINE_STEP_HOLD_LOOP;
+    hold_x[0].a = 0;
+    hold_x[0].mute_n = 1;
+    memcpy(hold_y, hold_x, sizeof hold_y);
+    build_tap_block(tap, (uint16_t)'Z');
+    memset(extras, 0, sizeof extras);
+    for (i = 0; i < 4; i++) {
+        engine_macro_init(&macros[i]);
+        snprintf(macros[i].id, sizeof macros[i].id, "%s", ids[i]);
+        macros[i].mode = ENGINE_MODE_WHILE_HELD;
+        macros[i].advanced = 1;
+        macros[i].trigger = keys[i];
+        macros[i].steps = i == 0 ? hold_x : i == 1 ? hold_y : tap;
+        macros[i].step_count = 5;
+        macros[i].top_count = 1;
+        extras[i].enabled = 1;
+    }
+    macros[0].mutes = mute_b;
+    macros[0].mute_count = 1;
+    macros[1].mutes = mute_c;
+    macros[1].mute_count = 1;
+    memset(&live, 0, sizeof live);
+    live.macros = macros;
+    live.extras = extras;
+    live.macro_count = 4;
+    engine_play_set_macros(play, macros, 4);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+
+    /* y holds the first mute slot, x the second. */
+    engine_fingers_set(&fingers, (uint16_t)'Y', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'X', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+    expect(engine_play_muted(play, "b") && engine_play_muted(play, "c"), "x mutes b and y mutes c");
+    engine_fingers_set(&fingers, (uint16_t)'Y', 0);
+    play_ms(play, &live, &mem, &fingers, &now, 100, NULL);
+    expect(!engine_play_muted(play, "c") && engine_play_muted(play, "b"),
+           "y ending unmutes c and leaves b muted");
+    /* x's mute span slid down. Its release must still name b. */
+    for (i = 0; i < 300; i++) {
+        engine_fingers_set(&fingers, (uint16_t)'Y', 1);
+        play_ms(play, &live, &mem, &fingers, &now, 1, &starts);
+        play_ms(play, &live, &mem, &fingers, &now, 30, NULL);
+        engine_fingers_set(&fingers, (uint16_t)'Y', 0);
+        play_ms(play, &live, &mem, &fingers, &now, 60, NULL);
+    }
+    expect(starts == 300, "300 starts of a muting hold loop all start");
+    expect(engine_play_muted(play, "b") && !engine_play_muted(play, "c"), "b is still muted by x");
+    engine_fingers_set(&fingers, (uint16_t)'X', 0);
+    play_ms(play, &live, &mem, &fingers, &now, 100, NULL);
+    expect(!engine_play_muted(play, "b") && !engine_play_muted(play, "c"), "x ending unmutes b");
+    expect(play->mute_count == 0 && play->arena_count == 0, "both tables are empty when idle");
+    engine_fingers_set(&fingers, (uint16_t)'B', 1);
+    starts = 0;
+    play_ms(play, &live, &mem, &fingers, &now, 1, &starts);
+    expect(starts == 1, "b starts after the mute is gone");
+    free(play);
+}
+
+/* A config switch reaps the muting runner after the catalog has changed. */
+static void check_mute_switch(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_step hold[5];
+    struct engine_step tap[5];
+    struct engine_macro first[2];
+    struct engine_macro second[2];
+    struct engine_profile_extra extras[2];
+    struct engine_live_config live_a;
+    struct engine_live_config live_b;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    static const int32_t mute_b[1] = { 1 };
+    int64_t now = 1;
+    int starts = 0;
+    int i;
+
+    if (!play) {
+        expect(0, "switch play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(hold, (uint16_t)'Q');
+    hold[0].type = ENGINE_STEP_HOLD_LOOP;
+    hold[0].a = 0;
+    hold[0].mute_n = 1;
+    build_tap_block(tap, (uint16_t)'Z');
+    memset(extras, 0, sizeof extras);
+    extras[0].enabled = 1;
+    extras[1].enabled = 1;
+    for (i = 0; i < 2; i++) {
+        engine_macro_init(&first[i]);
+        first[i].mode = ENGINE_MODE_WHILE_HELD;
+        first[i].advanced = 1;
+        first[i].step_count = 5;
+        first[i].top_count = 1;
+    }
+    snprintf(first[0].id, sizeof first[0].id, "a");
+    first[0].trigger = (uint16_t)'A';
+    first[0].steps = hold;
+    first[0].mutes = mute_b;
+    first[0].mute_count = 1;
+    snprintf(first[1].id, sizeof first[1].id, "b");
+    first[1].trigger = (uint16_t)'B';
+    first[1].steps = tap;
+    /* The other config lists b first. Index 1 is now d. */
+    second[0] = first[1];
+    second[1] = first[1];
+    snprintf(second[1].id, sizeof second[1].id, "d");
+    second[1].trigger = (uint16_t)'D';
+    memset(&live_a, 0, sizeof live_a);
+    live_a.macros = first;
+    live_a.extras = extras;
+    live_a.macro_count = 2;
+    live_b = live_a;
+    live_b.macros = second;
+
+    engine_play_set_macros(play, first, 2);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    play_ms(play, &live_a, &mem, &fingers, &now, 5, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    play_ms(play, &live_a, &mem, &fingers, &now, 5, NULL);
+    expect(engine_play_muted(play, "b"), "a mutes b");
+
+    /* playback_tick: set the new catalog, then reap. */
+    engine_play_set_macros(play, second, 2);
+    engine_reap_orphans(play, &live_b);
+    engine_trigger_reseed(&mem);
+    expect(!engine_play_muted(play, "b"), "reaping a after the switch unmutes b");
+    expect(!engine_play_muted(play, "d"), "d was never muted");
+    engine_fingers_set(&fingers, (uint16_t)'A', 0);
+    play_ms(play, &live_b, &mem, &fingers, &now, 20, NULL);
+
+    engine_play_set_macros(play, first, 2);
+    engine_trigger_reseed(&mem);
+    play_ms(play, &live_a, &mem, &fingers, &now, 5, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'B', 1);
+    play_ms(play, &live_a, &mem, &fingers, &now, 1, &starts);
+    expect(starts == 1, "b starts after switching back");
+    free(play);
+}
+
+/* A board tap is two reports, a down then an up. Both must reach the pipe. */
+static void check_report_queue(void)
+{
+    struct engine_report_queue *queue =
+        (struct engine_report_queue *)calloc(1, sizeof *queue);
+    struct engine_hook_state hooks;
+    struct engine_hook_decision decision;
+    struct engine_report report;
+    struct engine_report got;
+    int i;
+
+    if (!queue) {
+        expect(0, "queue alloc");
+        return;
+    }
+    engine_report_queue_init(queue);
+    for (i = 0; i < 5; i++) {
+        engine_report_clear(&report);
+        if (i % 2 == 0)
+            engine_report_push_down(&report, (uint16_t)(0x41 + i));
+        else
+            engine_report_push_up(&report, (uint16_t)(0x41 + i - 1));
+        expect(engine_report_queue_push(queue, &report) == 1, "report queued");
+    }
+    for (i = 0; i < 5; i++) {
+        struct engine_report_echo echo[4];
+        int n;
+
+        expect(engine_report_queue_pop(queue, &got) == 1, "every report comes out");
+        n = engine_report_echoes(&got, echo, 4);
+        expect(n == 1 && echo[0].down == (i % 2 == 0) &&
+                   echo[0].id == (uint16_t)(0x41 + (i % 2 == 0 ? i : i - 1)),
+               "reports come out in publish order");
+    }
+    expect(engine_report_queue_pop(queue, &got) == 0, "the queue is empty after the drain");
+    engine_report_clear(&report);
+    engine_report_push_down(&report, 0x41);
+    for (i = 0; i < (int)ENGINE_REPORT_QUEUE_CAP; i++)
+        engine_report_queue_push(queue, &report);
+    expect(engine_report_queue_push(queue, &report) == 0, "a full queue refuses");
+    expect(engine_report_queue_take_overflow(queue) == 1, "overflow latches");
+    expect(engine_report_queue_take_overflow(queue) == 0, "overflow is one shot");
+    free(queue);
+
+    /* Published at 0 and written at 300. The echo lands at 440. */
+    engine_hook_init(&hooks);
+    engine_report_clear(&report);
+    engine_report_push_down(&report, 0x57);
+    expect(engine_board_echo_written(&hooks, &report, 300, 1000) == 1, "one token per key");
+    press_key(&hooks, 0x57, 440, &decision);
+    expect(decision.enqueued == 0, "an echo 140 ms after the write is not a finger");
+    press_key(&hooks, 0x57, 460, &decision);
+    expect(decision.enqueued == 1, "a press after the window is a finger");
+}
+
+/* A profile push with the same macro count but a new order. */
+static void check_profile_reseed(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_step tap[5];
+    struct engine_macro first[2];
+    struct engine_macro second[2];
+    struct engine_profile_extra extras[2];
+    struct engine_live_config live_a;
+    struct engine_live_config live_b;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    int64_t now = 1;
+    int starts = 0;
+
+    if (!play) {
+        expect(0, "reseed play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(tap, (uint16_t)'Z');
+    memset(extras, 0, sizeof extras);
+    extras[0].enabled = 1;
+    extras[1].enabled = 1;
+    engine_macro_init(&first[0]);
+    first[0].mode = ENGINE_MODE_ONCE;
+    first[0].advanced = 1;
+    first[0].steps = tap;
+    first[0].step_count = 5;
+    first[0].top_count = 1;
+    first[1] = first[0];
+    snprintf(first[0].id, sizeof first[0].id, "x");
+    first[0].trigger = (uint16_t)'A';
+    snprintf(first[1].id, sizeof first[1].id, "y");
+    first[1].trigger = (uint16_t)'B';
+    second[0] = first[1];
+    second[1] = first[0];
+    memset(&live_a, 0, sizeof live_a);
+    live_a.macros = first;
+    live_a.extras = extras;
+    live_a.macro_count = 2;
+    live_b = live_a;
+    live_b.macros = second;
+
+    engine_play_set_macros(play, first, 2);
+    engine_trigger_init(&mem);
+    engine_trigger_note_profile(&mem, 1);
+    engine_fingers_clear(&fingers);
+    play_ms(play, &live_a, &mem, &fingers, &now, 5, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    play_ms(play, &live_a, &mem, &fingers, &now, 1, &starts);
+    expect(starts == 1, "x starts on a");
+    play_ms(play, &live_a, &mem, &fingers, &now, 5, NULL);
+
+    starts = 0;
+    engine_play_set_macros(play, second, 2);
+    engine_trigger_note_profile(&mem, 2);
+    play_ms(play, &live_b, &mem, &fingers, &now, 5, &starts);
+    expect(starts == 0, "a held across the push does not start x again");
+    engine_trigger_note_profile(&mem, 2);
+    engine_fingers_set(&fingers, (uint16_t)'A', 0);
+    play_ms(play, &live_b, &mem, &fingers, &now, 300, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'B', 1);
+    play_ms(play, &live_b, &mem, &fingers, &now, 1, &starts);
+    expect(starts == 1 && engine_play_has_runner(play, "y"), "b starts y in the new order");
+    free(play);
+}
+
+/* AHK ClearHookBindings and SyncHooks drop physDown for trigger keys. A key
+   whose up never arrived is cleared by an alt-tab out and back. */
+static void check_forget_triggers(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_step loop[5];
+    struct engine_macro macro;
+    struct engine_profile_extra extra;
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_claim_mem claims;
+    struct engine_fingers fingers;
+    uint16_t gone[8];
+    int64_t now = 1;
+    int starts = 0;
+    int n;
+
+    if (!play) {
+        expect(0, "forget play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(loop, (uint16_t)'Q');
+    loop[0].type = ENGINE_STEP_HOLD_LOOP;
+    loop[0].a = 0;
+    engine_macro_init(&macro);
+    snprintf(macro.id, sizeof macro.id, "reload");
+    macro.mode = ENGINE_MODE_WHILE_HELD;
+    macro.advanced = 1;
+    macro.trigger = (uint16_t)'A';
+    macro.steps = loop;
+    macro.step_count = 5;
+    macro.top_count = 1;
+    memset(&extra, 0, sizeof extra);
+    extra.enabled = 1;
+    memset(&live, 0, sizeof live);
+    snprintf(live.focus_exe, sizeof live.focus_exe, "Overwatch.exe");
+    live.macros = &macro;
+    live.extras = &extra;
+    live.macro_count = 1;
+    engine_play_set_macros(play, &macro, 1);
+    engine_trigger_init(&mem);
+    engine_claims_init(&claims);
+    engine_fingers_clear(&fingers);
+
+    n = engine_claims_sync(&claims, &live, "Overwatch.exe", "", 1, 0, &fingers, gone, 8);
+    expect(n == 0, "the first sync only records");
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 1, &starts);
+    expect(starts == 1, "a starts reload");
+    n = engine_claims_sync(&claims, &live, "Overwatch.exe", "", 1, 0, &fingers, gone, 8);
+    expect(n == 0 && engine_fingers_down(&fingers, (uint16_t)'A'), "same focus keeps the finger");
+
+    /* The up for a is lost. Alt-tab out and back. */
+    n = engine_claims_sync(&claims, &live, "explorer.exe", "", 1, 0, &fingers, gone, 8);
+    expect(n == 1 && gone[0] == (uint16_t)'A', "leaving the game forgets the held trigger");
+    expect(!engine_fingers_seen(&fingers, (uint16_t)'A'), "the trigger is unknown, like physDown.Delete");
+    play_ms(play, &live, &mem, &fingers, &now, 100, NULL);
+    expect(!engine_play_has_runner(play, "reload"), "reload ends after its pass, like AHK");
+    n = engine_claims_sync(&claims, &live, "Overwatch.exe", "", 1, 0, &fingers, gone, 8);
+    expect(n == 0, "coming back has nothing held");
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+    starts = 0;
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 1, &starts);
+    expect(starts == 1, "the next press of a starts reload again");
+
+    n = engine_claims_sync(&claims, &live, "Overwatch.exe", "", 1, 1, &fingers, gone, 8);
+    expect(n == 1, "an output change forgets the held trigger");
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    engine_fingers_set(&fingers, (uint16_t)'W', 1);
+    engine_claims_sync(&claims, &live, "Overwatch.exe", "", 1, 0, &fingers, gone, 8);
+    n = engine_claims_sync(&claims, &live, "Overwatch.exe", "", 0, 0, &fingers, gone, 8);
+    expect(n == 1 && gone[0] == (uint16_t)'A', "stop drops the trigger and nothing else");
+    expect(engine_fingers_down(&fingers, (uint16_t)'W'), "a key that is not a trigger is kept");
+    free(play);
+}
+
+static int find_note(const struct engine_play *play, int kind, const char *id, int why)
+{
+    int i;
+
+    for (i = 0; i < play->note_count; i++) {
+        if (play->notes[i].kind == kind && strcmp(play->notes[i].id, id) == 0 &&
+            (why < 0 || play->notes[i].why == why))
+            return i;
+    }
+    return -1;
+}
+
+/* The next engine.log must show every matched edge, start, stop, and refusal. */
+static void check_notes(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    static struct engine_step big[ENGINE_STEP_CAP + 1];
+    struct engine_step loop[5];
+    struct engine_macro macros[2];
+    struct engine_profile_extra extras[2];
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    int64_t now = 1;
+    int edge;
+    int start;
+
+    if (!play) {
+        expect(0, "notes play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(loop, (uint16_t)'Q');
+    loop[0].type = ENGINE_STEP_HOLD_LOOP;
+    loop[0].a = 0;
+    memset(extras, 0, sizeof extras);
+    extras[0].enabled = 1;
+    extras[1].enabled = 1;
+    engine_macro_init(&macros[0]);
+    snprintf(macros[0].id, sizeof macros[0].id, "reload");
+    macros[0].mode = ENGINE_MODE_WHILE_HELD;
+    macros[0].trigger = (uint16_t)'A';
+    macros[0].steps = loop;
+    macros[0].step_count = 5;
+    macros[0].top_count = 1;
+    engine_macro_init(&macros[1]);
+    snprintf(macros[1].id, sizeof macros[1].id, "huge");
+    macros[1].mode = ENGINE_MODE_ONCE;
+    macros[1].trigger = (uint16_t)'H';
+    macros[1].steps = big;
+    macros[1].step_count = ENGINE_STEP_CAP + 1;
+    memset(&live, 0, sizeof live);
+    live.macros = macros;
+    live.extras = extras;
+    live.macro_count = 2;
+    engine_play_set_macros(play, macros, 2);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+    play->note_count = 0;
+
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 1, NULL);
+    edge = find_note(play, ENGINE_NOTE_EDGE, "reload", ENGINE_WHY_START);
+    start = find_note(play, ENGINE_NOTE_START, "reload", ENGINE_WHY_EDGE);
+    expect(edge >= 0 && play->notes[edge].down == 1 && play->notes[edge].key == (uint16_t)'A',
+           "a down of a is an edge note that started reload");
+    expect(start > edge, "the start note follows its edge");
+    expect(strcmp(engine_why_name(ENGINE_WHY_ARENA_FULL), "arena-full") == 0, "reason names");
+    play->note_count = 0;
+
+    play_ms(play, &live, &mem, &fingers, &now, 50, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'A', 0);
+    play_ms(play, &live, &mem, &fingers, &now, 2, NULL);
+    edge = find_note(play, ENGINE_NOTE_EDGE, "reload", ENGINE_WHY_RELEASE);
+    expect(edge >= 0 && play->notes[edge].down == 0, "the up of a is an edge note that stopped reload");
+    start = find_note(play, ENGINE_NOTE_STOP, "reload", ENGINE_WHY_RELEASE);
+    expect(start > edge && play->notes[start].age >= 50, "the stop note has the reason and the age");
+    play->note_count = 0;
+
+    engine_fingers_set(&fingers, (uint16_t)'H', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 1, NULL);
+    expect(find_note(play, ENGINE_NOTE_BLOCK, "huge", ENGINE_WHY_ARENA_FULL) >= 0,
+           "a start that cannot fit is a blocked note");
+    expect(find_note(play, ENGINE_NOTE_EDGE, "huge", ENGINE_WHY_ARENA_FULL) >= 0,
+           "its edge says why");
+    play->note_count = 0;
+    engine_play_note(play, ENGINE_NOTE_EDGE, "x", 0, 0, 0, 0, 0);
+    play->note_count = ENGINE_NOTE_CAP;
+    expect(engine_play_note(play, ENGINE_NOTE_EDGE, "x", 0, 0, 0, 0, 0) == -1 &&
+               play->note_dropped == 1,
+           "a full note ring counts the drop");
     free(play);
 }
 
@@ -660,6 +1495,15 @@ int main(void)
     check_saved_profile();
     check_once_lock();
     check_mouse_triggers();
+    check_recover();
+    check_held_again();
+    check_many_starts();
+    check_mute_compaction();
+    check_mute_switch();
+    check_report_queue();
+    check_profile_reseed();
+    check_forget_triggers();
+    check_notes();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

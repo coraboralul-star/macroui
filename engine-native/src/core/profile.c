@@ -32,6 +32,7 @@ struct built_catalog {
     struct built_macro *macros;
     int count;
     char id[ENGINE_ID_CAP];
+    char name[ENGINE_PROFILE_NAME_CAP];
     char focus_exe[ENGINE_PROFILE_FOCUS_CAP];
 };
 
@@ -1116,6 +1117,7 @@ static int finalize_catalog(struct engine_catalog *dst, struct built_catalog *sr
 
     memset(dst, 0, sizeof *dst);
     copy_cap(dst->id, sizeof dst->id, src->id);
+    copy_cap(dst->name, sizeof dst->name, src->name);
     copy_cap(dst->focus_exe, sizeof dst->focus_exe, src->focus_exe);
     if (src->count <= 0)
         return 0;
@@ -1195,6 +1197,8 @@ int engine_profile_compile(const char *text, size_t length, struct engine_profil
             }
             value_text(json_object_get(&configs->items[i], "id"), b.configs[b.config_count].id,
                        sizeof b.configs[b.config_count].id);
+            value_text(json_object_get(&configs->items[i], "name"), b.configs[b.config_count].name,
+                       sizeof b.configs[b.config_count].name);
             value_text(json_object_get(&configs->items[i], "focusExe"),
                        b.configs[b.config_count].focus_exe,
                        sizeof b.configs[b.config_count].focus_exe);
@@ -1282,6 +1286,7 @@ static void use_catalog(struct engine_live_config *out, const struct engine_cata
     out->trigger_next = cat->trigger_next;
     out->macro_count = cat->count;
     copy_cap(out->focus_exe, sizeof out->focus_exe, cat->focus_exe);
+    copy_cap(out->name, sizeof out->name, cat->name);
 }
 
 void engine_profile_pick(const struct engine_profile_image *image, const char *front,
@@ -1303,6 +1308,7 @@ void engine_profile_pick(const struct engine_profile_image *image, const char *f
         copy_cap(out->live_id, sizeof out->live_id, "-");
         copy_cap(out->active_id, sizeof out->active_id, image->active_id);
         copy_cap(out->prefer, sizeof out->prefer, image->active_id);
+        copy_cap(out->name, sizeof out->name, image->name);
         copy_cap(out->focus_exe, sizeof out->focus_exe, image->focus_exe);
         return;
     }
@@ -1328,7 +1334,6 @@ void engine_profile_pick(const struct engine_profile_image *image, const char *f
     use_catalog(out, &image->configs[chosen]);
     copy_cap(out->live_id, sizeof out->live_id, image->configs[chosen].id);
     copy_cap(out->active_id, sizeof out->active_id, image->configs[chosen].id);
-    copy_cap(out->prefer, sizeof out->prefer, image->configs[chosen].id);
     copy_cap(out->focus_exe, sizeof out->focus_exe, image->configs[chosen].focus_exe);
 }
 
