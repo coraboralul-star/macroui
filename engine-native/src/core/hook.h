@@ -130,13 +130,18 @@ struct engine_hook_watch_in {
     int64_t key_stamp;
     int64_t mouse_stamp;
     int64_t now;
+    /* 8000 ms in stamp units. 0 turns the silence check off. */
     int64_t silence;
+    /* When the last silence raise was asked for. 0 is never. */
+    int64_t silence_at;
 };
 
 struct engine_hook_watch_out {
     int count;
     uint8_t op[4];
     int clear_suspect;
+    /* The keyboard raise in op is the silence rule. */
+    int silent;
 };
 
 struct engine_swallow_rule {
@@ -217,8 +222,12 @@ int engine_event_overflow(struct engine_hook_state *st);
 void engine_event_clear_overflow(struct engine_hook_state *st);
 
 /* A missing keyboard hook, a suspect flag, or a return from the lock screen
-   re-raises, even when idle. A quiet hook stays. silence is ignored.
-   Idle with a live hook does not re-raise. A config switch reinstalls the
+   re-raises, even when idle. Idle with a live hook does not re-raise.
+   While armed or playing, a keyboard hook with no event for silence is
+   reinstalled, like AHK NeedsKeyRaise: Windows can remove a hook and leave
+   its handle looking valid. A mouse event inside that window, while the
+   mouse hook is needed, keeps it. After a silence raise, the next one waits
+   another full window. Held fingers are not touched. A config switch reinstalls the
    mouse hook when the new config needs one. Ops run in order. Each op unhooks first. */
 void engine_hook_watch(const struct engine_hook_watch_in *in,
                        struct engine_hook_watch_out *out);

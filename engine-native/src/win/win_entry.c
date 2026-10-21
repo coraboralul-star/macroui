@@ -117,6 +117,7 @@ struct engine_resident {
     int desktop_known;
     int desktop_open;
     int64_t log_beat;
+    int64_t silence_at;
     wchar_t log_path[ENGINE_PROFILE_CAP];
 };
 
@@ -1121,8 +1122,12 @@ static void watch_hooks(int64_t now, int need_mouse, int switched)
     in.key_stamp = atomic_load_explicit(&g.hooks.key_stamp, memory_order_acquire);
     in.mouse_stamp = atomic_load_explicit(&g.hooks.mouse_stamp, memory_order_acquire);
     in.now = now;
+    in.silence = engine_ms_to_ticks(8000, freq);
+    in.silence_at = g.silence_at;
     engine_hook_set_need_mouse(&g.hooks, need_mouse);
     engine_hook_watch(&in, &watch);
+    if (watch.silent)
+        g.silence_at = now;
     if (watch.clear_suspect)
         atomic_store_explicit(&g.hooks.suspect, 0, memory_order_release);
     engine_hook_post_ops(&g.hooks, &watch);
@@ -1140,6 +1145,8 @@ static void watch_hooks(int64_t now, int need_mouse, int switched)
             reason = "desktop";
         else if (in.suspect)
             reason = "suspect";
+        else if (!mouse && watch.silent)
+            reason = "silent";
         else if (mouse && !in.need_mouse)
             reason = "drop";
         else if (mouse && in.switched)

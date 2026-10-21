@@ -595,6 +595,15 @@ void engine_hook_watch(const struct engine_hook_watch_in *in,
         push_op(out, ENGINE_HOOK_RAISE_MOUSE);
     else if (!in->need_mouse && in->mouse_installed)
         push_op(out, ENGINE_HOOK_RAISE_MOUSE);
+
+    /* AHK NeedsKeyRaise. Mouse clicks keep the thread alive, so a recent
+       click while the mouse hook is needed counts as a live keyboard hook. */
+    if (in->silence > 0 && in->key_stamp > 0 && in->now - in->key_stamp >= in->silence &&
+        (in->silence_at == 0 || in->now - in->silence_at >= in->silence) &&
+        !(in->need_mouse && in->mouse_stamp > 0 && in->now - in->mouse_stamp < in->silence)) {
+        push_op(out, ENGINE_HOOK_RAISE_KEY);
+        out->silent = 1;
+    }
 }
 
 void engine_hook_post_ops(struct engine_hook_state *st,

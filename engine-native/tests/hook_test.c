@@ -189,23 +189,46 @@ static void check_watch_plan(void)
     in.key_stamp = 1;
     in.need_mouse = 0;
     in.silence = 8000;
+    in.now = 7999;
+    engine_hook_watch(&in, &out);
+    expect(out.count == 0, "7.998 s of keyboard quiet keeps the hook");
+    in.now = 8001;
+    engine_hook_watch(&in, &out);
+    expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_KEY && out.silent == 1,
+           "8 s of keyboard quiet reinstalls the hook, like AHK");
+    in.silence_at = 8001;
+    in.now = 16000;
+    engine_hook_watch(&in, &out);
+    expect(out.count == 0, "the next silence raise waits a full 8 s");
+    in.now = 16001;
+    engine_hook_watch(&in, &out);
+    expect(out.count == 1 && out.silent == 1, "a hook still quiet 8 s later is raised again");
+    in.silence_at = 0;
+    in.running = 0;
     in.now = 9000;
     engine_hook_watch(&in, &out);
-    expect(out.count == 0, "a quiet keyboard hook stays");
+    expect(out.count == 0, "disarmed and idle never raises on silence");
+    in.running = 1;
 
     in.need_mouse = 1;
     in.mouse_installed = 1;
-    in.mouse_stamp = 1;
+    in.mouse_stamp = 5000;
     in.key_stamp = 1;
+    in.now = 9000;
     engine_hook_watch(&in, &out);
-    expect(out.count == 0, "a quiet mouse hook stays");
+    expect(out.count == 0, "a recent click keeps a quiet keyboard hook, like AHK");
+
+    in.mouse_stamp = 1;
+    engine_hook_watch(&in, &out);
+    expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_KEY,
+           "a quiet mouse does not keep a quiet keyboard hook");
 
     in.mouse_installed = 0;
-    in.key_stamp = 1;
+    in.key_stamp = 8000;
     in.mouse_stamp = 0;
     in.now = 9000;
     engine_hook_watch(&in, &out);
-    expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE,
+    expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE && out.silent == 0,
            "a missing mouse hook is installed");
 
     in.need_mouse = 1;
@@ -216,13 +239,15 @@ static void check_watch_plan(void)
     in.now = 20000;
     in.silence = 8000;
     engine_hook_watch(&in, &out);
-    expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE,
-           "silence does not reinstall a live keyboard hook");
+    expect(out.count == 2 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE &&
+               out.op[1] == ENGINE_HOOK_RAISE_KEY,
+           "a missing mouse hook and a silent keyboard hook are both raised");
 
     in.need_mouse = 0;
     in.mouse_installed = 1;
     in.key_stamp = 9000;
     in.mouse_stamp = 9000;
+    in.now = 9500;
     engine_hook_watch(&in, &out);
     expect(out.count == 1 && out.op[0] == ENGINE_HOOK_RAISE_MOUSE,
            "a keyboard-only profile removes the mouse hook");
