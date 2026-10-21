@@ -1101,6 +1101,90 @@ static void check_mute_compaction(void)
     free(play);
 }
 
+/* A config switch reaps the muting runner after the catalog has changed. */
+static void check_mute_switch(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_step hold[5];
+    struct engine_step tap[5];
+    struct engine_macro first[2];
+    struct engine_macro second[2];
+    struct engine_profile_extra extras[2];
+    struct engine_live_config live_a;
+    struct engine_live_config live_b;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    static const int32_t mute_b[1] = { 1 };
+    int64_t now = 1;
+    int starts = 0;
+    int i;
+
+    if (!play) {
+        expect(0, "switch play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(hold, (uint16_t)'Q');
+    hold[0].type = ENGINE_STEP_HOLD_LOOP;
+    hold[0].a = 0;
+    hold[0].mute_n = 1;
+    build_tap_block(tap, (uint16_t)'Z');
+    memset(extras, 0, sizeof extras);
+    extras[0].enabled = 1;
+    extras[1].enabled = 1;
+    for (i = 0; i < 2; i++) {
+        engine_macro_init(&first[i]);
+        first[i].mode = ENGINE_MODE_WHILE_HELD;
+        first[i].advanced = 1;
+        first[i].step_count = 5;
+        first[i].top_count = 1;
+    }
+    snprintf(first[0].id, sizeof first[0].id, "a");
+    first[0].trigger = (uint16_t)'A';
+    first[0].steps = hold;
+    first[0].mutes = mute_b;
+    first[0].mute_count = 1;
+    snprintf(first[1].id, sizeof first[1].id, "b");
+    first[1].trigger = (uint16_t)'B';
+    first[1].steps = tap;
+    /* The other config lists b first. Index 1 is now d. */
+    second[0] = first[1];
+    second[1] = first[1];
+    snprintf(second[1].id, sizeof second[1].id, "d");
+    second[1].trigger = (uint16_t)'D';
+    memset(&live_a, 0, sizeof live_a);
+    live_a.macros = first;
+    live_a.extras = extras;
+    live_a.macro_count = 2;
+    live_b = live_a;
+    live_b.macros = second;
+
+    engine_play_set_macros(play, first, 2);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    play_ms(play, &live_a, &mem, &fingers, &now, 5, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    play_ms(play, &live_a, &mem, &fingers, &now, 5, NULL);
+    expect(engine_play_muted(play, "b"), "a mutes b");
+
+    /* playback_tick: set the new catalog, then reap. */
+    engine_play_set_macros(play, second, 2);
+    engine_reap_orphans(play, &live_b);
+    engine_trigger_reseed(&mem);
+    expect(!engine_play_muted(play, "b"), "reaping a after the switch unmutes b");
+    expect(!engine_play_muted(play, "d"), "d was never muted");
+    engine_fingers_set(&fingers, (uint16_t)'A', 0);
+    play_ms(play, &live_b, &mem, &fingers, &now, 20, NULL);
+
+    engine_play_set_macros(play, first, 2);
+    engine_trigger_reseed(&mem);
+    play_ms(play, &live_a, &mem, &fingers, &now, 5, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'B', 1);
+    play_ms(play, &live_a, &mem, &fingers, &now, 1, &starts);
+    expect(starts == 1, "b starts after switching back");
+    free(play);
+}
+
 int main(void)
 {
     check_frames();
@@ -1116,6 +1200,7 @@ int main(void)
     check_held_again();
     check_many_starts();
     check_mute_compaction();
+    check_mute_switch();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

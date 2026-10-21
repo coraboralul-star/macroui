@@ -118,6 +118,8 @@
 
 #define ENGINE_EDGE_WATCH_CAP 8
 #define ENGINE_EDGE_MUTE_CAP 8
+/* Mute slots one hold frame can keep. Later ids in the list are not muted. */
+#define ENGINE_FRAME_MUTE_CAP 16
 #define ENGINE_EDGE_PHASE_DOWN 0
 #define ENGINE_EDGE_PHASE_ARM 1
 #define ENGINE_EDGE_PHASE_GAP 2
@@ -181,10 +183,15 @@ struct engine_frame {
     int edge_spam_on;
     int64_t edge_spam_at;
     int edge_mute_on;
-    int32_t edge_muted[ENGINE_EDGE_MUTE_CAP];
+    /* Slots in play->mute_slot_*, not catalog indexes. A slot keeps its id
+       while this frame holds a count on it, so a config switch or a profile
+       push cannot make the release unmute a different macro. */
+    uint8_t edge_muted[ENGINE_EDGE_MUTE_CAP];
     int edge_muted_n;
     uint16_t mute_at;
     uint16_t mute_n;
+    uint8_t mute_slot[ENGINE_FRAME_MUTE_CAP];
+    int mute_slot_n;
 };
 
 struct engine_pulse {
@@ -308,7 +315,9 @@ struct engine_play {
     int have_fingers;
     int64_t last_sent[ENGINE_KEY_ID_MAX + 1u];
     uint8_t last_sent_ok[ENGINE_KEY_ID_MAX + 1u];
-    int32_t mute_ids[ENGINE_MUTE_ID_CAP];
+    /* Mute targets as ids, resolved from the catalog when the runner is
+       queued, like AHK keeps the id strings. An empty name mutes nothing. */
+    char mute_ids[ENGINE_MUTE_ID_CAP][ENGINE_ID_CAP];
     uint32_t mute_count;
     char mute_slot_id[ENGINE_MUTE_SLOT_CAP][ENGINE_ID_CAP];
     int mute_slot_count[ENGINE_MUTE_SLOT_CAP];

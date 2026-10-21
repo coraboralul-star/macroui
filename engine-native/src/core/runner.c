@@ -514,10 +514,8 @@ static void release_edge_mute(struct engine_play *play, struct engine_runner *ru
 static int push_edge(struct engine_runner *runner, struct engine_play *play,
                      const struct engine_step *step, int64_t now);
 static void note_sent(struct engine_play *play, uint16_t id, int64_t now);
-static int catalog_id(const struct engine_play *play, const struct engine_runner *owner,
-                      int32_t index, char *dst);
 static int mute_one(struct engine_play *play, const char *id);
-static void unmute_one(struct engine_play *play, const char *id);
+static void unmute_slot(struct engine_play *play, int slot);
 static int push_hold(struct engine_runner *runner, struct engine_play *play,
                      const struct engine_step *step);
 static void note_hold_release(struct engine_runner *runner, const struct engine_play *play);
@@ -1309,13 +1307,10 @@ static void release_edge_mute(struct engine_play *play, struct engine_runner *ru
     frame->edge_mute_on = 0;
     if (!play)
         return;
-    for (i = 0; i < frame->edge_muted_n; i++) {
-        char id[ENGINE_ID_CAP];
-
-        if (!catalog_id(play, runner, frame->edge_muted[i], id))
-            continue;
-        unmute_one(play, id);
-    }
+    (void)runner;
+    for (i = 0; i < frame->edge_muted_n; i++)
+        unmute_slot(play, frame->edge_muted[i]);
+    frame->edge_muted_n = 0;
 }
 
 static void arm_edge_mute(struct engine_play *play, struct engine_runner *runner,
@@ -1329,6 +1324,7 @@ static void arm_edge_mute(struct engine_play *play, struct engine_runner *runner
     for (i = 0; i < play->macro_count; i++) {
         const struct engine_macro *macro = &play->macros[i];
         int match = 0;
+        int slot;
 
         if (!macro->id[0] || same_id(macro->id, runner->id) || macro->trigger == 0)
             continue;
@@ -1342,9 +1338,10 @@ static void arm_edge_mute(struct engine_play *play, struct engine_runner *runner
             continue;
         if (frame->edge_muted_n >= ENGINE_EDGE_MUTE_CAP)
             break;
-        if (!mute_one(play, macro->id))
+        slot = mute_one(play, macro->id);
+        if (slot < 0)
             break;
-        frame->edge_muted[frame->edge_muted_n++] = i;
+        frame->edge_muted[frame->edge_muted_n++] = (uint8_t)slot;
         frame->edge_mute_on = 1;
     }
 }
@@ -1699,19 +1696,6 @@ static const struct engine_macro *find_macro(const struct engine_play *play, con
     return NULL;
 }
 
-static int catalog_id(const struct engine_play *play, const struct engine_runner *owner,
-                      int32_t index, char *dst)
-{
-    if (!play || !play->macros || index < 0 || index >= play->macro_count)
-        return 0;
-    if (!play->macros[index].id[0])
-        return 0;
-    if (owner && same_id(owner->id, play->macros[index].id))
-        return 0;
-    copy_id(dst, play->macros[index].id);
-    return 1;
-}
-
 static int find_mute_slot(const struct engine_play *play, const char *id)
 {
     int i;
@@ -1816,6 +1800,7 @@ static int hold_replay(const struct engine_play *play, const char *id)
     return macro_replays_hold(macro);
 }
 
+/* The slot, or -1 when the table is full. */
 static int mute_one(struct engine_play *play, const char *id)
 {
     int slot = find_mute_slot(play, id);
@@ -1823,7 +1808,7 @@ static int mute_one(struct engine_play *play, const char *id)
     if (slot < 0) {
         slot = alloc_mute_slot(play);
         if (slot < 0)
-            return 0;
+            return -1;
         copy_id(play->mute_slot_id[slot], id);
         play->mute_slot_count[slot] = 0;
         play->mute_slot_resume[slot] = playing(play, id);
@@ -1832,19 +1817,20 @@ static int mute_one(struct engine_play *play, const char *id)
     play->mute_slot_count[slot]++;
     if (play->mute_slot_count[slot] == 1)
         pause_id(play, id);
-    return 1;
+    return slot;
 }
 
-static void unmute_one(struct engine_play *play, const char *id)
+static void unmute_slot(struct engine_play *play, int slot)
 {
-    int slot = find_mute_slot(play, id);
+    char id[ENGINE_ID_CAP];
     int count;
     int resume;
     int i;
     const struct engine_macro *macro;
 
-    if (slot < 0)
+    if (!play || slot < 0 || slot >= ENGINE_MUTE_SLOT_CAP || !play->mute_slot_used[slot])
         return;
+    copy_id(id, play->mute_slot_id[slot]);
     count = play->mute_slot_count[slot] - 1;
     if (count > 0) {
         play->mute_slot_count[slot] = count;
@@ -1875,59 +1861,45 @@ static void unmute_one(struct engine_play *play, const char *id)
     }
 }
 
-static void each_mute_id(struct engine_play *play, const struct engine_runner *owner,
-                         uint16_t at, uint16_t n, int arm)
-{
-    uint32_t i;
-
-    if (!play || n == 0)
-        return;
-    if ((uint32_t)at > play->mute_count || (uint32_t)n > play->mute_count - at)
-        return;
-    for (i = 0; i < n; i++) {
-        char id[ENGINE_ID_CAP];
-
-        if (!catalog_id(play, owner, play->mute_ids[at + i], id))
-            continue;
-        if (arm)
-            mute_one(play, id);
-        else
-            unmute_one(play, id);
-    }
-}
-
 static int arm_frame_mute(struct engine_play *play, struct engine_runner *runner,
                           struct engine_frame *frame)
 {
     uint32_t i;
-    int any = 0;
 
     if (!play || !frame || frame->mute_n == 0)
         return 0;
+    frame->mute_slot_n = 0;
     if ((uint32_t)frame->mute_at > play->mute_count ||
         (uint32_t)frame->mute_n > play->mute_count - frame->mute_at)
         return 0;
-    for (i = 0; i < frame->mute_n; i++) {
-        char id[ENGINE_ID_CAP];
+    for (i = 0; i < frame->mute_n && frame->mute_slot_n < ENGINE_FRAME_MUTE_CAP; i++) {
+        const char *id = play->mute_ids[frame->mute_at + i];
+        int slot;
 
-        if (!catalog_id(play, runner, play->mute_ids[frame->mute_at + i], id))
+        if (!id[0] || same_id(id, runner->id))
             continue;
-        if (mute_one(play, id))
-            any = 1;
+        slot = mute_one(play, id);
+        if (slot >= 0)
+            frame->mute_slot[frame->mute_slot_n++] = (uint8_t)slot;
     }
-    frame->mute_on = any;
-    return any;
+    frame->mute_on = frame->mute_slot_n > 0;
+    return frame->mute_on;
 }
 
 static void release_frame_mute(struct engine_play *play, struct engine_runner *runner,
                                struct engine_frame *frame)
 {
+    int i;
+
+    (void)runner;
     if (!frame || !frame->mute_on)
         return;
     frame->mute_on = 0;
     if (!play)
         return;
-    each_mute_id(play, runner, frame->mute_at, frame->mute_n, 0);
+    for (i = 0; i < frame->mute_slot_n; i++)
+        unmute_slot(play, frame->mute_slot[i]);
+    frame->mute_slot_n = 0;
 }
 
 static int push_hold(struct engine_runner *runner, struct engine_play *play,
@@ -2192,10 +2164,12 @@ static int room_for(struct engine_play *play, uint32_t steps, uint32_t mutes)
     return arena_fits(play, steps) && play->mute_count <= ENGINE_MUTE_ID_CAP - mutes;
 }
 
-/* Copies holdLoop and swapLoop mute indexes into the play table and rewrites
-   the step. An invalid span is dropped. A full table refuses the start. */
+/* Copies holdLoop and swapLoop mute targets into the play table as ids and
+   rewrites the step. The catalog is the one this start came from. A later
+   config switch or profile push cannot change which macro a frame mutes.
+   An invalid span is dropped. A full table refuses the start. */
 static int rebase_hold_mutes(struct engine_play *play, struct engine_step *steps, uint32_t count,
-                             const int32_t *mutes, uint32_t mute_count)
+                             const int32_t *mutes, uint32_t mute_count, const char *owner)
 {
     uint32_t saved = play->mute_count;
     uint32_t i;
@@ -2220,8 +2194,15 @@ static int rebase_hold_mutes(struct engine_play *play, struct engine_step *steps
             play->mute_count = saved;
             return 0;
         }
-        for (k = 0; k < n; k++)
-            play->mute_ids[play->mute_count + k] = mutes[at + k];
+        for (k = 0; k < n; k++) {
+            char *dst = play->mute_ids[play->mute_count + k];
+            int32_t index = mutes[at + k];
+
+            dst[0] = '\0';
+            if (play->macros && index >= 0 && index < play->macro_count &&
+                !same_id(play->macros[index].id, owner))
+                copy_id(dst, play->macros[index].id);
+        }
         step->mute_at = (uint16_t)play->mute_count;
         play->mute_count += n;
     }
@@ -2271,7 +2252,8 @@ static int queue_runner(struct engine_play *play, const struct engine_macro *mac
     if (count > 0)
         memcpy(play->arena + offset, src, count * sizeof *src);
     play->arena_count += count;
-    if (!rebase_hold_mutes(play, play->arena + offset, count, macro->mutes, macro->mute_count)) {
+    if (!rebase_hold_mutes(play, play->arena + offset, count, macro->mutes, macro->mute_count,
+                           macro->id)) {
         play->arena_count = offset;
         return 0;
     }
