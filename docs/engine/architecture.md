@@ -15,7 +15,8 @@ hook thread                    playback thread                 IPC thread
 message pump                   tick, then the high-res wait    pipe, parse, windows
     |                                  |                            |
     |-- event ring (1024) ------------>|                            |
-    |<-- echo ring (64) ---------------|                            |
+    |<-- echo ring (64) -------------------------------------------|
+    |                                  |-- report queue (256) ----->|
     |<-- swallow map (latest) ---------|                            |
     |                                  |<-- commands (64) + quit ---|
     |                                  |<-- profile image -----------|
@@ -31,7 +32,7 @@ message pump                   tick, then the high-res wait    pipe, parse, wind
 
 The core is the playback work that is plain C: the step walk, the key array, the waits as integer ticks. The playback thread calls into that core and passes `now` in. The core does not read the clock and does not include Win32. Linux CI compiles that core. A later fake clock is a caller that passes ticks.
 
-The serial port stays in the shell. Playback emits one report image per publish. On a board, that image is the `report` frame in `docs/engine/ipc-protocol.md`. The engine does not open the port.
+The serial port stays in the shell. Playback emits one report image per publish. On a board, that image is the `report` frame in `docs/engine/ipc-protocol.md`. The engine does not open the port. A report is a diff of downs and ups, so board reports are a queue, not latest-wins: every image reaches the pipe in publish order. The IPC thread drains the queue first on every wake. After each write it pushes the echo tokens for that image, with a 150 ms window from the write, like AHK's `QueueHidEcho` after `SendRaw`. A full queue latches. Playback then calls `StopAll` and logs `report queue overflow`. With no client connected, the IPC thread drains and drops.
 
 ## How they share state
 
@@ -40,7 +41,8 @@ Lock-free. No mutex on these paths. `Local\MacroUI.Engine` is the process lifeti
 | Path | Shape | Writer | Reader |
 |---|---|---|---|
 | Keys and mouse buttons | Ring of 1024 events | Hook | Playback |
-| Board echo | Ring of 64 tokens | Playback | Hook |
+| Board echo | Ring of 64 tokens | IPC, after the report frame is written | Hook |
+| Board reports | Ordered queue of 256 images | Playback | IPC |
 | Swallow and pass | Two maps, one published index | Playback | Hook |
 | Commands | Ring of 64, plus a quit flag | IPC | Playback |
 | Profile | Immutable image, sequence number | IPC | Playback |
@@ -91,7 +93,7 @@ In order:
 1. Mouse move, vertical wheel, and horizontal wheel return through `CallNextHookEx`. They are not events and they do not wake playback.
 2. `dwExtraInfo == 0x56454E44` returns through `CallNextHookEx` and is not a finger. That marker is on every `INPUT` this process sends, keyboard and mouse.
 3. Injected input returns the same way. Keyboard flags `0x12`, mouse flags `0x03`.
-4. A board echo that matches a token is consumed, passed through, and not enqueued. The token's window is 150 ms of QPC. The match is this list, not a walk of the profile.
+4. A board echo that matches a token is consumed, passed through, and not enqueued. The token's window is 150 ms of QPC from when the IPC thread wrote that report frame. The match is this list, not a walk of the profile.
 5. Otherwise resolve the key id, enqueue, and wake if playback asked.
 6. The keyboard hook returns 1 when the published map says swallow. Middle and both side buttons return 1 from that same map, and only software output sets the bit. Board output passes those clicks. Left and right always call `CallNextHookEx` and never start a macro. Move and wheel always call `CallNextHookEx`.
 
