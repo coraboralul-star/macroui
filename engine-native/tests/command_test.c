@@ -1185,6 +1185,61 @@ static void check_mute_switch(void)
     free(play);
 }
 
+/* A board tap is two reports, a down then an up. Both must reach the pipe. */
+static void check_report_queue(void)
+{
+    struct engine_report_queue *queue =
+        (struct engine_report_queue *)calloc(1, sizeof *queue);
+    struct engine_hook_state hooks;
+    struct engine_hook_decision decision;
+    struct engine_report report;
+    struct engine_report got;
+    int i;
+
+    if (!queue) {
+        expect(0, "queue alloc");
+        return;
+    }
+    engine_report_queue_init(queue);
+    for (i = 0; i < 5; i++) {
+        engine_report_clear(&report);
+        if (i % 2 == 0)
+            engine_report_push_down(&report, (uint16_t)(0x41 + i));
+        else
+            engine_report_push_up(&report, (uint16_t)(0x41 + i - 1));
+        expect(engine_report_queue_push(queue, &report) == 1, "report queued");
+    }
+    for (i = 0; i < 5; i++) {
+        struct engine_report_echo echo[4];
+        int n;
+
+        expect(engine_report_queue_pop(queue, &got) == 1, "every report comes out");
+        n = engine_report_echoes(&got, echo, 4);
+        expect(n == 1 && echo[0].down == (i % 2 == 0) &&
+                   echo[0].id == (uint16_t)(0x41 + (i % 2 == 0 ? i : i - 1)),
+               "reports come out in publish order");
+    }
+    expect(engine_report_queue_pop(queue, &got) == 0, "the queue is empty after the drain");
+    engine_report_clear(&report);
+    engine_report_push_down(&report, 0x41);
+    for (i = 0; i < (int)ENGINE_REPORT_QUEUE_CAP; i++)
+        engine_report_queue_push(queue, &report);
+    expect(engine_report_queue_push(queue, &report) == 0, "a full queue refuses");
+    expect(engine_report_queue_take_overflow(queue) == 1, "overflow latches");
+    expect(engine_report_queue_take_overflow(queue) == 0, "overflow is one shot");
+    free(queue);
+
+    /* Published at 0 and written at 300. The echo lands at 440. */
+    engine_hook_init(&hooks);
+    engine_report_clear(&report);
+    engine_report_push_down(&report, 0x57);
+    expect(engine_board_echo_written(&hooks, &report, 300, 1000) == 1, "one token per key");
+    press_key(&hooks, 0x57, 440, &decision);
+    expect(decision.enqueued == 0, "an echo 140 ms after the write is not a finger");
+    press_key(&hooks, 0x57, 460, &decision);
+    expect(decision.enqueued == 1, "a press after the window is a finger");
+}
+
 int main(void)
 {
     check_frames();
@@ -1201,6 +1256,7 @@ int main(void)
     check_many_starts();
     check_mute_compaction();
     check_mute_switch();
+    check_report_queue();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

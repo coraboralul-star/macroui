@@ -100,8 +100,7 @@ struct engine_resident {
     struct engine_fingers edge_fingers;
     int edge_ready;
     struct engine_fingers fingers;
-    struct engine_report_slot reports;
-    uint32_t report_seen;
+    struct engine_report_queue reports;
     struct engine_state_window windows[ENGINE_STATE_WINDOW_CAP];
     int window_count;
     struct engine_state_snapshot sent_state;
@@ -215,7 +214,7 @@ static void release_keys(void)
         struct engine_report report;
 
         if (engine_output_release(out, &report))
-            engine_report_slot_publish(&g.reports, &report);
+            engine_report_queue_push(&g.reports, &report);
     }
 }
 
@@ -276,19 +275,44 @@ static void maybe_write_state(void)
     write_state_frame(1);
 }
 
+static int64_t ipc_qpc(int64_t *freq)
+{
+    LARGE_INTEGER now;
+    LARGE_INTEGER f;
+
+    *freq = 1000;
+    if (QueryPerformanceFrequency(&f) && f.QuadPart > 0)
+        *freq = f.QuadPart;
+    if (!QueryPerformanceCounter(&now))
+        return 0;
+    return now.QuadPart;
+}
+
+/* Every queued report, in order. The echo window starts when the frame is
+   written, like AHK's QueueHidEcho after SendRaw. With no client the
+   reports are dropped so the queue does not fill. */
 static void flush_report(void)
 {
     struct engine_report report;
     unsigned char buf[12 + ENGINE_REPORT_BYTES];
     int n;
 
-    if (!g.client || !g.pipe)
-        return;
-    if (!engine_report_slot_take(&g.reports, &g.report_seen, &report))
-        return;
-    n = engine_report_frame(&report, buf, (int)sizeof buf);
-    if (n > 0 && write_frame(g.pipe, buf, n) != 0)
-        drop_client();
+    while (engine_report_queue_pop(&g.reports, &report)) {
+        int64_t freq;
+        int64_t now;
+
+        if (!g.client || !g.pipe)
+            continue;
+        n = engine_report_frame(&report, buf, (int)sizeof buf);
+        if (n <= 0)
+            continue;
+        if (write_frame(g.pipe, buf, n) != 0) {
+            drop_client();
+            continue;
+        }
+        now = ipc_qpc(&freq);
+        engine_board_echo_written(&g.hooks, &report, now, freq);
+    }
 }
 
 /* Hello, then one state. A failed state write is not a dropped client. */
@@ -724,25 +748,6 @@ static int load_resident_profile(void)
     return rc;
 }
 
-/* Pico keys have no dwExtraInfo. A 150 ms token lets that tap through and
-   keeps it from counting as the finger. A real trigger is not in this list. */
-static void note_board_echo(const struct engine_report *report, int64_t now)
-{
-    struct engine_report_echo echo[64];
-    int64_t freq;
-    int64_t until;
-    int n;
-    int i;
-
-    if (!report)
-        return;
-    freq = g.clock.qpc_freq > 0 ? g.clock.qpc_freq : 1000;
-    until = now + engine_ms_to_ticks(150, freq);
-    n = engine_report_echoes(report, echo, 64);
-    for (i = 0; i < n; i++)
-        engine_echo_push(&g.hooks, echo[i].id, echo[i].down != 0, until);
-}
-
 static void send_play_report(const struct engine_report *report, int mode, int64_t now)
 {
     if (!g.play || !report || !engine_report_active(report))
@@ -750,8 +755,10 @@ static void send_play_report(const struct engine_report *report, int mode, int64
     if (mode == ENGINE_OUTPUT_SOFTWARE)
         engine_win_send_report(report, g.play->output.swap_clicks);
     else {
-        note_board_echo(report, now);
-        engine_report_slot_publish(&g.reports, report);
+        /* Pico keys have no dwExtraInfo. The IPC thread adds the echo
+           tokens once the frame is written. */
+        (void)now;
+        engine_report_queue_push(&g.reports, report);
         if (g.ipc_wake)
             SetEvent(g.ipc_wake);
     }
@@ -896,6 +903,10 @@ static void drain_fingers(int64_t now)
         engine_event_clear_overflow(&g.hooks);
         engine_play_stop_all(g.play);
         engine_log("event ring overflow");
+    }
+    if (engine_report_queue_take_overflow(&g.reports)) {
+        engine_play_stop_all(g.play);
+        engine_log("report queue overflow");
     }
 }
 
@@ -1325,6 +1336,9 @@ static DWORD WINAPI ipc_thread(LPVOID param)
     while (!atomic_load_explicit(&g.quit, memory_order_acquire)) {
         DWORD now = GetTickCount();
 
+        /* Reports first: a down and its up must leave before the window
+           walk or a pipe read can delay them. */
+        flush_report();
         pump_window();
         refresh_front();
         if (g.windows_at == 0 || now - g.windows_at >= ENGINE_WINDOW_MS) {
@@ -1529,7 +1543,7 @@ static int run_resident(const struct engine_args *args)
     engine_cmd_ring_init(&g.cmds);
     engine_trigger_init(&g.triggers);
     engine_fingers_clear(&g.fingers);
-    engine_report_slot_init(&g.reports);
+    engine_report_queue_init(&g.reports);
     g.play = (struct engine_play *)calloc(1, sizeof *g.play);
     if (!g.play) {
         atomic_store_explicit(&g.fail, 1, memory_order_release);

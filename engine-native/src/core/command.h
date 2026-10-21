@@ -74,10 +74,16 @@ struct engine_state_window {
     char title[ENGINE_STATE_TITLE_CAP];
 };
 
-struct engine_report_slot {
-    struct engine_report copy[2];
-    atomic_uint seq;
-    atomic_int index;
+/* Board reports, playback to the IPC thread. One writer, one reader, in
+   publish order. A report is a diff of downs and ups, so dropping one can
+   leave a key held on the board. A full queue refuses and latches. */
+#define ENGINE_REPORT_QUEUE_CAP 256u
+
+struct engine_report_queue {
+    struct engine_report slots[ENGINE_REPORT_QUEUE_CAP];
+    atomic_uint head;
+    atomic_uint tail;
+    atomic_int overflow;
 };
 
 /* Version 1 frames. A leading '{' is JSON. Short, bad magic, and a length
@@ -150,12 +156,21 @@ int engine_state_frame(const struct engine_state_snapshot *snap,
                        const struct engine_state_window *windows, int window_count,
                        unsigned char *buf, int cap);
 
-void engine_report_slot_init(struct engine_report_slot *slot);
-void engine_report_slot_publish(struct engine_report_slot *slot, const struct engine_report *report);
+void engine_report_queue_init(struct engine_report_queue *queue);
 
-/* 1 when seq changed. *seen is updated. */
-int engine_report_slot_take(struct engine_report_slot *slot, uint32_t *seen,
-                            struct engine_report *out);
+/* 1 when stored. 0 sets the overflow latch and stores nothing. */
+int engine_report_queue_push(struct engine_report_queue *queue, const struct engine_report *report);
+int engine_report_queue_pop(struct engine_report_queue *queue, struct engine_report *out);
+
+/* 1 once, then the latch is clear. */
+int engine_report_queue_take_overflow(struct engine_report_queue *queue);
+
+/* Call after the report frame is written. Each down and up in the report
+   gets an echo token that lasts 150 ms from now, so the Pico tap is not a
+   finger. AHK queues the token right after its pipe write. now and freq are
+   QPC. Returns the number of tokens stored. */
+int engine_board_echo_written(struct engine_hook_state *hooks, const struct engine_report *report,
+                              int64_t now, int64_t freq);
 
 /* Header plus the 156-byte image. Returns the byte count, or -1. */
 int engine_report_frame(const struct engine_report *report, unsigned char *buf, int cap);

@@ -3,6 +3,7 @@
 #endif
 
 #include "command.h"
+#include "clock.h"
 
 #include <string.h>
 
@@ -669,52 +670,77 @@ int engine_state_frame(const struct engine_state_snapshot *snap,
     return at;
 }
 
-void engine_report_slot_init(struct engine_report_slot *slot)
+_Static_assert((ENGINE_REPORT_QUEUE_CAP & (ENGINE_REPORT_QUEUE_CAP - 1u)) == 0, "report cap");
+
+void engine_report_queue_init(struct engine_report_queue *queue)
 {
-    if (!slot)
+    if (!queue)
         return;
-    memset(slot, 0, sizeof *slot);
-    atomic_init(&slot->seq, 0u);
-    atomic_init(&slot->index, -1);
+    memset(queue, 0, sizeof *queue);
+    atomic_init(&queue->head, 0u);
+    atomic_init(&queue->tail, 0u);
+    atomic_init(&queue->overflow, 0);
 }
 
-void engine_report_slot_publish(struct engine_report_slot *slot, const struct engine_report *report)
+int engine_report_queue_push(struct engine_report_queue *queue, const struct engine_report *report)
 {
-    int cur;
-    int next;
+    unsigned head;
+    unsigned tail;
 
-    if (!slot || !report)
-        return;
-    cur = atomic_load_explicit(&slot->index, memory_order_relaxed);
-    next = cur == 0 ? 1 : 0;
-    slot->copy[next] = *report;
-    atomic_store_explicit(&slot->index, next, memory_order_release);
-    atomic_fetch_add_explicit(&slot->seq, 1u, memory_order_release);
-}
-
-int engine_report_slot_take(struct engine_report_slot *slot, uint32_t *seen,
-                            struct engine_report *out)
-{
-    uint32_t seq;
-    int index;
-    int tries;
-
-    if (!slot || !seen || !out)
+    if (!queue || !report)
         return 0;
-    for (tries = 0; tries < 8; tries++) {
-        seq = atomic_load_explicit(&slot->seq, memory_order_acquire);
-        if (seq == *seen)
-            return 0;
-        index = atomic_load_explicit(&slot->index, memory_order_acquire);
-        if (index != 0 && index != 1)
-            continue;
-        *out = slot->copy[index];
-        if (atomic_load_explicit(&slot->seq, memory_order_acquire) != seq)
-            continue;
-        *seen = seq;
-        return 1;
+    head = atomic_load_explicit(&queue->head, memory_order_acquire);
+    tail = atomic_load_explicit(&queue->tail, memory_order_relaxed);
+    if (tail - head >= ENGINE_REPORT_QUEUE_CAP) {
+        atomic_store_explicit(&queue->overflow, 1, memory_order_release);
+        return 0;
     }
-    return 0;
+    queue->slots[tail & (ENGINE_REPORT_QUEUE_CAP - 1u)] = *report;
+    atomic_store_explicit(&queue->tail, tail + 1u, memory_order_release);
+    return 1;
+}
+
+int engine_report_queue_pop(struct engine_report_queue *queue, struct engine_report *out)
+{
+    unsigned head;
+    unsigned tail;
+
+    if (!queue || !out)
+        return 0;
+    head = atomic_load_explicit(&queue->head, memory_order_relaxed);
+    tail = atomic_load_explicit(&queue->tail, memory_order_acquire);
+    if (head == tail)
+        return 0;
+    *out = queue->slots[head & (ENGINE_REPORT_QUEUE_CAP - 1u)];
+    atomic_store_explicit(&queue->head, head + 1u, memory_order_release);
+    return 1;
+}
+
+int engine_report_queue_take_overflow(struct engine_report_queue *queue)
+{
+    if (!queue)
+        return 0;
+    return atomic_exchange_explicit(&queue->overflow, 0, memory_order_acq_rel) != 0;
+}
+
+int engine_board_echo_written(struct engine_hook_state *hooks, const struct engine_report *report,
+                              int64_t now, int64_t freq)
+{
+    struct engine_report_echo echo[64];
+    int64_t until;
+    int stored = 0;
+    int n;
+    int i;
+
+    if (!hooks || !report)
+        return 0;
+    if (freq <= 0)
+        freq = 1000;
+    until = now + engine_ms_to_ticks(150, freq);
+    n = engine_report_echoes(report, echo, 64);
+    for (i = 0; i < n; i++)
+        stored += engine_echo_push(hooks, echo[i].id, echo[i].down != 0, until);
+    return stored;
 }
 
 int engine_report_frame(const struct engine_report *report, unsigned char *buf, int cap)
