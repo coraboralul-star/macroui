@@ -105,6 +105,21 @@ A finger stays down until the hook reports the up. A start needs a down edge, li
 
 The watchdog rules in the analysis stay. Idle does not re-raise. The stamps live on the hook thread. The decision runs in step 4. That decision is `engine_hook_watch` in `engine-native/src/core/hook.c`. The hook thread reads the raise flags between messages and unhooks before it installs. `engine-native/src/win/hook_win.c` is that install. The resident process starts that thread. The playback thread does not call it.
 
+## engine.log
+
+`profiles/engine.log` sits next to `--profile`. The playback thread never opens it. A line is formatted into a 256-slot ring, and the IPC thread writes the ring through one open handle on every wake. The main thread drains it once more after the IPC thread has left. A full ring drops the line and later writes `log dropped <n>`.
+
+The core keeps a note ring on `struct engine_play` (`engine_play_note`), 128 entries per tick. Playback turns those notes into these lines after each tick:
+
+| Line | When |
+|---|---|
+| `trigger <key> down\|up macro="<name>" id=<id> action=<why>` | Every edge of a live trigger. `action` is what the edge did: `start`, `release`, `toggle`, `ask-stop`, `muted`, `once-done`, `focus`, `disabled`, `none`, or the refusal reason |
+| `runner start macro=... id=... mode=... reason=<why>` | A runner was queued: `edge`, `unmute`, `run`, `start` |
+| `runner stop macro=... id=... mode=... reason=<why> age=<ms>` | A runner left the list: `finished`, `release`, `toggle`, `next-up`, `ask-stop`, `scan-release`, `edge-release`, `focus`, `disabled`, `orphan`, `restart`, `exclusive`, `stop`, `stop-all`, `command`, `panic`, `overflow`, `unmute`, `frame-cap`, `hold-cap` |
+| `start blocked macro=... id=... mode=... reason=<why>` | A start was refused: `already-running`, `busy`, `runner-cap`, `arena-full`, `no-id`. A `run` step whose target is still live is not logged |
+
+The 2 s state line also carries `arena=<used>/<cap> mutes=<used>/<cap> muted=<id>:<count>,...`. When nothing is running, `arena` and `mutes` are 0.
+
 ## Playback priority
 
 | | Priority | Affinity |

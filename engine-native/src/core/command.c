@@ -306,7 +306,7 @@ static int once_start(struct engine_play *play, const struct engine_macro *macro
     int override = (mode == ENGINE_MODE_WHILE_HELD || mode == ENGINE_MODE_TOGGLE) ? -1
                                                                                    : ENGINE_MODE_ONCE;
 
-    return engine_play_start(play, macro, override, 1);
+    return engine_play_start_why(play, macro, override, 1, ENGINE_WHY_EDGE);
 }
 
 static const char *macro_focus(const struct engine_live_config *live, int index)
@@ -460,6 +460,8 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
         int running;
         int once;
         int action;
+        int note = -1;
+        int did = ENGINE_WHY_NONE;
 
         if (!macro->id[0])
             continue;
@@ -468,48 +470,69 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
         mem->prev[i] = (uint8_t)(down ? 1 : 0);
         if (!engine_can_trigger(macro->trigger))
             continue;
-        if (engine_play_muted(play, macro->id))
-            continue;
-        if (!macro_enabled(live, i) || !engine_focus_swallow(macro_focus(live, i), front, owner)) {
-            engine_play_stop(play, macro->id);
-            continue;
-        }
-        running = runner_live(play, macro->id);
-        once = engine_once_state(play, macro->id);
-        if (once == ENGINE_LOCK_DONE) {
-            if (running) {
-                if (!down && mode == ENGINE_MODE_WHILE_HELD)
+        /* Every edge of a live trigger is one log line, written before the
+           start or stop it causes. did is filled in below. */
+        if (down != was)
+            note = engine_play_note(play, ENGINE_NOTE_EDGE, macro->id, ENGINE_WHY_NONE, mode,
+                                    macro->trigger, down, 0);
+        if (engine_play_muted(play, macro->id)) {
+            did = ENGINE_WHY_MUTED;
+        } else if (!macro_enabled(live, i) ||
+                   !engine_focus_swallow(macro_focus(live, i), front, owner)) {
+            int why = macro_enabled(live, i) ? ENGINE_WHY_FOCUS : ENGINE_WHY_DISABLED;
+
+            engine_play_stop_why(play, macro->id, why);
+            did = why;
+        } else {
+            running = runner_live(play, macro->id);
+            once = engine_once_state(play, macro->id);
+            if (once == ENGINE_LOCK_DONE) {
+                did = ENGINE_WHY_ONCE_DONE;
+                if (running) {
+                    if (!down && mode == ENGINE_MODE_WHILE_HELD) {
+                        engine_play_ask_stop(play, macro->id);
+                        did = ENGINE_WHY_ASK_STOP;
+                    }
+                } else {
+                    engine_once_ensure(play, macro->id, macro->trigger);
+                }
+            } else if (macro->advanced && mode != ENGINE_MODE_ON_RELEASE) {
+                if (down && !was) {
+                    int ok;
+
+                    if (once == ENGINE_LOCK_OPEN)
+                        ok = once_start(play, macro);
+                    else
+                        ok = engine_play_start_why(play, macro, -1, 1, ENGINE_WHY_EDGE);
+                    did = ok ? ENGINE_WHY_START : play->refused;
+                    if (once == ENGINE_LOCK_OPEN)
+                        engine_once_spend(play, macro->id);
+                } else if (!down && running && once != ENGINE_LOCK_OPEN &&
+                           holds_on_release(macro, spam, tap)) {
                     engine_play_ask_stop(play, macro->id);
+                    did = ENGINE_WHY_ASK_STOP;
+                }
             } else {
-                engine_once_ensure(play, macro->id, macro->trigger);
+                action = engine_trigger_action(mode, down, was, running);
+                if (action == ENGINE_TRIGGER_START) {
+                    int ok;
+
+                    if (once == ENGINE_LOCK_OPEN)
+                        ok = once_start(play, macro);
+                    else
+                        ok = engine_play_start_why(play, macro, edge ? ENGINE_MODE_WHILE_HELD : -1, 1,
+                                                   ENGINE_WHY_EDGE);
+                    did = ok ? ENGINE_WHY_START : play->refused;
+                    if (once == ENGINE_LOCK_OPEN)
+                        engine_once_spend(play, macro->id);
+                } else if (action == ENGINE_TRIGGER_STOP) {
+                    did = mode == ENGINE_MODE_TOGGLE ? ENGINE_WHY_TOGGLE : ENGINE_WHY_RELEASE;
+                    engine_play_stop_why(play, macro->id, did);
+                }
             }
-            continue;
         }
-        if (macro->advanced && mode != ENGINE_MODE_ON_RELEASE) {
-            if (down && !was) {
-                if (once == ENGINE_LOCK_OPEN)
-                    once_start(play, macro);
-                else
-                    engine_play_start(play, macro, -1, 1);
-                if (once == ENGINE_LOCK_OPEN)
-                    engine_once_spend(play, macro->id);
-            } else if (!down && running && once != ENGINE_LOCK_OPEN &&
-                       holds_on_release(macro, spam, tap)) {
-                engine_play_ask_stop(play, macro->id);
-            }
-            continue;
-        }
-        action = engine_trigger_action(mode, down, was, running);
-        if (action == ENGINE_TRIGGER_START) {
-            if (once == ENGINE_LOCK_OPEN)
-                once_start(play, macro);
-            else
-                engine_play_start(play, macro, edge ? ENGINE_MODE_WHILE_HELD : -1, 1);
-            if (once == ENGINE_LOCK_OPEN)
-                engine_once_spend(play, macro->id);
-        } else if (action == ENGINE_TRIGGER_STOP) {
-            engine_play_stop(play, macro->id);
-        }
+        if (note >= 0)
+            play->notes[note].why = (uint8_t)did;
     }
 }
 
@@ -566,7 +589,7 @@ void engine_reap_orphans(struct engine_play *play, const struct engine_live_conf
             }
         }
         if (!found)
-            engine_play_stop(play, play->runners[i].id);
+            engine_play_stop_why(play, play->runners[i].id, ENGINE_WHY_ORPHAN);
     }
 }
 

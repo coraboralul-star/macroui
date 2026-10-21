@@ -775,7 +775,7 @@ static void apply_commands(int64_t now)
         return;
     if (engine_cmd_take_overflow(&g.cmds)) {
         g.armed = 0;
-        engine_play_stop_all(g.play);
+        engine_play_stop_all_why(g.play, ENGINE_WHY_OVERFLOW);
         while (engine_cmd_pop(&g.cmds, &item))
             ;
         return;
@@ -786,7 +786,7 @@ static void apply_commands(int64_t now)
             engine_trigger_reseed(&g.triggers);
         } else if (item.kind == ENGINE_CMD_STOP) {
             g.armed = 0;
-            engine_play_stop_all(g.play);
+            engine_play_stop_all_why(g.play, ENGINE_WHY_COMMAND);
         } else if (item.kind == ENGINE_CMD_RELOAD) {
             engine_trigger_reseed(&g.triggers);
         } else if (item.kind == ENGINE_CMD_OUTPUT) {
@@ -802,31 +802,114 @@ static void apply_commands(int64_t now)
     }
 }
 
+/* engine.log lines. The playback thread fills a slot and the IPC thread
+   writes it with one open handle, so a slow disk or a scanner never stalls
+   playback. "engine start" is written before the threads exist, and the
+   main thread drains once more after the IPC thread has left. */
+#define ENGINE_LOG_LINES 256u
+#define ENGINE_LOG_LINE 1024
+
+struct engine_log_ring {
+    char line[ENGINE_LOG_LINES][ENGINE_LOG_LINE];
+    int len[ENGINE_LOG_LINES];
+    atomic_uint head;
+    atomic_uint tail;
+    atomic_uint dropped;
+    HANDLE file;
+};
+
+static struct engine_log_ring g_log;
+
 static void engine_log(const char *text)
 {
     SYSTEMTIME st;
-    char buf[700];
-    HANDLE file;
-    DWORD wrote = 0;
+    unsigned head;
+    unsigned tail;
+    unsigned at;
     int n;
 
     if (!g.log_path[0] || !text || !text[0])
         return;
+    head = atomic_load_explicit(&g_log.head, memory_order_acquire);
+    tail = atomic_load_explicit(&g_log.tail, memory_order_relaxed);
+    if (tail - head >= ENGINE_LOG_LINES) {
+        atomic_fetch_add_explicit(&g_log.dropped, 1u, memory_order_relaxed);
+        return;
+    }
+    at = tail & (ENGINE_LOG_LINES - 1u);
     GetLocalTime(&st);
-    n = snprintf(buf, sizeof buf, "%04u-%02u-%02u %02u:%02u:%02u %s\r\n",
+    n = snprintf(g_log.line[at], ENGINE_LOG_LINE - 2, "%04u-%02u-%02u %02u:%02u:%02u %s",
                  (unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay,
                  (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond, text);
     if (n <= 0)
         return;
-    if (n >= (int)sizeof buf)
-        n = (int)sizeof buf - 1;
-    file = CreateFileW(g.log_path, FILE_APPEND_DATA,
-                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_ALWAYS,
-                       FILE_ATTRIBUTE_NORMAL, NULL);
-    if (file == INVALID_HANDLE_VALUE)
+    if (n > ENGINE_LOG_LINE - 3)
+        n = ENGINE_LOG_LINE - 3;
+    g_log.line[at][n++] = '\r';
+    g_log.line[at][n++] = '\n';
+    g_log.len[at] = n;
+    atomic_store_explicit(&g_log.tail, tail + 1u, memory_order_release);
+}
+
+static void log_write(const char *bytes, int n)
+{
+    DWORD wrote = 0;
+
+    if (!g_log.file) {
+        HANDLE file = CreateFileW(g.log_path, FILE_APPEND_DATA,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                                  OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+        if (file == INVALID_HANDLE_VALUE)
+            return;
+        g_log.file = file;
+    }
+    if (!WriteFile(g_log.file, bytes, (DWORD)n, &wrote, NULL)) {
+        CloseHandle(g_log.file);
+        g_log.file = NULL;
+    }
+}
+
+/* One reader at a time: the IPC thread, then the main thread after it left. */
+static void log_flush(void)
+{
+    unsigned head;
+    unsigned tail;
+    unsigned lost;
+
+    if (!g.log_path[0])
         return;
-    WriteFile(file, buf, (DWORD)n, &wrote, NULL);
-    CloseHandle(file);
+    head = atomic_load_explicit(&g_log.head, memory_order_relaxed);
+    tail = atomic_load_explicit(&g_log.tail, memory_order_acquire);
+    while (head != tail) {
+        unsigned at = head & (ENGINE_LOG_LINES - 1u);
+
+        log_write(g_log.line[at], g_log.len[at]);
+        head++;
+        atomic_store_explicit(&g_log.head, head, memory_order_release);
+    }
+    lost = atomic_exchange_explicit(&g_log.dropped, 0u, memory_order_acq_rel);
+    if (lost) {
+        char line[96];
+        SYSTEMTIME st;
+        int n;
+
+        GetLocalTime(&st);
+        n = snprintf(line, sizeof line, "%04u-%02u-%02u %02u:%02u:%02u log dropped %u\r\n",
+                     (unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay,
+                     (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond, lost);
+        if (n > 0 && n < (int)sizeof line)
+            log_write(line, n);
+    }
+}
+
+static void log_close(void)
+{
+    log_flush();
+    if (g_log.file) {
+        CloseHandle(g_log.file);
+        g_log.file = NULL;
+    }
 }
 
 static void set_engine_log(const char *profile)
@@ -888,7 +971,7 @@ static void drain_fingers(int64_t now)
         int deferred;
 
         if (ev.id == ENGINE_KEY_PAUSE && engine_panic_edge(ev.id, pause, ev.down))
-            engine_play_stop_all(g.play);
+            engine_play_stop_all_why(g.play, ENGINE_WHY_PANIC);
         deferred = engine_finger_note(&g.fingers, ev.id, ev.down, g.defer_down, &g.defer_count, 8);
         if (deferred) {
             char line[128];
@@ -906,11 +989,11 @@ static void drain_fingers(int64_t now)
     }
     if (engine_event_overflow(&g.hooks)) {
         engine_event_clear_overflow(&g.hooks);
-        engine_play_stop_all(g.play);
+        engine_play_stop_all_why(g.play, ENGINE_WHY_OVERFLOW);
         engine_log("event ring overflow");
     }
     if (engine_report_queue_take_overflow(&g.reports)) {
-        engine_play_stop_all(g.play);
+        engine_play_stop_all_why(g.play, ENGINE_WHY_OVERFLOW);
         engine_log("report queue overflow");
     }
 }
@@ -997,7 +1080,9 @@ static void log_state(int64_t now)
 {
     char held[160];
     char runs[240];
-    char line[640];
+    char muted[200];
+    char line[900];
+    int muted_pos = 0;
     int64_t freq = g.clock.qpc_freq > 0 ? g.clock.qpc_freq : 1000;
     int64_t beat = engine_ms_to_ticks(2000, freq);
     int64_t key_stamp;
@@ -1047,6 +1132,19 @@ static void log_state(int64_t now)
             break;
         run_pos += wrote;
     }
+    muted[0] = '\0';
+    for (i = 0; i < ENGINE_MUTE_SLOT_CAP; i++) {
+        int wrote;
+
+        if (!g.play->mute_slot_used[i] || g.play->mute_slot_count[i] <= 0)
+            continue;
+        wrote = snprintf(muted + muted_pos, sizeof muted - (size_t)muted_pos, "%s%s:%d",
+                         muted_pos ? "," : "", g.play->mute_slot_id[i],
+                         g.play->mute_slot_count[i]);
+        if (wrote <= 0 || muted_pos + wrote >= (int)sizeof muted)
+            break;
+        muted_pos += wrote;
+    }
     if (g.play->runner_count + g.play->pending_count >= ENGINE_RUNNER_CAP)
         any = 1;
     if (!any)
@@ -1055,16 +1153,78 @@ static void log_state(int64_t now)
     if (key_stamp > 0 && now >= key_stamp && freq > 0)
         key_age = (now - key_stamp) * 1000 / freq;
     snprintf(line, sizeof line,
-             "state config=\"%s\" id=%s focus=%s front=%s held=%s runners=%s pending=%d hookKeyAge=%lldms hookMouse=%s mouseNeed=%s",
+             "state config=\"%s\" id=%s focus=%s front=%s held=%s runners=%s pending=%d hookKeyAge=%lldms hookMouse=%s mouseNeed=%s arena=%u/%u mutes=%u/%u muted=%s",
              g.live_name[0] ? g.live_name : "-",
              g.live_id[0] ? g.live_id : "-",
              g.live_focus[0] ? g.live_focus : "-",
              g.live_front[0] ? g.live_front : "-",
              held_pos ? held : "-", run_pos ? runs : "-", g.play->pending_count, (long long)key_age,
              atomic_load_explicit(&g.hooks.mouse_installed, memory_order_acquire) ? "on" : "off",
-             atomic_load_explicit(&g.hooks.need_mouse, memory_order_acquire) ? "on" : "off");
+             atomic_load_explicit(&g.hooks.need_mouse, memory_order_acquire) ? "on" : "off",
+             (unsigned)g.play->arena_count, (unsigned)ENGINE_STEP_CAP,
+             (unsigned)g.play->mute_count, (unsigned)ENGINE_MUTE_ID_CAP,
+             muted_pos ? muted : "-");
     engine_log(line);
     g.log_beat = now;
+}
+
+static const char *macro_name(const struct engine_live_config *live, const char *id)
+{
+    int m;
+
+    if (!live || !live->macros || !live->extras || !id)
+        return "";
+    for (m = 0; m < live->macro_count; m++) {
+        if (strcmp(live->macros[m].id, id) == 0)
+            return live->extras[m].name;
+    }
+    return "";
+}
+
+/* Matched trigger edges, starts, stops, and refusals from this tick. */
+static void log_notes(const struct engine_live_config *live)
+{
+    int64_t freq;
+    int i;
+
+    if (!g.play)
+        return;
+    freq = g.play->freq > 0 ? g.play->freq : 1000;
+    for (i = 0; i < g.play->note_count; i++) {
+        const struct engine_note *note = &g.play->notes[i];
+        const char *name = macro_name(live, note->id);
+        const char *why = engine_why_name(note->why);
+        char line[512];
+
+        if (note->kind == ENGINE_NOTE_EDGE) {
+            const char *key = engine_key_name(note->key);
+
+            snprintf(line, sizeof line, "trigger %s %s macro=\"%s\" id=%s action=%s",
+                     key ? key : "?", note->down ? "down" : "up", name, note->id, why);
+        } else if (note->kind == ENGINE_NOTE_START) {
+            snprintf(line, sizeof line, "runner start macro=\"%s\" id=%s mode=%s reason=%s", name,
+                     note->id, mode_name(note->mode), why);
+        } else if (note->kind == ENGINE_NOTE_STOP) {
+            snprintf(line, sizeof line,
+                     "runner stop macro=\"%s\" id=%s mode=%s reason=%s age=%lldms", name,
+                     note->id, mode_name(note->mode), why,
+                     (long long)(note->age * 1000 / freq));
+        } else if (note->kind == ENGINE_NOTE_BLOCK) {
+            snprintf(line, sizeof line, "start blocked macro=\"%s\" id=%s mode=%s reason=%s",
+                     name, note->id, mode_name(note->mode), why);
+        } else {
+            continue;
+        }
+        engine_log(line);
+    }
+    if (g.play->note_dropped) {
+        char line[64];
+
+        snprintf(line, sizeof line, "notes dropped %u", (unsigned)g.play->note_dropped);
+        engine_log(line);
+    }
+    g.play->note_count = 0;
+    g.play->note_dropped = 0;
 }
 
 static void log_unmatched(const struct engine_live_config *live)
@@ -1327,6 +1487,7 @@ static void playback_tick(int64_t now)
         engine_poll_triggers(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner);
     engine_play_tick(g.play, now);
     apply_deferred(now);
+    log_notes(&live);
     log_state(now);
     send_play_report(&g.play->last, g.play->output.mode, now);
     publish_play_state(&live, &focus);
@@ -1362,6 +1523,7 @@ static DWORD WINAPI ipc_thread(LPVOID param)
         /* Reports first: a down and its up must leave before the window
            walk or a pipe read can delay them. */
         flush_report();
+        log_flush();
         pump_window();
         refresh_front();
         if (g.windows_at == 0 || now - g.windows_at >= ENGINE_WINDOW_MS) {
@@ -1390,6 +1552,7 @@ static DWORD WINAPI ipc_thread(LPVOID param)
     if (g.release_pipe)
         WaitForSingleObject(g.release_pipe, ENGINE_JOIN_MS);
     flush_report();
+    log_flush();
     engine_profile_slot_shutdown(&g.profiles);
     close_pipe();
     free(g.pipe_buf);
@@ -1526,6 +1689,10 @@ static int finish_resident(void)
     if (g.ipc_thread) {
         if (WaitForSingleObject(g.ipc_thread, ENGINE_JOIN_MS) != WAIT_OBJECT_0)
             atomic_store_explicit(&g.fail, 1, memory_order_release);
+        else
+            log_close();
+    } else {
+        log_close();
     }
     close_pipe();
     close_mutex();
@@ -1547,6 +1714,10 @@ static int run_resident(const struct engine_args *args)
     SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     memset(&g, 0, sizeof g);
+    atomic_init(&g_log.head, 0u);
+    atomic_init(&g_log.tail, 0u);
+    atomic_init(&g_log.dropped, 0u);
+    g_log.file = NULL;
     atomic_init(&g.quit, 0);
     atomic_init(&g.fail, 0);
     atomic_init(&g.keys_done, 0);
@@ -1571,18 +1742,21 @@ static int run_resident(const struct engine_args *args)
     g.play = (struct engine_play *)calloc(1, sizeof *g.play);
     if (!g.play) {
         atomic_store_explicit(&g.fail, 1, memory_order_release);
+        log_close();
         return ENGINE_EXIT_FAIL;
     }
     engine_play_init(g.play);
 
     mutex = CreateMutexW(NULL, TRUE, L"Local\\MacroUI.Engine");
     if (!mutex) {
+        log_close();
         free(g.play);
         g.play = NULL;
         return ENGINE_EXIT_FAIL;
     }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         CloseHandle(mutex);
+        log_close();
         free(g.play);
         g.play = NULL;
         return ENGINE_EXIT_BUSY;

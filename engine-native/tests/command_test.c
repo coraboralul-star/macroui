@@ -1389,6 +1389,101 @@ static void check_forget_triggers(void)
     free(play);
 }
 
+static int find_note(const struct engine_play *play, int kind, const char *id, int why)
+{
+    int i;
+
+    for (i = 0; i < play->note_count; i++) {
+        if (play->notes[i].kind == kind && strcmp(play->notes[i].id, id) == 0 &&
+            (why < 0 || play->notes[i].why == why))
+            return i;
+    }
+    return -1;
+}
+
+/* The next engine.log must show every matched edge, start, stop, and refusal. */
+static void check_notes(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    static struct engine_step big[ENGINE_STEP_CAP + 1];
+    struct engine_step loop[5];
+    struct engine_macro macros[2];
+    struct engine_profile_extra extras[2];
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    int64_t now = 1;
+    int edge;
+    int start;
+
+    if (!play) {
+        expect(0, "notes play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(loop, (uint16_t)'Q');
+    loop[0].type = ENGINE_STEP_HOLD_LOOP;
+    loop[0].a = 0;
+    memset(extras, 0, sizeof extras);
+    extras[0].enabled = 1;
+    extras[1].enabled = 1;
+    engine_macro_init(&macros[0]);
+    snprintf(macros[0].id, sizeof macros[0].id, "reload");
+    macros[0].mode = ENGINE_MODE_WHILE_HELD;
+    macros[0].trigger = (uint16_t)'A';
+    macros[0].steps = loop;
+    macros[0].step_count = 5;
+    macros[0].top_count = 1;
+    engine_macro_init(&macros[1]);
+    snprintf(macros[1].id, sizeof macros[1].id, "huge");
+    macros[1].mode = ENGINE_MODE_ONCE;
+    macros[1].trigger = (uint16_t)'H';
+    macros[1].steps = big;
+    macros[1].step_count = ENGINE_STEP_CAP + 1;
+    memset(&live, 0, sizeof live);
+    live.macros = macros;
+    live.extras = extras;
+    live.macro_count = 2;
+    engine_play_set_macros(play, macros, 2);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+    play->note_count = 0;
+
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 1, NULL);
+    edge = find_note(play, ENGINE_NOTE_EDGE, "reload", ENGINE_WHY_START);
+    start = find_note(play, ENGINE_NOTE_START, "reload", ENGINE_WHY_EDGE);
+    expect(edge >= 0 && play->notes[edge].down == 1 && play->notes[edge].key == (uint16_t)'A',
+           "a down of a is an edge note that started reload");
+    expect(start > edge, "the start note follows its edge");
+    expect(strcmp(engine_why_name(ENGINE_WHY_ARENA_FULL), "arena-full") == 0, "reason names");
+    play->note_count = 0;
+
+    play_ms(play, &live, &mem, &fingers, &now, 50, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'A', 0);
+    play_ms(play, &live, &mem, &fingers, &now, 2, NULL);
+    edge = find_note(play, ENGINE_NOTE_EDGE, "reload", ENGINE_WHY_RELEASE);
+    expect(edge >= 0 && play->notes[edge].down == 0, "the up of a is an edge note that stopped reload");
+    start = find_note(play, ENGINE_NOTE_STOP, "reload", ENGINE_WHY_RELEASE);
+    expect(start > edge && play->notes[start].age >= 50, "the stop note has the reason and the age");
+    play->note_count = 0;
+
+    engine_fingers_set(&fingers, (uint16_t)'H', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 1, NULL);
+    expect(find_note(play, ENGINE_NOTE_BLOCK, "huge", ENGINE_WHY_ARENA_FULL) >= 0,
+           "a start that cannot fit is a blocked note");
+    expect(find_note(play, ENGINE_NOTE_EDGE, "huge", ENGINE_WHY_ARENA_FULL) >= 0,
+           "its edge says why");
+    play->note_count = 0;
+    engine_play_note(play, ENGINE_NOTE_EDGE, "x", 0, 0, 0, 0, 0);
+    play->note_count = ENGINE_NOTE_CAP;
+    expect(engine_play_note(play, ENGINE_NOTE_EDGE, "x", 0, 0, 0, 0, 0) == -1 &&
+               play->note_dropped == 1,
+           "a full note ring counts the drop");
+    free(play);
+}
+
 int main(void)
 {
     check_frames();
@@ -1408,6 +1503,7 @@ int main(void)
     check_report_queue();
     check_profile_reseed();
     check_forget_triggers();
+    check_notes();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

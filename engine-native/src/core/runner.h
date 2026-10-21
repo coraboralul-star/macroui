@@ -28,6 +28,49 @@
 #define ENGINE_MODE_TOGGLE 3
 #define ENGINE_MODE_ON_RELEASE 4
 
+/* Why a runner started, stopped, or was refused, and what a trigger edge
+   did. The playback thread turns these into engine.log lines. */
+#define ENGINE_WHY_NONE 0
+#define ENGINE_WHY_EDGE 1
+#define ENGINE_WHY_UNMUTE 2
+#define ENGINE_WHY_RUN 3
+#define ENGINE_WHY_ONCE_LOCK 4
+#define ENGINE_WHY_RUNNING 5
+#define ENGINE_WHY_NO_RESTART 6
+#define ENGINE_WHY_BUSY 7
+#define ENGINE_WHY_RUNNER_CAP 8
+#define ENGINE_WHY_ARENA_FULL 9
+#define ENGINE_WHY_NO_ID 10
+#define ENGINE_WHY_MUTED 11
+#define ENGINE_WHY_ONCE_DONE 12
+#define ENGINE_WHY_FOCUS 13
+#define ENGINE_WHY_DISABLED 14
+#define ENGINE_WHY_FINISHED 15
+#define ENGINE_WHY_RELEASE 16
+#define ENGINE_WHY_NEXT_UP 17
+#define ENGINE_WHY_SCAN_RELEASE 18
+#define ENGINE_WHY_EDGE_RELEASE 19
+#define ENGINE_WHY_TOGGLE 20
+#define ENGINE_WHY_STOP 21
+#define ENGINE_WHY_STOP_ALL 22
+#define ENGINE_WHY_EXCLUSIVE 23
+#define ENGINE_WHY_RESTART 24
+#define ENGINE_WHY_ORPHAN 25
+#define ENGINE_WHY_FRAME_CAP 26
+#define ENGINE_WHY_HOLD_CAP 27
+#define ENGINE_WHY_ASK_STOP 28
+#define ENGINE_WHY_PANIC 29
+#define ENGINE_WHY_OVERFLOW 30
+#define ENGINE_WHY_COMMAND 31
+#define ENGINE_WHY_START 32
+#define ENGINE_WHY_COUNT 33
+
+#define ENGINE_NOTE_EDGE 1
+#define ENGINE_NOTE_START 2
+#define ENGINE_NOTE_STOP 3
+#define ENGINE_NOTE_BLOCK 4
+#define ENGINE_NOTE_CAP 128
+
 #define ENGINE_STOP_NONE 0
 #define ENGINE_STOP_NEXT_UP 1
 #define ENGINE_STOP_FINISH 2
@@ -239,6 +282,19 @@ struct engine_runner {
        are compacted when runners finish, so both spans move. */
     uint32_t mute_first;
     uint32_t mute_len;
+    /* ENGINE_WHY_*, set by the first stop. */
+    uint8_t end_reason;
+};
+
+/* One log event. age is in the runner's ticks. key and down are for EDGE. */
+struct engine_note {
+    uint8_t kind;
+    uint8_t why;
+    uint8_t mode;
+    uint8_t down;
+    uint16_t key;
+    int64_t age;
+    char id[ENGINE_ID_CAP];
 };
 
 /* top_count 0 means the whole pool is the top frame.
@@ -330,6 +386,14 @@ struct engine_play {
     uint16_t once_key[ENGINE_ONCE_CAP];
     uint8_t once_state[ENGINE_ONCE_CAP];
     uint8_t once_pass[ENGINE_ONCE_CAP];
+    /* Playback reads and clears these after each tick. */
+    struct engine_note notes[ENGINE_NOTE_CAP];
+    int note_count;
+    uint32_t note_dropped;
+    /* The last tick's now, for stop ages. */
+    int64_t now;
+    /* Why the last engine_play_start returned 0. */
+    int refused;
 };
 
 void engine_macro_init(struct engine_macro *macro);
@@ -462,9 +526,20 @@ void engine_once_release(struct engine_play *play, const char *const *ids, int c
 void engine_once_refresh(struct engine_play *play);
 
 /* mode_override below 0 keeps the macro mode. restart 0 leaves a live id alone.
-   Returns 1 when a runner was queued. A full list queues nothing and stops nothing. */
+   Returns 1 when a runner was queued. A full list queues nothing and stops nothing.
+   why is the START reason. A refusal stores its reason in play->refused and
+   notes BLOCK, except a live run target that is left alone. */
+int engine_play_start_why(struct engine_play *play, const struct engine_macro *macro,
+                          int mode_override, int restart, int why);
 int engine_play_start(struct engine_play *play, const struct engine_macro *macro,
                       int mode_override, int restart);
+
+/* "edge", "arena-full", and so on. Never NULL. */
+const char *engine_why_name(int why);
+
+/* Appends one note. Returns its index, or -1 when the ring is full. */
+int engine_play_note(struct engine_play *play, int kind, const char *id, int why, int mode,
+                     uint16_t key, int down, int64_t age);
 
 void engine_play_flush(struct engine_play *play);
 void engine_play_advance(struct engine_play *play, int64_t now);
@@ -494,6 +569,8 @@ int engine_play_publish(struct engine_play *play, int64_t now);
 void engine_play_remove_done(struct engine_play *play);
 void engine_play_stop(struct engine_play *play, const char *id);
 void engine_play_stop_all(struct engine_play *play);
+void engine_play_stop_why(struct engine_play *play, const char *id, int why);
+void engine_play_stop_all_why(struct engine_play *play, int why);
 void engine_play_ask_stop(struct engine_play *play, const char *id);
 
 /* Remove, flush, advance, flush, publish, then remove again.
