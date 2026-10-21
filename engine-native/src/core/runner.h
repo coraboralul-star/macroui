@@ -172,7 +172,9 @@
 #define ENGINE_IGNORE_BOTH 2
 #define ENGINE_EDGE_SPAM 0x01u
 #define ENGINE_EDGE_PAUSE_BLOCK 0x08u
-/* Dry self-test numbers. The OS keyboard delay is not read here. */
+/* Dry self-test numbers, the default when the caller sets nothing.
+   Windows sets the OS keyboard delay and repeat through
+   engine_play_set_key_timing, like AHK KeyDelayMs and KeyRepeatMs. */
 #define ENGINE_KEY_DELAY_MS 400
 #define ENGINE_KEY_REPEAT_MS 33
 struct engine_step {
@@ -246,6 +248,8 @@ struct engine_runner {
     char id[ENGINE_ID_CAP];
     double speed;
     int64_t freq;
+    int32_t key_delay_ms;
+    int32_t key_repeat_ms;
     int64_t started_at;
     int64_t wait_until;
     const struct engine_step *steps;
@@ -360,6 +364,8 @@ struct engine_play {
     struct engine_output output;
     struct engine_report last;
     int64_t freq;
+    int32_t key_delay_ms;
+    int32_t key_repeat_ms;
     uint32_t dpi;
     engine_roll_fn roll;
     void *roll_ctx;
@@ -443,6 +449,13 @@ int engine_expand_press_hold(const char *key, int32_t hold_ms, int omitted,
 
 void engine_play_init(struct engine_play *play);
 void engine_play_set_roll(struct engine_play *play, engine_roll_fn roll, void *ctx);
+/* The first edge-key repeat and the repeat after it. 0 or less keeps the
+   dry numbers. A runner copies them when it starts. */
+void engine_play_set_key_timing(struct engine_play *play, int32_t delay_ms, int32_t repeat_ms);
+/* AHK KeyDelayMs and KeyRepeatMs from the SPI_GETKEYBOARDDELAY and
+   SPI_GETKEYBOARDSPEED values. Out of range is clamped the same way. */
+int32_t engine_key_delay_from_setting(int delay);
+int32_t engine_key_repeat_from_setting(int speed);
 
 /* The catalog stays with the caller. A null list or a count below 1 clears it.
    run reads it during Advance. Indexes are resolved before the step is stored. */

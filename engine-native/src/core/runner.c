@@ -1192,6 +1192,16 @@ static void note_sent(struct engine_play *play, uint16_t id, int64_t now)
     play->last_sent_ok[id] = 1;
 }
 
+static int64_t key_delay_of(const struct engine_runner *runner)
+{
+    return runner && runner->key_delay_ms > 0 ? runner->key_delay_ms : ENGINE_KEY_DELAY_MS;
+}
+
+static int64_t key_repeat_of(const struct engine_runner *runner)
+{
+    return runner && runner->key_repeat_ms > 0 ? runner->key_repeat_ms : ENGINE_KEY_REPEAT_MS;
+}
+
 static int64_t ticks_of(const struct engine_runner *runner, int64_t ms)
 {
     int64_t freq = runner && runner->freq > 0 ? runner->freq : 1000;
@@ -1291,11 +1301,11 @@ static void repeat_hold(struct engine_runner *runner, struct engine_frame *frame
     if (key == 0 || engine_is_mouse_button(key) || !hold_has(runner, key))
         return;
     if (frame->edge_repeat_at == 0)
-        frame->edge_repeat_at = engine_arm_deadline(now, ticks_of(runner, ENGINE_KEY_DELAY_MS));
+        frame->edge_repeat_at = engine_arm_deadline(now, ticks_of(runner, key_delay_of(runner)));
     if (now < frame->edge_repeat_at)
         return;
     echo_add(runner, key);
-    frame->edge_repeat_at = engine_arm_deadline(now, ticks_of(runner, ENGINE_KEY_REPEAT_MS));
+    frame->edge_repeat_at = engine_arm_deadline(now, ticks_of(runner, key_repeat_of(runner)));
 }
 
 static void release_edge_mute(struct engine_play *play, struct engine_runner *runner,
@@ -1396,7 +1406,7 @@ static int push_edge(struct engine_runner *runner, struct engine_play *play,
     frame->edge_hold_for = engine_scale_wait_ms((double)step->d, runner->speed);
     frame->edge_rest_for = engine_scale_wait_ms((double)step->e, runner->speed);
     copy_watch(runner, frame, step);
-    frame->edge_repeat_at = engine_arm_deadline(now, ticks_of(runner, ENGINE_KEY_DELAY_MS));
+    frame->edge_repeat_at = engine_arm_deadline(now, ticks_of(runner, key_delay_of(runner)));
     if (spam) {
         frame->edge_spam_on = 1;
         frame->edge_spam_at = engine_arm_deadline(now, ticks_of(runner, frame->edge_hold_for));
@@ -1464,7 +1474,7 @@ static void tick_tap(struct engine_runner *runner, struct engine_play *play, int
             return;
         }
         frame->edge_phase = ENGINE_EDGE_PHASE_DOWN;
-        frame->edge_repeat_at = engine_arm_deadline(now, ticks_of(runner, ENGINE_KEY_DELAY_MS));
+        frame->edge_repeat_at = engine_arm_deadline(now, ticks_of(runner, key_delay_of(runner)));
     }
     if (watch_edge(runner, play, frame, now, ENGINE_EDGE_PHASE_ARM)) {
         arm_ms(runner, now, (double)frame->edge_arm_ms, runner->speed);
@@ -2264,6 +2274,8 @@ static int queue_runner(struct engine_play *play, const struct engine_macro *mac
     copy_id(runner->id, macro->id);
     runner->speed = raised_speed(macro->speed);
     runner->freq = play->freq > 0 ? play->freq : 1000;
+    runner->key_delay_ms = play->key_delay_ms;
+    runner->key_repeat_ms = play->key_repeat_ms;
     runner->started_at = -1;
     runner->steps = play->arena + offset;
     runner->step_count = count;
@@ -2291,6 +2303,35 @@ void engine_play_init(struct engine_play *play)
     engine_report_clear(&play->last);
     play->freq = 1000;
     play->dpi = 96;
+}
+
+void engine_play_set_key_timing(struct engine_play *play, int32_t delay_ms, int32_t repeat_ms)
+{
+    if (!play)
+        return;
+    play->key_delay_ms = delay_ms > 0 ? delay_ms : ENGINE_KEY_DELAY_MS;
+    play->key_repeat_ms = repeat_ms > 0 ? repeat_ms : ENGINE_KEY_REPEAT_MS;
+}
+
+int32_t engine_key_delay_from_setting(int delay)
+{
+    if (delay < 0 || delay > 3)
+        delay = 1;
+    return 250 * (delay + 1);
+}
+
+int32_t engine_key_repeat_from_setting(int speed)
+{
+    double ms;
+    int32_t out;
+
+    if (speed < 0)
+        speed = 0;
+    if (speed > 31)
+        speed = 31;
+    ms = 1000.0 / (2.5 + speed * (27.5 / 31.0));
+    out = (int32_t)floor(ms + 0.5);
+    return out < 16 ? 16 : out;
 }
 
 void engine_play_set_roll(struct engine_play *play, engine_roll_fn roll, void *ctx)
