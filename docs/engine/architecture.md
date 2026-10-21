@@ -181,7 +181,7 @@ These are not divided by `speed`: `ifShort` `underMs`, `swapLoop` `afterMs`, `mo
 
 `onceHeld` `gapMs` is divided by speed when the frame is built. A positive gap then uses the wait minimum of 1. `0` or less does not wait. The 1 ms poll, the empty-body yield, and the `releasedNow` yield are not divided by speed.
 
-`edgeHold` `armMs` and `gapMs` are divided by speed at the wait. `holdMs` and `restMs` are divided when the frame is built, with the wait minimum of 1. The 5 ms poll, the key delay, and the key repeat are not divided by speed. The runner uses the dry-mode delay of 400 ms and repeat of 33 ms. It does not call `SystemParametersInfo`.
+`edgeHold` `armMs` and `gapMs` are divided by speed at the wait. `holdMs` and `restMs` are divided when the frame is built, with the wait minimum of 1. The 5 ms poll, the key delay, and the key repeat are not divided by speed. The key delay and repeat are the Windows keyboard settings, read once at startup in `src/win/win_entry.c` and passed through `engine_play_set_key_timing`, like AHK `KeyDelayMs` and `KeyRepeatMs`. Without that call the runner uses the dry-mode 400 ms and 33 ms. The core does not call `SystemParametersInfo`.
 
 `scanWait` `ms` is divided by speed at the wait, through the same arm path as `wait`. `0` still waits 1 ms.
 

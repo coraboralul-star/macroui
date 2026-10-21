@@ -2801,6 +2801,59 @@ static void fill_edge(struct engine_step *step, uint16_t key, int32_t arm, int32
     step->count = count;
 }
 
+static void check_key_timing(void)
+{
+    struct engine_fingers fingers;
+    struct engine_step steps[2];
+    struct engine_macro tap;
+    uint16_t side = kid("XButton1");
+    uint16_t z = kid("z");
+    uint16_t t = kid("t");
+
+    expect(engine_key_delay_from_setting(0) == 250 && engine_key_delay_from_setting(1) == 500 &&
+               engine_key_delay_from_setting(3) == 1000,
+           "key delay is 250 per step like AHK");
+    expect(engine_key_delay_from_setting(-1) == 500 && engine_key_delay_from_setting(4) == 500,
+           "an out of range key delay is 1");
+    expect(engine_key_repeat_from_setting(31) == 33 && engine_key_repeat_from_setting(0) == 400,
+           "key repeat follows the AHK speed formula");
+    expect(engine_key_repeat_from_setting(40) == 33 && engine_key_repeat_from_setting(-3) == 400,
+           "key speed is clamped to 0 through 31");
+
+    memset(steps, 0, sizeof steps);
+    fill_edge(&steps[0], z, 5, 80, 18, 18, 0, ENGINE_IGNORE_OFF, 0, 1, 1);
+    steps[1].key = t;
+    engine_macro_init(&tap);
+    set_id(&tap, "tap-z");
+    tap.steps = steps;
+    tap.step_count = 2;
+    tap.top_count = 1;
+    tap.trigger = side;
+    tap.mode = ENGINE_MODE_WHILE_HELD;
+    tap.speed = 1.0;
+    fresh();
+    engine_play_set_key_timing(&play, 500, 33);
+    engine_fingers_clear(&fingers);
+    press(&fingers, &play, side, 1);
+    press(&fingers, &play, t, 0);
+    engine_play_start(&play, &tap, -1, 1);
+    engine_play_tick(&play, 0);
+    engine_play_tick(&play, 5);
+    engine_play_tick(&play, 400);
+    expect(report_has(&play, z) == 0, "the windows delay does not repeat at the dry 400");
+    engine_play_tick(&play, 500);
+    expect(report_has(&play, z), "the windows delay repeats z at 500");
+    engine_play_tick(&play, 520);
+    expect(report_has(&play, z) == 0, "no repeat before the windows rate");
+    engine_play_tick(&play, 533);
+    expect(report_has(&play, z), "the windows rate repeats z 33 later");
+
+    fresh();
+    engine_play_set_key_timing(&play, 0, -1);
+    expect(play.key_delay_ms == ENGINE_KEY_DELAY_MS && play.key_repeat_ms == ENGINE_KEY_REPEAT_MS,
+           "0 or less keeps the dry key timing");
+}
+
 static void check_edge_hold(void)
 {
     struct engine_play *state = fresh();
@@ -3735,6 +3788,7 @@ int main(void)
     check_if_short();
     check_once_held();
     check_edge_hold();
+    check_key_timing();
     check_scan_wait();
     check_press_hold();
     if (fails) {

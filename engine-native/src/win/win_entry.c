@@ -1568,6 +1568,19 @@ static DWORD WINAPI hook_thread(LPVOID param)
     return 0;
 }
 
+/* Read once, like AHK caches KeyDelayMs and KeyRepeatMs. A failed call
+   keeps AHK's starting values, delay 1 and speed 31. */
+static void read_key_timing(void)
+{
+    UINT delay = 1;
+    DWORD speed = 31;
+
+    SystemParametersInfoW(SPI_GETKEYBOARDDELAY, 0, &delay, 0);
+    SystemParametersInfoW(SPI_GETKEYBOARDSPEED, 0, &speed, 0);
+    engine_play_set_key_timing(g.play, engine_key_delay_from_setting((int)delay),
+                               engine_key_repeat_from_setting((int)speed));
+}
+
 static DWORD WINAPI playback_thread(LPVOID param)
 {
     struct engine_slice_input slice;
@@ -1746,6 +1759,7 @@ static int run_resident(const struct engine_args *args)
         return ENGINE_EXIT_FAIL;
     }
     engine_play_init(g.play);
+    read_key_timing();
 
     mutex = CreateMutexW(NULL, TRUE, L"Local\\MacroUI.Engine");
     if (!mutex) {
