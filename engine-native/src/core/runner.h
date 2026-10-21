@@ -400,6 +400,9 @@ int engine_fingers_down(const struct engine_fingers *fingers, uint16_t id);
 /* 1 when the id was reported, including a report that it is up. */
 int engine_fingers_seen(const struct engine_fingers *fingers, uint16_t id);
 
+/* Back to never reported, like AHK physDown.Delete. */
+void engine_fingers_forget(struct engine_fingers *fingers, uint16_t id);
+
 /* at[id] is the last event for that id, in the same unit as now. count is the
    length of at. Id 0 and an id past count are ignored. */
 void engine_finger_at_touch(int64_t *at, int count, uint16_t id, int64_t now);

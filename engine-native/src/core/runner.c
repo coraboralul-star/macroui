@@ -2354,6 +2354,17 @@ int engine_fingers_seen(const struct engine_fingers *fingers, uint16_t id)
     return (fingers->seen[id / 8u] >> (id % 8u)) & 1;
 }
 
+void engine_fingers_forget(struct engine_fingers *fingers, uint16_t id)
+{
+    uint8_t bit;
+
+    if (!fingers || id == 0 || id > ENGINE_KEY_ID_MAX)
+        return;
+    bit = (uint8_t)(1u << (id % 8u));
+    fingers->seen[id / 8u] = (uint8_t)(fingers->seen[id / 8u] & (uint8_t)~bit);
+    fingers->down[id / 8u] = (uint8_t)(fingers->down[id / 8u] & (uint8_t)~bit);
+}
+
 int engine_fingers_down(const struct engine_fingers *fingers, uint16_t id)
 {
     if (!engine_fingers_seen(fingers, id))

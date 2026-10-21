@@ -1310,6 +1310,85 @@ static void check_profile_reseed(void)
     free(play);
 }
 
+/* AHK ClearHookBindings and SyncHooks drop physDown for trigger keys. A key
+   whose up never arrived is cleared by an alt-tab out and back. */
+static void check_forget_triggers(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_step loop[5];
+    struct engine_macro macro;
+    struct engine_profile_extra extra;
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_claim_mem claims;
+    struct engine_fingers fingers;
+    uint16_t gone[8];
+    int64_t now = 1;
+    int starts = 0;
+    int n;
+
+    if (!play) {
+        expect(0, "forget play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(loop, (uint16_t)'Q');
+    loop[0].type = ENGINE_STEP_HOLD_LOOP;
+    loop[0].a = 0;
+    engine_macro_init(&macro);
+    snprintf(macro.id, sizeof macro.id, "reload");
+    macro.mode = ENGINE_MODE_WHILE_HELD;
+    macro.advanced = 1;
+    macro.trigger = (uint16_t)'A';
+    macro.steps = loop;
+    macro.step_count = 5;
+    macro.top_count = 1;
+    memset(&extra, 0, sizeof extra);
+    extra.enabled = 1;
+    memset(&live, 0, sizeof live);
+    snprintf(live.focus_exe, sizeof live.focus_exe, "Overwatch.exe");
+    live.macros = &macro;
+    live.extras = &extra;
+    live.macro_count = 1;
+    engine_play_set_macros(play, &macro, 1);
+    engine_trigger_init(&mem);
+    engine_claims_init(&claims);
+    engine_fingers_clear(&fingers);
+
+    n = engine_claims_sync(&claims, &live, "Overwatch.exe", "", 1, 0, &fingers, gone, 8);
+    expect(n == 0, "the first sync only records");
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 1, &starts);
+    expect(starts == 1, "a starts reload");
+    n = engine_claims_sync(&claims, &live, "Overwatch.exe", "", 1, 0, &fingers, gone, 8);
+    expect(n == 0 && engine_fingers_down(&fingers, (uint16_t)'A'), "same focus keeps the finger");
+
+    /* The up for a is lost. Alt-tab out and back. */
+    n = engine_claims_sync(&claims, &live, "explorer.exe", "", 1, 0, &fingers, gone, 8);
+    expect(n == 1 && gone[0] == (uint16_t)'A', "leaving the game forgets the held trigger");
+    expect(!engine_fingers_seen(&fingers, (uint16_t)'A'), "the trigger is unknown, like physDown.Delete");
+    play_ms(play, &live, &mem, &fingers, &now, 100, NULL);
+    expect(!engine_play_has_runner(play, "reload"), "reload ends after its pass, like AHK");
+    n = engine_claims_sync(&claims, &live, "Overwatch.exe", "", 1, 0, &fingers, gone, 8);
+    expect(n == 0, "coming back has nothing held");
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+    starts = 0;
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 1, &starts);
+    expect(starts == 1, "the next press of a starts reload again");
+
+    n = engine_claims_sync(&claims, &live, "Overwatch.exe", "", 1, 1, &fingers, gone, 8);
+    expect(n == 1, "an output change forgets the held trigger");
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    engine_fingers_set(&fingers, (uint16_t)'W', 1);
+    engine_claims_sync(&claims, &live, "Overwatch.exe", "", 1, 0, &fingers, gone, 8);
+    n = engine_claims_sync(&claims, &live, "Overwatch.exe", "", 0, 0, &fingers, gone, 8);
+    expect(n == 1 && gone[0] == (uint16_t)'A', "stop drops the trigger and nothing else");
+    expect(engine_fingers_down(&fingers, (uint16_t)'W'), "a key that is not a trigger is kept");
+    free(play);
+}
+
 int main(void)
 {
     check_frames();
@@ -1328,6 +1407,7 @@ int main(void)
     check_mute_switch();
     check_report_queue();
     check_profile_reseed();
+    check_forget_triggers();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

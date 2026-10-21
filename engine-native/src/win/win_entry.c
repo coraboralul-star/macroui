@@ -97,6 +97,8 @@ struct engine_resident {
     struct engine_play *play;
     struct engine_cmd_ring cmds;
     struct engine_trigger_mem triggers;
+    struct engine_claim_mem claims;
+    int output_changed;
     struct engine_fingers edge_fingers;
     int edge_ready;
     struct engine_fingers fingers;
@@ -794,6 +796,8 @@ static void apply_commands(int64_t now)
 
             if (engine_output_set_mode(&g.play->output, item.mode, &release, &rebind, &sent))
                 send_play_report(&release, sent, now);
+            if (rebind)
+                g.output_changed = 1;
         }
     }
 }
@@ -1309,6 +1313,15 @@ static void playback_tick(int64_t now)
     drain_fingers(now);
     log_unmatched(&live);
     reconcile_fingers();
+    {
+        uint16_t gone[16];
+        int n = engine_claims_sync(&g.claims, &live, focus.name, focus.owner, g.armed,
+                                   g.output_changed, &g.fingers, gone, 16);
+
+        g.output_changed = 0;
+        if (n > 0)
+            log_released(gone, n, "forget");
+    }
     engine_play_set_fingers(g.play, &g.fingers);
     if (g.armed)
         engine_poll_triggers(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner);
@@ -1552,6 +1565,7 @@ static int run_resident(const struct engine_args *args)
     engine_output_init(&g.output);
     engine_cmd_ring_init(&g.cmds);
     engine_trigger_init(&g.triggers);
+    engine_claims_init(&g.claims);
     engine_fingers_clear(&g.fingers);
     engine_report_queue_init(&g.reports);
     g.play = (struct engine_play *)calloc(1, sizeof *g.play);

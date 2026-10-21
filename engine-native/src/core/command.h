@@ -67,6 +67,13 @@ struct engine_trigger_mem {
     uint8_t prev[ENGINE_TRIGGER_MEM];
 };
 
+/* The triggers AHK would have hooked last tick, and its swallow focus. */
+struct engine_claim_mem {
+    int ready;
+    int swallow;
+    uint8_t claimed[ENGINE_SWALLOW_IDS];
+};
+
 struct engine_state_window {
     char exe[ENGINE_PROFILE_FOCUS_CAP];
     char title[ENGINE_STATE_TITLE_CAP];
@@ -149,6 +156,18 @@ int engine_live_needs_mouse(const struct engine_live_config *live);
 
 /* 1 when an enabled macro with steps uses this id as its trigger. */
 int engine_live_claims(const struct engine_live_config *live, uint16_t id);
+
+void engine_claims_init(struct engine_claim_mem *mem);
+
+/* AHK forgets a trigger's finger when its hotkey goes away: SyncSwallow
+   flipping (focus in or out of the live profile), an output change, a key
+   that is no longer a trigger, and stop. Those keys go back to never
+   reported, so a lost up cannot keep a trigger held. Claims are empty while
+   disarmed. force is the output change. The first call only records.
+   Writes the forgotten ids that were down. Returns how many. */
+int engine_claims_sync(struct engine_claim_mem *mem, const struct engine_live_config *live,
+                       const char *front, const char *owner, int armed, int force,
+                       struct engine_fingers *fingers, uint16_t *out, int cap);
 
 /* 0 when the frame fits. -1 when cap is too small. Held ids without a name
    are omitted. Window extras past the cap are dropped from the front. */

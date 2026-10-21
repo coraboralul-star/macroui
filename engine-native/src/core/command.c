@@ -357,6 +357,60 @@ int engine_live_claims(const struct engine_live_config *live, uint16_t id)
     return 0;
 }
 
+void engine_claims_init(struct engine_claim_mem *mem)
+{
+    if (!mem)
+        return;
+    memset(mem, 0, sizeof *mem);
+}
+
+int engine_claims_sync(struct engine_claim_mem *mem, const struct engine_live_config *live,
+                       const char *front, const char *owner, int armed, int force,
+                       struct engine_fingers *fingers, uint16_t *out, int cap)
+{
+    uint8_t now[ENGINE_SWALLOW_IDS];
+    int swallow;
+    int flip;
+    int n = 0;
+    int i;
+
+    if (!mem)
+        return 0;
+    memset(now, 0, sizeof now);
+    if (armed && live && live->macros) {
+        for (i = 0; i < live->macro_count; i++) {
+            uint16_t id = live->macros[i].trigger;
+
+            if (!macro_enabled(live, i) || live->macros[i].step_count == 0)
+                continue;
+            if (engine_can_trigger(id) && id < ENGINE_SWALLOW_IDS)
+                now[id] = 1;
+        }
+    }
+    swallow = live ? engine_focus_swallow(live->focus_exe, front, owner) : 0;
+    flip = mem->ready && swallow != mem->swallow;
+    if (mem->ready && fingers) {
+        for (i = 1; i < (int)ENGINE_SWALLOW_IDS; i++) {
+            int drop = mem->claimed[i] && !now[i];
+
+            if ((flip || force) && (mem->claimed[i] || now[i]))
+                drop = 1;
+            if (!drop || !engine_fingers_seen(fingers, (uint16_t)i))
+                continue;
+            if (engine_fingers_down(fingers, (uint16_t)i)) {
+                if (out && n < cap)
+                    out[n] = (uint16_t)i;
+                n++;
+            }
+            engine_fingers_forget(fingers, (uint16_t)i);
+        }
+    }
+    memcpy(mem->claimed, now, sizeof now);
+    mem->swallow = swallow;
+    mem->ready = 1;
+    return n;
+}
+
 void engine_trigger_seed(struct engine_trigger_mem *mem, const struct engine_live_config *live,
                          const struct engine_fingers *fingers)
 {
