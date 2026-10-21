@@ -26,13 +26,6 @@ static int mouse_motion(uint32_t msg)
         || msg == ENGINE_MSG_MOUSEHWHEEL;
 }
 
-static int silent_for(int64_t stamp, int64_t now, int64_t silence)
-{
-    if (silence <= 0 || now < stamp)
-        return 0;
-    return (now - stamp) >= silence;
-}
-
 static void push_op(struct engine_hook_watch_out *out, uint8_t op)
 {
     if (out->count >= 4)
@@ -64,6 +57,15 @@ static int stem_copy(const char *s, char *out, int cap)
     end = begin + strlen(begin);
     while (end > begin && (end[-1] == ' ' || end[-1] == '\t'))
         end--;
+    /* ahk_exe and WinGetProcessName compare the file name, not the directory. */
+    {
+        const char *p;
+
+        for (p = begin; p < end; p++) {
+            if (*p == '\\' || *p == '/')
+                begin = p + 1;
+        }
+    }
     n = (int)(end - begin);
     if (n >= cap)
         return -1;
@@ -87,6 +89,35 @@ static int stem_prefix(const char *host, const char *stem)
     if (strncmp(host, stem, n) != 0)
         return 0;
     return host[n] == '-';
+}
+
+/* Windows opens Start on a Win up when it saw the Win down and nothing
+   between. Keys this hook swallowed are nothing to Windows. */
+static void note_win(struct engine_hook_state *st, uint16_t id, int down,
+                     struct engine_hook_decision *out)
+{
+    int w = id == 0x5B ? 0 : id == 0x5C ? 1 : -1;
+
+    if (w < 0) {
+        if (out->swallow && (st->win_passed[0] || st->win_passed[1]))
+            st->blocked_in_win = 1;
+        return;
+    }
+    if (down) {
+        if (!out->swallow && !st->win_passed[w]) {
+            if (!st->win_passed[w ^ 1])
+                st->blocked_in_win = 0;
+            st->win_passed[w] = 1;
+        }
+        return;
+    }
+    if (!out->swallow && st->win_passed[w] && st->blocked_in_win) {
+        out->swallow = 1;
+        out->mask_win = id;
+    }
+    st->win_passed[w] = 0;
+    if (!st->win_passed[w ^ 1])
+        st->blocked_in_win = 0;
 }
 
 static uint8_t swallow_bits(struct engine_hook_state *st, uint16_t id)
@@ -195,6 +226,8 @@ uint16_t engine_resolve_mouse(uint32_t msg, uint32_t mouse_data, int *down)
         pressed = msg == ENGINE_MSG_MBUTTONDOWN;
     } else if (msg == ENGINE_MSG_XBUTTONDOWN || msg == ENGINE_MSG_XBUTTONUP) {
         button = (mouse_data >> 16) & 0xffffu;
+        if (button == 0)
+            button = mouse_data & 0xffffu;
         pressed = msg == ENGINE_MSG_XBUTTONDOWN;
         if (button == 1)
             id = ENGINE_KEY_XBUTTON1;
@@ -246,6 +279,18 @@ const char *engine_key_name(uint16_t id)
     case ENGINE_KEY_MBUTTON: return "MButton";
     case ENGINE_KEY_XBUTTON1: return "XButton1";
     case ENGINE_KEY_XBUTTON2: return "XButton2";
+    case 0x14: return "CapsLock";
+    case 0xBA: return ";";
+    case 0xBB: return "=";
+    case 0xBC: return ",";
+    case 0xBD: return "-";
+    case 0xBE: return ".";
+    case 0xBF: return "/";
+    case 0xC0: return "`";
+    case 0xDB: return "[";
+    case 0xDC: return "\\";
+    case 0xDD: return "]";
+    case 0xDE: return "'";
     default: return NULL;
     }
 }
@@ -253,6 +298,13 @@ const char *engine_key_name(uint16_t id)
 int engine_is_mouse_button(uint16_t id)
 {
     return id >= ENGINE_KEY_LBUTTON && id <= ENGINE_KEY_XBUTTON2;
+}
+
+int engine_repeat_is_missed_up(uint16_t id, int down, int already)
+{
+    if (!down || !already)
+        return 0;
+    return id == ENGINE_KEY_XBUTTON1 || id == ENGINE_KEY_XBUTTON2;
 }
 
 int engine_can_trigger(uint16_t id)
@@ -485,6 +537,7 @@ void engine_hook_classify(struct engine_hook_state *st,
         out->swallow = 0;
         out->enqueued = 0;
         out->wake = 0;
+        out->mask_win = 0;
     }
     if (!st || !sample || !out)
         return;
@@ -527,37 +580,22 @@ void engine_hook_classify(struct engine_hook_state *st,
     if (id == ENGINE_KEY_LBUTTON || id == ENGINE_KEY_RBUTTON)
         return;
     bits = swallow_bits(st, id);
-    if ((bits & ENGINE_SWALLOW_BIT) && !(bits & ENGINE_PASS_BIT))
-        out->swallow = 1;
-}
-
-int engine_needs_key_raise(int64_t key_stamp, int64_t mouse_stamp, int need_mouse,
-                           int armed, int64_t now, int64_t silence)
-{
-    if (!armed)
-        return 0;
-    if (!silent_for(key_stamp, now, silence))
-        return 0;
-    /* A mouse stamp inside the window, including one ahead of now, keeps the key hook. */
-    if (need_mouse && mouse_stamp != 0 && !silent_for(mouse_stamp, now, silence))
-        return 0;
-    return 1;
-}
-
-int engine_needs_mouse_raise(int64_t mouse_stamp, int need_mouse, int armed,
-                             int64_t now, int64_t silence)
-{
-    if (!armed || !need_mouse)
-        return 0;
-    return silent_for(mouse_stamp, now, silence);
+    if (down) {
+        out->swallow = (bits & ENGINE_SWALLOW_BIT) && !(bits & ENGINE_PASS_BIT);
+        st->down_blocked[id] = (uint8_t)out->swallow;
+    } else {
+        /* The map can change between a down and its up. Swallowing an up
+           whose down passed leaves the key down in Windows. Passing an up
+           whose down was swallowed hands Windows a lone up. */
+        out->swallow = st->down_blocked[id] ? 1 : 0;
+        st->down_blocked[id] = 0;
+    }
+    note_win(st, id, down, out);
 }
 
 void engine_hook_watch(const struct engine_hook_watch_in *in,
                        struct engine_hook_watch_out *out)
 {
-    int64_t key_stamp;
-    int64_t mouse_stamp;
-
     if (!out)
         return;
     memset(out, 0, sizeof *out);
@@ -575,27 +613,36 @@ void engine_hook_watch(const struct engine_hook_watch_in *in,
         push_op(out, ENGINE_HOOK_RAISE_MOUSE);
         return;
     }
+    /* The lock screen can remove a hook whose handle still looks valid.
+       Coming back is the evidence. A quiet stamp is not. */
+    if (in->desktop) {
+        push_op(out, ENGINE_HOOK_RAISE_KEY);
+        if (in->need_mouse || in->mouse_installed)
+            push_op(out, ENGINE_HOOK_RAISE_MOUSE);
+        return;
+    }
     if (!in->armed && !in->running && !in->pending)
         return;
 
-    key_stamp = in->key_stamp;
-    mouse_stamp = in->mouse_stamp;
-    if (in->need_mouse && !in->mouse_installed) {
+    /* A new live config gets a fresh mouse hook when it has a middle or side
+       trigger, even if the previous config left one installed. */
+    if (in->switched && in->need_mouse) {
         push_op(out, ENGINE_HOOK_RAISE_MOUSE);
-        mouse_stamp = in->now;
+        return;
     }
-    if (key_stamp == 0)
-        key_stamp = in->now;
-    if (mouse_stamp == 0)
-        mouse_stamp = in->now;
-
-    /* CheckPhysicalHook passes armed as true once the idle return is past. */
-    if (engine_needs_key_raise(key_stamp, mouse_stamp, in->need_mouse, 1,
-                               in->now, in->silence))
-        push_op(out, ENGINE_HOOK_RAISE_KEY);
-    if (engine_needs_mouse_raise(mouse_stamp, in->need_mouse, 1,
-                                 in->now, in->silence))
+    if (in->need_mouse && !in->mouse_installed)
         push_op(out, ENGINE_HOOK_RAISE_MOUSE);
+    else if (!in->need_mouse && in->mouse_installed)
+        push_op(out, ENGINE_HOOK_RAISE_MOUSE);
+
+    /* AHK NeedsKeyRaise. Mouse clicks keep the thread alive, so a recent
+       click while the mouse hook is needed counts as a live keyboard hook. */
+    if (in->silence > 0 && in->key_stamp > 0 && in->now - in->key_stamp >= in->silence &&
+        (in->silence_at == 0 || in->now - in->silence_at >= in->silence) &&
+        !(in->need_mouse && in->mouse_stamp > 0 && in->now - in->mouse_stamp < in->silence)) {
+        push_op(out, ENGINE_HOOK_RAISE_KEY);
+        out->silent = 1;
+    }
 }
 
 void engine_hook_post_ops(struct engine_hook_state *st,

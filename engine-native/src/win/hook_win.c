@@ -89,6 +89,7 @@ static void clear_decision(struct engine_hook_decision *out)
     out->swallow = 0;
     out->enqueued = 0;
     out->wake = 0;
+    out->mask_win = 0;
 }
 
 static LRESULT CALLBACK key_proc(int nCode, WPARAM wParam, LPARAM lParam);
@@ -163,6 +164,29 @@ int engine_win_on_mouse(struct engine_hook_state *st, int nCode, uintptr_t msg,
     return out->swallow ? 1 : 0;
 }
 
+/* AHK #MenuMaskKey. The real Win up is swallowed. vkE8 down and up, then
+   the Win up, go out tagged so this hook passes them and they are not a
+   finger. Windows then sees a key between the Win down and up and does
+   not open Start. */
+static void send_menu_mask(uint16_t win)
+{
+    INPUT in[3];
+    int i;
+
+    memset(in, 0, sizeof in);
+    for (i = 0; i < 3; i++) {
+        in[i].type = INPUT_KEYBOARD;
+        in[i].ki.dwExtraInfo = (ULONG_PTR)ENGINE_EXTRA_ECHO;
+    }
+    in[0].ki.wVk = (WORD)ENGINE_MENU_MASK_VK;
+    in[1].ki.wVk = (WORD)ENGINE_MENU_MASK_VK;
+    in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    in[2].ki.wVk = (WORD)win;
+    in[2].ki.wScan = (WORD)MapVirtualKeyW(win, MAPVK_VK_TO_VSC);
+    in[2].ki.dwFlags = KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY;
+    SendInput(3, in, (int)sizeof in[0]);
+}
+
 static LRESULT CALLBACK key_proc(int nCode, WPARAM wParam, LPARAM lParam)
 {
     struct engine_hook_decision decision;
@@ -172,6 +196,8 @@ static LRESULT CALLBACK key_proc(int nCode, WPARAM wParam, LPARAM lParam)
                           (const KBDLLHOOKSTRUCT *)lParam, &decision);
         if (decision.wake && g_hook && g_hook->wake)
             SetEvent(g_hook->wake);
+        if (decision.mask_win)
+            send_menu_mask(decision.mask_win);
         if (decision.swallow)
             return 1;
     }

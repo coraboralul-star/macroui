@@ -102,7 +102,11 @@ static const char *alias_to(const char *key)
         {"ralt", "RAlt"},
         {"lwin", "LWin"},
         {"rwin", "RWin"},
+        {"xbutton1", "XButton1"},
+        {"xbutton2", "XButton2"},
         {"|", "\\"},
+        {"capslock", "CapsLock"},
+        {"backslash", "\\"},
     };
     int i;
 
@@ -204,6 +208,23 @@ static int map_name(const char *name, uint16_t *id)
     if (strcmp(name, "MButton") == 0) { *id = ENGINE_KEY_MBUTTON; return 1; }
     if (strcmp(name, "XButton1") == 0) { *id = ENGINE_KEY_XBUTTON1; return 1; }
     if (strcmp(name, "XButton2") == 0) { *id = ENGINE_KEY_XBUTTON2; return 1; }
+    if (strcmp(name, "CapsLock") == 0) { *id = 0x14; return 1; }
+    if (!name[1]) {
+        switch (name[0]) {
+        case '-': *id = 0xBD; return 1;
+        case '=': *id = 0xBB; return 1;
+        case '[': *id = 0xDB; return 1;
+        case ']': *id = 0xDD; return 1;
+        case '\\': *id = 0xDC; return 1;
+        case ';': *id = 0xBA; return 1;
+        case '\'': *id = 0xDE; return 1;
+        case ',': *id = 0xBC; return 1;
+        case '.': *id = 0xBE; return 1;
+        case '/': *id = 0xBF; return 1;
+        case '`': *id = 0xC0; return 1;
+        default: break;
+        }
+    }
     return 0;
 }
 
@@ -493,22 +514,21 @@ static void release_edge_mute(struct engine_play *play, struct engine_runner *ru
 static int push_edge(struct engine_runner *runner, struct engine_play *play,
                      const struct engine_step *step, int64_t now);
 static void note_sent(struct engine_play *play, uint16_t id, int64_t now);
-static int catalog_id(const struct engine_play *play, const struct engine_runner *owner,
-                      int32_t index, char *dst);
 static int mute_one(struct engine_play *play, const char *id);
-static void unmute_one(struct engine_play *play, const char *id);
+static void unmute_slot(struct engine_play *play, int slot);
 static int push_hold(struct engine_runner *runner, struct engine_play *play,
                      const struct engine_step *step);
 static void note_hold_release(struct engine_runner *runner, const struct engine_play *play);
 static int finish_hold(struct engine_runner *runner, struct engine_play *play, int64_t now);
 
-static void mark_done(struct engine_runner *runner, struct engine_play *play)
+static void mark_done(struct engine_runner *runner, struct engine_play *play, int why)
 {
     int i;
 
     if (!runner || runner->done)
         return;
     runner->done = 1;
+    runner->end_reason = (uint8_t)why;
     runner->paused = 0;
     for (i = 0; i < runner->stack_count; i++) {
         release_frame_mute(play, runner, &runner->stack[i]);
@@ -766,7 +786,7 @@ static int push_frame(struct engine_runner *runner, struct engine_play *play,
     struct engine_frame *frame;
 
     if (runner->stack_count >= ENGINE_FRAME_CAP) {
-        mark_done(runner, play);
+        mark_done(runner, play, ENGINE_WHY_FRAME_CAP);
         return 0;
     }
     if (first > runner->step_count)
@@ -794,7 +814,7 @@ static int finish_frame(struct engine_runner *runner, struct engine_play *play)
        A repeat step may. */
     if (frame->repeats_left == 0) {
         if (runner->stopping) {
-            mark_done(runner, play);
+            mark_done(runner, play, ENGINE_WHY_ASK_STOP);
             return 0;
         }
         frame->index = 0;
@@ -841,7 +861,7 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
         /* FingerDown is the finger snapshot. An empty trigger does not stop.
            A missing snapshot and a key that was never reported count as up. */
         if (runner->trigger != 0 && !finger_down(play, runner->trigger)) {
-            mark_done(runner, play);
+            mark_done(runner, play, ENGINE_WHY_SCAN_RELEASE);
             return ENGINE_ADV_WAIT;
         }
         runner->scan_wait = 1;
@@ -855,7 +875,7 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
             if (runner->stack_count > 0 && runner->stack[runner->stack_count - 1].drain)
                 return ENGINE_ADV_CONT;
             if (!hold_add(runner, id)) {
-                mark_done(runner, play);
+                mark_done(runner, play, ENGINE_WHY_HOLD_CAP);
                 return ENGINE_ADV_WAIT;
             }
             pulse_del(runner, id);
@@ -879,13 +899,13 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
                     runner->stack[runner->stack_count - 1].index =
                         runner->stack[runner->stack_count - 1].count;
                 if (!pulse_set(runner, id, engine_arm_deadline(now, one))) {
-                    mark_done(runner, play);
+                    mark_done(runner, play, ENGINE_WHY_HOLD_CAP);
                     return ENGINE_ADV_WAIT;
                 }
                 return arm_ms(runner, now, 1.0, 1.0);
             }
             if (runner->stopping && stop_mode(runner) == ENGINE_STOP_NEXT_UP) {
-                mark_done(runner, play);
+                mark_done(runner, play, ENGINE_WHY_NEXT_UP);
                 return ENGINE_ADV_WAIT;
             }
             if (runner->stack_count > 0 && runner->stack[runner->stack_count - 1].drain)
@@ -897,7 +917,7 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
             int64_t scaled = engine_scale_wait_ms((double)step->a, runner->speed);
             int64_t delta = engine_ms_to_ticks(scaled, runner->freq);
             if (!pulse_set(runner, id, engine_arm_deadline(now, delta))) {
-                mark_done(runner, play);
+                mark_done(runner, play, ENGINE_WHY_HOLD_CAP);
                 return ENGINE_ADV_WAIT;
             }
             note_sent(play, id, now);
@@ -955,7 +975,7 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
             return ENGINE_ADV_CONT;
         target = &play->macros[step->a];
         /* once, and do not restart a live id. No cycle guard. */
-        engine_play_start(play, target, ENGINE_MODE_ONCE, 0);
+        engine_play_start_why(play, target, ENGINE_MODE_ONCE, 0, ENGINE_WHY_RUN);
         return ENGINE_ADV_CONT;
     }
     if (step->type == ENGINE_STEP_HOLD_LOOP) {
@@ -1288,13 +1308,10 @@ static void release_edge_mute(struct engine_play *play, struct engine_runner *ru
     frame->edge_mute_on = 0;
     if (!play)
         return;
-    for (i = 0; i < frame->edge_muted_n; i++) {
-        char id[ENGINE_ID_CAP];
-
-        if (!catalog_id(play, runner, frame->edge_muted[i], id))
-            continue;
-        unmute_one(play, id);
-    }
+    (void)runner;
+    for (i = 0; i < frame->edge_muted_n; i++)
+        unmute_slot(play, frame->edge_muted[i]);
+    frame->edge_muted_n = 0;
 }
 
 static void arm_edge_mute(struct engine_play *play, struct engine_runner *runner,
@@ -1308,6 +1325,7 @@ static void arm_edge_mute(struct engine_play *play, struct engine_runner *runner
     for (i = 0; i < play->macro_count; i++) {
         const struct engine_macro *macro = &play->macros[i];
         int match = 0;
+        int slot;
 
         if (!macro->id[0] || same_id(macro->id, runner->id) || macro->trigger == 0)
             continue;
@@ -1321,9 +1339,10 @@ static void arm_edge_mute(struct engine_play *play, struct engine_runner *runner
             continue;
         if (frame->edge_muted_n >= ENGINE_EDGE_MUTE_CAP)
             break;
-        if (!mute_one(play, macro->id))
+        slot = mute_one(play, macro->id);
+        if (slot < 0)
             break;
-        frame->edge_muted[frame->edge_muted_n++] = i;
+        frame->edge_muted[frame->edge_muted_n++] = (uint8_t)slot;
         frame->edge_mute_on = 1;
     }
 }
@@ -1383,12 +1402,12 @@ static int push_edge(struct engine_runner *runner, struct engine_play *play,
         frame->edge_spam_at = engine_arm_deadline(now, ticks_of(runner, frame->edge_hold_for));
     }
     if (step->key != 0 && !hold_add(runner, step->key)) {
-        mark_done(runner, play);
+        mark_done(runner, play, ENGINE_WHY_HOLD_CAP);
         return 0;
     }
     if (runner->trigger != 0 && runner->trigger != step->key &&
         !hold_add(runner, runner->trigger)) {
-        mark_done(runner, play);
+        mark_done(runner, play, ENGINE_WHY_HOLD_CAP);
         return 0;
     }
     if ((step->action & ENGINE_EDGE_PAUSE_BLOCK) != 0)
@@ -1424,7 +1443,7 @@ static void tick_tap(struct engine_runner *runner, struct engine_play *play, int
         return;
     frame = &runner->stack[runner->stack_count - 1];
     if (runner->stopping || (runner->trigger != 0 && !finger_down(play, runner->trigger))) {
-        mark_done(runner, play);
+        mark_done(runner, play, ENGINE_WHY_EDGE_RELEASE);
         return;
     }
     if (frame->edge_phase == ENGINE_EDGE_PHASE_ARM) {
@@ -1437,11 +1456,11 @@ static void tick_tap(struct engine_runner *runner, struct engine_play *play, int
     }
     if (frame->edge_phase == ENGINE_EDGE_PHASE_GAP) {
         if (runner->trigger != 0 && !finger_down(play, runner->trigger)) {
-            mark_done(runner, play);
+            mark_done(runner, play, ENGINE_WHY_EDGE_RELEASE);
             return;
         }
         if (frame->edge_key != 0 && !hold_add(runner, frame->edge_key)) {
-            mark_done(runner, play);
+            mark_done(runner, play, ENGINE_WHY_HOLD_CAP);
             return;
         }
         frame->edge_phase = ENGINE_EDGE_PHASE_DOWN;
@@ -1470,7 +1489,7 @@ static int toggle_spam(struct engine_runner *runner, struct engine_play *play,
         return 1;
     }
     if (!hold_add(runner, frame->edge_key)) {
-        mark_done(runner, play);
+        mark_done(runner, play, ENGINE_WHY_HOLD_CAP);
         return 0;
     }
     frame->edge_spam_on = 1;
@@ -1490,7 +1509,7 @@ static int tick_spam(struct engine_runner *runner, struct engine_play *play, int
     frame = &runner->stack[runner->stack_count - 1];
     up = runner->trigger != 0 && !finger_down(play, runner->trigger);
     if (runner->stopping) {
-        mark_done(runner, play);
+        mark_done(runner, play, ENGINE_WHY_ASK_STOP);
         return 0;
     }
     if (up) {
@@ -1567,7 +1586,7 @@ static void advance_runner(struct engine_runner *runner, struct engine_play *pla
             if (runner->stack_count > 0 && runner->stack[runner->stack_count - 1].edge_spam)
                 runner->wait_until = 0;
             else {
-                mark_done(runner, play);
+                mark_done(runner, play, (runner->scan_wait ? ENGINE_WHY_SCAN_RELEASE : ENGINE_WHY_EDGE_RELEASE));
                 return;
             }
         } else {
@@ -1577,7 +1596,7 @@ static void advance_runner(struct engine_runner *runner, struct engine_play *pla
     runner->wait_until = 0;
     runner->scan_wait = 0;
     if (runner->stopping && stop_mode(runner) == ENGINE_STOP_NEXT_UP && runner->saw_up) {
-        mark_done(runner, play);
+        mark_done(runner, play, ENGINE_WHY_NEXT_UP);
         return;
     }
     if (runner->started_at < 0)
@@ -1590,7 +1609,7 @@ static void advance_runner(struct engine_runner *runner, struct engine_play *pla
         int result;
 
         if (runner->done || runner->stack_count == 0) {
-            mark_done(runner, play);
+            mark_done(runner, play, ENGINE_WHY_FINISHED);
             return;
         }
         frame = &runner->stack[runner->stack_count - 1];
@@ -1676,19 +1695,6 @@ static const struct engine_macro *find_macro(const struct engine_play *play, con
             return &play->macros[i];
     }
     return NULL;
-}
-
-static int catalog_id(const struct engine_play *play, const struct engine_runner *owner,
-                      int32_t index, char *dst)
-{
-    if (!play || !play->macros || index < 0 || index >= play->macro_count)
-        return 0;
-    if (!play->macros[index].id[0])
-        return 0;
-    if (owner && same_id(owner->id, play->macros[index].id))
-        return 0;
-    copy_id(dst, play->macros[index].id);
-    return 1;
 }
 
 static int find_mute_slot(const struct engine_play *play, const char *id)
@@ -1795,6 +1801,7 @@ static int hold_replay(const struct engine_play *play, const char *id)
     return macro_replays_hold(macro);
 }
 
+/* The slot, or -1 when the table is full. */
 static int mute_one(struct engine_play *play, const char *id)
 {
     int slot = find_mute_slot(play, id);
@@ -1802,7 +1809,7 @@ static int mute_one(struct engine_play *play, const char *id)
     if (slot < 0) {
         slot = alloc_mute_slot(play);
         if (slot < 0)
-            return 0;
+            return -1;
         copy_id(play->mute_slot_id[slot], id);
         play->mute_slot_count[slot] = 0;
         play->mute_slot_resume[slot] = playing(play, id);
@@ -1811,19 +1818,20 @@ static int mute_one(struct engine_play *play, const char *id)
     play->mute_slot_count[slot]++;
     if (play->mute_slot_count[slot] == 1)
         pause_id(play, id);
-    return 1;
+    return slot;
 }
 
-static void unmute_one(struct engine_play *play, const char *id)
+static void unmute_slot(struct engine_play *play, int slot)
 {
-    int slot = find_mute_slot(play, id);
+    char id[ENGINE_ID_CAP];
     int count;
     int resume;
     int i;
     const struct engine_macro *macro;
 
-    if (slot < 0)
+    if (!play || slot < 0 || slot >= ENGINE_MUTE_SLOT_CAP || !play->mute_slot_used[slot])
         return;
+    copy_id(id, play->mute_slot_id[slot]);
     count = play->mute_slot_count[slot] - 1;
     if (count > 0) {
         play->mute_slot_count[slot] = count;
@@ -1842,7 +1850,7 @@ static void unmute_one(struct engine_play *play, const char *id)
                 struct engine_runner *runner = &play->runners[i];
                 if (!runner->done && same_id(runner->id, id) &&
                     runner->mode == ENGINE_MODE_WHILE_HELD)
-                    mark_done(runner, play);
+                    mark_done(runner, play, ENGINE_WHY_UNMUTE);
             }
         }
         return;
@@ -1850,28 +1858,7 @@ static void unmute_one(struct engine_play *play, const char *id)
     if (resume || hold_replay(play, id)) {
         macro = find_macro(play, id);
         if (macro)
-            engine_play_start(play, macro, -1, 1);
-    }
-}
-
-static void each_mute_id(struct engine_play *play, const struct engine_runner *owner,
-                         uint16_t at, uint16_t n, int arm)
-{
-    uint32_t i;
-
-    if (!play || n == 0)
-        return;
-    if ((uint32_t)at > play->mute_count || (uint32_t)n > play->mute_count - at)
-        return;
-    for (i = 0; i < n; i++) {
-        char id[ENGINE_ID_CAP];
-
-        if (!catalog_id(play, owner, play->mute_ids[at + i], id))
-            continue;
-        if (arm)
-            mute_one(play, id);
-        else
-            unmute_one(play, id);
+            engine_play_start_why(play, macro, -1, 1, ENGINE_WHY_UNMUTE);
     }
 }
 
@@ -1879,34 +1866,41 @@ static int arm_frame_mute(struct engine_play *play, struct engine_runner *runner
                           struct engine_frame *frame)
 {
     uint32_t i;
-    int any = 0;
 
     if (!play || !frame || frame->mute_n == 0)
         return 0;
+    frame->mute_slot_n = 0;
     if ((uint32_t)frame->mute_at > play->mute_count ||
         (uint32_t)frame->mute_n > play->mute_count - frame->mute_at)
         return 0;
-    for (i = 0; i < frame->mute_n; i++) {
-        char id[ENGINE_ID_CAP];
+    for (i = 0; i < frame->mute_n && frame->mute_slot_n < ENGINE_FRAME_MUTE_CAP; i++) {
+        const char *id = play->mute_ids[frame->mute_at + i];
+        int slot;
 
-        if (!catalog_id(play, runner, play->mute_ids[frame->mute_at + i], id))
+        if (!id[0] || same_id(id, runner->id))
             continue;
-        if (mute_one(play, id))
-            any = 1;
+        slot = mute_one(play, id);
+        if (slot >= 0)
+            frame->mute_slot[frame->mute_slot_n++] = (uint8_t)slot;
     }
-    frame->mute_on = any;
-    return any;
+    frame->mute_on = frame->mute_slot_n > 0;
+    return frame->mute_on;
 }
 
 static void release_frame_mute(struct engine_play *play, struct engine_runner *runner,
                                struct engine_frame *frame)
 {
+    int i;
+
+    (void)runner;
     if (!frame || !frame->mute_on)
         return;
     frame->mute_on = 0;
     if (!play)
         return;
-    each_mute_id(play, runner, frame->mute_at, frame->mute_n, 0);
+    for (i = 0; i < frame->mute_slot_n; i++)
+        unmute_slot(play, frame->mute_slot[i]);
+    frame->mute_slot_n = 0;
 }
 
 static int push_hold(struct engine_runner *runner, struct engine_play *play,
@@ -2041,10 +2035,142 @@ static int arena_fits(const struct engine_play *play, uint32_t count)
     return play->arena_count <= ENGINE_STEP_CAP - count;
 }
 
-/* Copies holdLoop and swapLoop mute indexes into the play table and rewrites
-   the step. An invalid span is dropped. A full table refuses the start. */
-static int rebase_hold_mutes(struct engine_play *play, struct engine_step *steps, uint32_t count,
+static int owns_arena(const struct engine_play *play, const struct engine_runner *runner)
+{
+    return runner->steps && runner->steps >= play->arena &&
+           runner->steps <= play->arena + ENGINE_STEP_CAP;
+}
+
+static void drop_spans(struct engine_runner *runner)
+{
+    runner->steps = NULL;
+    runner->step_count = 0;
+    runner->mute_first = 0;
+    runner->mute_len = 0;
+}
+
+/* A done runner never reads its steps again. Publish reads only its move,
+   wheel, and goto. So its spans are dropped, and live runners and pending
+   runners slide down. AHK built a new object per start and had no cap. */
+static void arena_compact(struct engine_play *play)
+{
+    struct engine_runner *owners[ENGINE_RUNNER_CAP * 2];
+    uint32_t at;
+    int n = 0;
+    int i;
+    int j;
+
+    for (i = 0; i < play->runner_count; i++) {
+        struct engine_runner *runner = &play->runners[i];
+
+        if (runner->done || !owns_arena(play, runner))
+            drop_spans(runner);
+        else
+            owners[n++] = runner;
+    }
+    for (i = 0; i < play->pending_count; i++) {
+        struct engine_runner *runner = &play->pending[i];
+
+        if (runner->done || !owns_arena(play, runner))
+            drop_spans(runner);
+        else
+            owners[n++] = runner;
+    }
+    for (i = 1; i < n; i++) {
+        struct engine_runner *hold = owners[i];
+
+        for (j = i; j > 0 && owners[j - 1]->steps > hold->steps; j--)
+            owners[j] = owners[j - 1];
+        owners[j] = hold;
+    }
+    at = 0;
+    for (i = 0; i < n; i++) {
+        uint32_t from = (uint32_t)(owners[i]->steps - play->arena);
+
+        if (from != at && owners[i]->step_count > 0)
+            memmove(play->arena + at, play->arena + from,
+                    owners[i]->step_count * sizeof play->arena[0]);
+        owners[i]->steps = play->arena + at;
+        at += owners[i]->step_count;
+    }
+    play->arena_count = at;
+
+    for (i = 1; i < n; i++) {
+        struct engine_runner *hold = owners[i];
+
+        for (j = i; j > 0 && owners[j - 1]->mute_first > hold->mute_first; j--)
+            owners[j] = owners[j - 1];
+        owners[j] = hold;
+    }
+    at = 0;
+    for (i = 0; i < n; i++) {
+        struct engine_runner *runner = owners[i];
+        uint32_t from = runner->mute_first;
+        uint32_t shift;
+        uint32_t k;
+
+        if (runner->mute_len == 0) {
+            runner->mute_first = 0;
+            continue;
+        }
+        if (from != at)
+            memmove(play->mute_ids + at, play->mute_ids + from,
+                    runner->mute_len * sizeof play->mute_ids[0]);
+        shift = from - at;
+        if (shift != 0) {
+            /* The runner's own copy of its steps names mute_ids by index. */
+            struct engine_step *steps = (struct engine_step *)runner->steps;
+
+            for (k = 0; k < runner->step_count; k++) {
+                if ((steps[k].type == ENGINE_STEP_HOLD_LOOP ||
+                     steps[k].type == ENGINE_STEP_SWAP_LOOP) && steps[k].mute_n > 0)
+                    steps[k].mute_at = (uint16_t)(steps[k].mute_at - shift);
+            }
+            for (k = 0; k < (uint32_t)runner->stack_count; k++) {
+                if (runner->stack[k].mute_n > 0)
+                    runner->stack[k].mute_at = (uint16_t)(runner->stack[k].mute_at - shift);
+            }
+        }
+        runner->mute_first = at;
+        at += runner->mute_len;
+    }
+    play->mute_count = at;
+}
+
+static uint32_t mutes_needed(const struct engine_step *steps, uint32_t count,
                              const int32_t *mutes, uint32_t mute_count)
+{
+    uint32_t need = 0;
+    uint32_t i;
+
+    for (i = 0; i < count; i++) {
+        if (steps[i].type != ENGINE_STEP_HOLD_LOOP && steps[i].type != ENGINE_STEP_SWAP_LOOP)
+            continue;
+        if (steps[i].mute_n == 0 || !mutes || steps[i].mute_at > mute_count ||
+            steps[i].mute_n > mute_count - steps[i].mute_at)
+            continue;
+        need += steps[i].mute_n;
+    }
+    return need;
+}
+
+/* Compacts once when the new start would not fit. */
+static int room_for(struct engine_play *play, uint32_t steps, uint32_t mutes)
+{
+    if (steps > ENGINE_STEP_CAP || mutes > ENGINE_MUTE_ID_CAP)
+        return 0;
+    if (arena_fits(play, steps) && play->mute_count <= ENGINE_MUTE_ID_CAP - mutes)
+        return 1;
+    arena_compact(play);
+    return arena_fits(play, steps) && play->mute_count <= ENGINE_MUTE_ID_CAP - mutes;
+}
+
+/* Copies holdLoop and swapLoop mute targets into the play table as ids and
+   rewrites the step. The catalog is the one this start came from. A later
+   config switch or profile push cannot change which macro a frame mutes.
+   An invalid span is dropped. A full table refuses the start. */
+static int rebase_hold_mutes(struct engine_play *play, struct engine_step *steps, uint32_t count,
+                             const int32_t *mutes, uint32_t mute_count, const char *owner)
 {
     uint32_t saved = play->mute_count;
     uint32_t i;
@@ -2069,8 +2195,15 @@ static int rebase_hold_mutes(struct engine_play *play, struct engine_step *steps
             play->mute_count = saved;
             return 0;
         }
-        for (k = 0; k < n; k++)
-            play->mute_ids[play->mute_count + k] = mutes[at + k];
+        for (k = 0; k < n; k++) {
+            char *dst = play->mute_ids[play->mute_count + k];
+            int32_t index = mutes[at + k];
+
+            dst[0] = '\0';
+            if (play->macros && index >= 0 && index < play->macro_count &&
+                !same_id(play->macros[index].id, owner))
+                copy_id(dst, play->macros[index].id);
+        }
         step->mute_at = (uint16_t)play->mute_count;
         play->mute_count += n;
     }
@@ -2085,6 +2218,7 @@ static int queue_runner(struct engine_play *play, const struct engine_macro *mac
     uint32_t count;
     uint32_t top;
     uint32_t offset;
+    uint32_t mute_first;
     int basic_count;
     int hold;
 
@@ -2111,14 +2245,16 @@ static int queue_runner(struct engine_play *play, const struct engine_macro *mac
         top = count;
     if (top > count)
         top = count;
-    if (!arena_fits(play, count))
+    if (!room_for(play, count, mutes_needed(src, count, macro->mutes, macro->mute_count)))
         return 0;
 
     offset = play->arena_count;
+    mute_first = play->mute_count;
     if (count > 0)
         memcpy(play->arena + offset, src, count * sizeof *src);
     play->arena_count += count;
-    if (!rebase_hold_mutes(play, play->arena + offset, count, macro->mutes, macro->mute_count)) {
+    if (!rebase_hold_mutes(play, play->arena + offset, count, macro->mutes, macro->mute_count,
+                           macro->id)) {
         play->arena_count = offset;
         return 0;
     }
@@ -2131,6 +2267,8 @@ static int queue_runner(struct engine_play *play, const struct engine_macro *mac
     runner->started_at = -1;
     runner->steps = play->arena + offset;
     runner->step_count = count;
+    runner->mute_first = mute_first;
+    runner->mute_len = play->mute_count - mute_first;
     runner->mode = mode;
     runner->release_stop = macro->release_stop == ENGINE_STOP_FINISH
                                ? ENGINE_STOP_FINISH
@@ -2217,11 +2355,108 @@ int engine_fingers_seen(const struct engine_fingers *fingers, uint16_t id)
     return (fingers->seen[id / 8u] >> (id % 8u)) & 1;
 }
 
+void engine_fingers_forget(struct engine_fingers *fingers, uint16_t id)
+{
+    uint8_t bit;
+
+    if (!fingers || id == 0 || id > ENGINE_KEY_ID_MAX)
+        return;
+    bit = (uint8_t)(1u << (id % 8u));
+    fingers->seen[id / 8u] = (uint8_t)(fingers->seen[id / 8u] & (uint8_t)~bit);
+    fingers->down[id / 8u] = (uint8_t)(fingers->down[id / 8u] & (uint8_t)~bit);
+}
+
 int engine_fingers_down(const struct engine_fingers *fingers, uint16_t id)
 {
     if (!engine_fingers_seen(fingers, id))
         return 0;
     return (fingers->down[id / 8u] >> (id % 8u)) & 1;
+}
+
+void engine_finger_at_touch(int64_t *at, int count, uint16_t id, int64_t now)
+{
+    if (!at || id == 0 || (int)id >= count)
+        return;
+    at[id] = now;
+}
+
+static int release_one(struct engine_fingers *fingers, uint16_t id, uint16_t *out, int cap, int n)
+{
+    engine_fingers_set(fingers, id, 0);
+    if (out && n < cap)
+        out[n] = id;
+    return n + 1;
+}
+
+int engine_fingers_release_os_up(struct engine_fingers *fingers, const uint8_t *up,
+                                 const uint8_t *blocked, uint16_t *out, int cap)
+{
+    int n = 0;
+    uint16_t id;
+
+    if (!fingers || !up)
+        return 0;
+    for (id = 1; id <= ENGINE_KEY_ID_MAX; id++) {
+        uint8_t bit = (uint8_t)(1u << (id % 8u));
+
+        if (!engine_fingers_down(fingers, id))
+            continue;
+        if (blocked && (blocked[id / 8u] & bit) != 0)
+            continue;
+        if ((up[id / 8u] & bit) == 0)
+            continue;
+        n = release_one(fingers, id, out, cap, n);
+    }
+    return n;
+}
+
+int engine_finger_note(struct engine_fingers *fingers, uint16_t id, int down,
+                       uint16_t *defer, int *defer_count, int cap)
+{
+    int i;
+    int kept;
+
+    if (!fingers)
+        return 0;
+    if (engine_repeat_is_missed_up(id, down, engine_fingers_down(fingers, id))) {
+        engine_fingers_set(fingers, id, 0);
+        if (defer && defer_count && *defer_count < cap)
+            defer[(*defer_count)++] = id;
+        return 1;
+    }
+    engine_fingers_set(fingers, id, down);
+    if (down || !defer || !defer_count)
+        return 0;
+    kept = 0;
+    for (i = 0; i < *defer_count; i++) {
+        if (defer[i] != id)
+            defer[kept++] = defer[i];
+    }
+    *defer_count = kept;
+    return 0;
+}
+
+int engine_fingers_release_down(struct engine_fingers *fingers, int keys, int mouse,
+                                uint16_t *out, int cap)
+{
+    int n = 0;
+    uint16_t id;
+
+    if (!fingers)
+        return 0;
+    for (id = 1; id <= ENGINE_KEY_ID_MAX; id++) {
+        int button;
+
+        if (!engine_fingers_down(fingers, id))
+            continue;
+        button = engine_is_mouse_button(id);
+        if (button && !mouse)
+            continue;
+        if (!button && !keys)
+            continue;
+        n = release_one(fingers, id, out, cap, n);
+    }
+    return n;
 }
 
 void engine_play_set_fingers(struct engine_play *play, const struct engine_fingers *fingers)
@@ -2254,8 +2489,62 @@ int engine_play_muted(const struct engine_play *play, const char *id)
     return engine_play_mute_count(play, id) > 0;
 }
 
+static const char *const k_why[ENGINE_WHY_COUNT] = {
+    "none", "edge", "unmute", "run", "once-lock", "already-running", "run-target-live",
+    "busy", "runner-cap", "arena-full", "no-id", "muted", "once-done", "focus", "disabled",
+    "finished", "release", "next-up", "scan-release", "edge-release", "toggle", "stop",
+    "stop-all", "exclusive", "restart", "orphan", "frame-cap", "hold-cap", "ask-stop",
+    "panic", "overflow", "command", "start"
+};
+
+const char *engine_why_name(int why)
+{
+    if (why < 0 || why >= ENGINE_WHY_COUNT)
+        return "?";
+    return k_why[why];
+}
+
+int engine_play_note(struct engine_play *play, int kind, const char *id, int why, int mode,
+                     uint16_t key, int down, int64_t age)
+{
+    struct engine_note *note;
+
+    if (!play)
+        return -1;
+    if (play->note_count >= ENGINE_NOTE_CAP) {
+        play->note_dropped++;
+        return -1;
+    }
+    note = &play->notes[play->note_count];
+    memset(note, 0, sizeof *note);
+    note->kind = (uint8_t)kind;
+    note->why = (uint8_t)why;
+    note->mode = (uint8_t)mode;
+    note->down = (uint8_t)(down ? 1 : 0);
+    note->key = key;
+    note->age = age;
+    if (id)
+        copy_id(note->id, id);
+    return play->note_count++;
+}
+
+static int refuse(struct engine_play *play, const char *id, int mode, int why)
+{
+    play->refused = why;
+    /* A run step to a live target is the normal no-op. It would log every pass. */
+    if (why != ENGINE_WHY_NO_RESTART)
+        engine_play_note(play, ENGINE_NOTE_BLOCK, id, why, mode, 0, 0, 0);
+    return 0;
+}
+
 int engine_play_start(struct engine_play *play, const struct engine_macro *macro,
                       int mode_override, int restart)
+{
+    return engine_play_start_why(play, macro, mode_override, restart, ENGINE_WHY_START);
+}
+
+int engine_play_start_why(struct engine_play *play, const struct engine_macro *macro,
+                          int mode_override, int restart, int why)
 {
     int mode;
     char id[ENGINE_ID_CAP];
@@ -2263,25 +2552,32 @@ int engine_play_start(struct engine_play *play, const struct engine_macro *macro
     if (!play || !macro)
         return 0;
     copy_id(id, macro->id);
-    if (!id[0])
-        return 0;
-    if (play->runner_count + play->pending_count >= ENGINE_RUNNER_CAP)
-        return 0;
-    if (!arena_fits(play, macro_step_count(macro)))
-        return 0;
     mode = mode_override >= 0 ? mode_override : macro->mode;
+    if (!id[0])
+        return refuse(play, id, mode, ENGINE_WHY_NO_ID);
     if (playing(play, id) && !restart)
-        return 0;
+        return refuse(play, id, mode, ENGINE_WHY_NO_RESTART);
     if (playing(play, id) &&
         (mode == ENGINE_MODE_WHILE_HELD || mode == ENGINE_MODE_TOGGLE))
-        return 0;
+        return refuse(play, id, mode, ENGINE_WHY_RUNNING);
     if (macro->busy && playing(play, id))
-        return 0;
+        return refuse(play, id, mode, ENGINE_WHY_BUSY);
+    if (play->runner_count + play->pending_count >= ENGINE_RUNNER_CAP)
+        return refuse(play, id, mode, ENGINE_WHY_RUNNER_CAP);
+    if (!room_for(play, macro_step_count(macro), 0))
+        return refuse(play, id, mode, ENGINE_WHY_ARENA_FULL);
     if (playing(play, id))
-        engine_play_stop(play, id);
+        engine_play_stop_why(play, id, ENGINE_WHY_RESTART);
     if (macro->exclusive)
-        engine_play_stop_all(play);
-    return queue_runner(play, macro, mode);
+        engine_play_stop_all_why(play, ENGINE_WHY_EXCLUSIVE);
+    if (!queue_runner(play, macro, mode))
+        return refuse(play, id, mode,
+                      play->runner_count + play->pending_count >= ENGINE_RUNNER_CAP
+                          ? ENGINE_WHY_RUNNER_CAP
+                          : ENGINE_WHY_ARENA_FULL);
+    play->refused = ENGINE_WHY_NONE;
+    engine_play_note(play, ENGINE_NOTE_START, id, why, mode, 0, 0, 0);
+    return 1;
 }
 
 void engine_play_flush(struct engine_play *play)
@@ -2602,17 +2898,32 @@ void engine_play_remove_done(struct engine_play *play)
         return;
     write = 0;
     for (i = 0; i < play->runner_count; i++) {
-        if (play->runners[i].done)
+        if (play->runners[i].done) {
+            const struct engine_runner *gone = &play->runners[i];
+            int64_t age = 0;
+
+            if (gone->started_at >= 0 && play->now > gone->started_at)
+                age = play->now - gone->started_at;
+            engine_play_note(play, ENGINE_NOTE_STOP, gone->id,
+                             gone->end_reason ? gone->end_reason : ENGINE_WHY_FINISHED,
+                             gone->mode, 0, 0, age);
             continue;
+        }
         if (write != i)
             play->runners[write] = play->runners[i];
         write++;
     }
     play->runner_count = write;
+    arena_compact(play);
     engine_once_refresh(play);
 }
 
 void engine_play_stop(struct engine_play *play, const char *id)
+{
+    engine_play_stop_why(play, id, ENGINE_WHY_STOP);
+}
+
+void engine_play_stop_why(struct engine_play *play, const char *id, int why)
 {
     int write;
     int i;
@@ -2621,12 +2932,15 @@ void engine_play_stop(struct engine_play *play, const char *id)
         return;
     for (i = 0; i < play->runner_count; i++) {
         if (same_id(play->runners[i].id, id))
-            mark_done(&play->runners[i], play);
+            mark_done(&play->runners[i], play, why);
     }
     write = 0;
     for (i = 0; i < play->pending_count; i++) {
-        if (same_id(play->pending[i].id, id))
+        if (same_id(play->pending[i].id, id)) {
+            engine_play_note(play, ENGINE_NOTE_STOP, play->pending[i].id, why,
+                             play->pending[i].mode, 0, 0, 0);
             continue;
+        }
         if (write != i)
             play->pending[write] = play->pending[i];
         write++;
@@ -2636,12 +2950,20 @@ void engine_play_stop(struct engine_play *play, const char *id)
 
 void engine_play_stop_all(struct engine_play *play)
 {
+    engine_play_stop_all_why(play, ENGINE_WHY_STOP_ALL);
+}
+
+void engine_play_stop_all_why(struct engine_play *play, int why)
+{
     int i;
 
     if (!play)
         return;
     for (i = 0; i < play->runner_count; i++)
-        mark_done(&play->runners[i], play);
+        mark_done(&play->runners[i], play, why);
+    for (i = 0; i < play->pending_count; i++)
+        engine_play_note(play, ENGINE_NOTE_STOP, play->pending[i].id, why,
+                         play->pending[i].mode, 0, 0, 0);
     play->pending_count = 0;
 }
 
@@ -2657,7 +2979,7 @@ void engine_play_ask_stop(struct engine_play *play, const char *id)
             continue;
         runner->stopping = 1;
         if (stop_mode(runner) == ENGINE_STOP_NEXT_UP && runner->saw_up)
-            mark_done(runner, play);
+            mark_done(runner, play, ENGINE_WHY_NEXT_UP);
     }
 }
 
@@ -2665,13 +2987,14 @@ void engine_play_tick(struct engine_play *play, int64_t now)
 {
     if (!play)
         return;
+    play->now = now;
     engine_play_remove_done(play);
     engine_play_flush(play);
     engine_play_advance(play, now);
     engine_play_flush(play);
     engine_play_publish(play, now);
     if (engine_report_flags(&play->last) & ENGINE_REPORT_OVERFLOW)
-        engine_play_stop_all(play);
+        engine_play_stop_all_why(play, ENGINE_WHY_OVERFLOW);
     engine_play_remove_done(play);
 }
 

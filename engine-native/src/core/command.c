@@ -3,6 +3,7 @@
 #endif
 
 #include "command.h"
+#include "clock.h"
 
 #include <string.h>
 
@@ -184,6 +185,14 @@ void engine_trigger_reseed(struct engine_trigger_mem *mem)
     mem->need_seed = 1;
 }
 
+void engine_trigger_note_profile(struct engine_trigger_mem *mem, uint64_t seq)
+{
+    if (!mem || mem->profile_seq == seq)
+        return;
+    mem->profile_seq = seq;
+    mem->need_seed = 1;
+}
+
 static int same_id(const char *a, const char *b)
 {
     if (!a || !b)
@@ -297,7 +306,7 @@ static int once_start(struct engine_play *play, const struct engine_macro *macro
     int override = (mode == ENGINE_MODE_WHILE_HELD || mode == ENGINE_MODE_TOGGLE) ? -1
                                                                                    : ENGINE_MODE_ONCE;
 
-    return engine_play_start(play, macro, override, 1);
+    return engine_play_start_why(play, macro, override, 1, ENGINE_WHY_EDGE);
 }
 
 static const char *macro_focus(const struct engine_live_config *live, int index)
@@ -314,6 +323,92 @@ static int macro_enabled(const struct engine_live_config *live, int index)
     if (!live || !live->extras)
         return 1;
     return live->extras[index].enabled ? 1 : 0;
+}
+
+int engine_live_needs_mouse(const struct engine_live_config *live)
+{
+    int i;
+
+    if (!live || !live->macros || live->macro_count <= 0)
+        return 0;
+    for (i = 0; i < live->macro_count; i++) {
+        uint16_t id = live->macros[i].trigger;
+
+        if (!macro_enabled(live, i) || live->macros[i].step_count == 0)
+            continue;
+        if (engine_can_trigger(id) && engine_is_mouse_button(id))
+            return 1;
+    }
+    return 0;
+}
+
+int engine_live_claims(const struct engine_live_config *live, uint16_t id)
+{
+    int i;
+
+    if (!live || !live->macros || !engine_can_trigger(id))
+        return 0;
+    for (i = 0; i < live->macro_count; i++) {
+        if (!macro_enabled(live, i) || live->macros[i].step_count == 0)
+            continue;
+        if (live->macros[i].trigger == id)
+            return 1;
+    }
+    return 0;
+}
+
+void engine_claims_init(struct engine_claim_mem *mem)
+{
+    if (!mem)
+        return;
+    memset(mem, 0, sizeof *mem);
+}
+
+int engine_claims_sync(struct engine_claim_mem *mem, const struct engine_live_config *live,
+                       const char *front, const char *owner, int armed, int force,
+                       struct engine_fingers *fingers, uint16_t *out, int cap)
+{
+    uint8_t now[ENGINE_SWALLOW_IDS];
+    int swallow;
+    int flip;
+    int n = 0;
+    int i;
+
+    if (!mem)
+        return 0;
+    memset(now, 0, sizeof now);
+    if (armed && live && live->macros) {
+        for (i = 0; i < live->macro_count; i++) {
+            uint16_t id = live->macros[i].trigger;
+
+            if (!macro_enabled(live, i) || live->macros[i].step_count == 0)
+                continue;
+            if (engine_can_trigger(id) && id < ENGINE_SWALLOW_IDS)
+                now[id] = 1;
+        }
+    }
+    swallow = live ? engine_focus_swallow(live->focus_exe, front, owner) : 0;
+    flip = mem->ready && swallow != mem->swallow;
+    if (mem->ready && fingers) {
+        for (i = 1; i < (int)ENGINE_SWALLOW_IDS; i++) {
+            int drop = mem->claimed[i] && !now[i];
+
+            if ((flip || force) && (mem->claimed[i] || now[i]))
+                drop = 1;
+            if (!drop || !engine_fingers_seen(fingers, (uint16_t)i))
+                continue;
+            if (engine_fingers_down(fingers, (uint16_t)i)) {
+                if (out && n < cap)
+                    out[n] = (uint16_t)i;
+                n++;
+            }
+            engine_fingers_forget(fingers, (uint16_t)i);
+        }
+    }
+    memcpy(mem->claimed, now, sizeof now);
+    mem->swallow = swallow;
+    mem->ready = 1;
+    return n;
 }
 
 void engine_trigger_seed(struct engine_trigger_mem *mem, const struct engine_live_config *live,
@@ -365,6 +460,8 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
         int running;
         int once;
         int action;
+        int note = -1;
+        int did = ENGINE_WHY_NONE;
 
         if (!macro->id[0])
             continue;
@@ -373,48 +470,69 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
         mem->prev[i] = (uint8_t)(down ? 1 : 0);
         if (!engine_can_trigger(macro->trigger))
             continue;
-        if (engine_play_muted(play, macro->id))
-            continue;
-        if (!macro_enabled(live, i) || !engine_focus_swallow(macro_focus(live, i), front, owner)) {
-            engine_play_stop(play, macro->id);
-            continue;
-        }
-        running = runner_live(play, macro->id);
-        once = engine_once_state(play, macro->id);
-        if (once == ENGINE_LOCK_DONE) {
-            if (running) {
-                if (!down && mode == ENGINE_MODE_WHILE_HELD)
+        /* Every edge of a live trigger is one log line, written before the
+           start or stop it causes. did is filled in below. */
+        if (down != was)
+            note = engine_play_note(play, ENGINE_NOTE_EDGE, macro->id, ENGINE_WHY_NONE, mode,
+                                    macro->trigger, down, 0);
+        if (engine_play_muted(play, macro->id)) {
+            did = ENGINE_WHY_MUTED;
+        } else if (!macro_enabled(live, i) ||
+                   !engine_focus_swallow(macro_focus(live, i), front, owner)) {
+            int why = macro_enabled(live, i) ? ENGINE_WHY_FOCUS : ENGINE_WHY_DISABLED;
+
+            engine_play_stop_why(play, macro->id, why);
+            did = why;
+        } else {
+            running = runner_live(play, macro->id);
+            once = engine_once_state(play, macro->id);
+            if (once == ENGINE_LOCK_DONE) {
+                did = ENGINE_WHY_ONCE_DONE;
+                if (running) {
+                    if (!down && mode == ENGINE_MODE_WHILE_HELD) {
+                        engine_play_ask_stop(play, macro->id);
+                        did = ENGINE_WHY_ASK_STOP;
+                    }
+                } else {
+                    engine_once_ensure(play, macro->id, macro->trigger);
+                }
+            } else if (macro->advanced && mode != ENGINE_MODE_ON_RELEASE) {
+                if (down && !was) {
+                    int ok;
+
+                    if (once == ENGINE_LOCK_OPEN)
+                        ok = once_start(play, macro);
+                    else
+                        ok = engine_play_start_why(play, macro, -1, 1, ENGINE_WHY_EDGE);
+                    did = ok ? ENGINE_WHY_START : play->refused;
+                    if (once == ENGINE_LOCK_OPEN)
+                        engine_once_spend(play, macro->id);
+                } else if (!down && running && once != ENGINE_LOCK_OPEN &&
+                           holds_on_release(macro, spam, tap)) {
                     engine_play_ask_stop(play, macro->id);
+                    did = ENGINE_WHY_ASK_STOP;
+                }
             } else {
-                engine_once_ensure(play, macro->id, macro->trigger);
+                action = engine_trigger_action(mode, down, was, running);
+                if (action == ENGINE_TRIGGER_START) {
+                    int ok;
+
+                    if (once == ENGINE_LOCK_OPEN)
+                        ok = once_start(play, macro);
+                    else
+                        ok = engine_play_start_why(play, macro, edge ? ENGINE_MODE_WHILE_HELD : -1, 1,
+                                                   ENGINE_WHY_EDGE);
+                    did = ok ? ENGINE_WHY_START : play->refused;
+                    if (once == ENGINE_LOCK_OPEN)
+                        engine_once_spend(play, macro->id);
+                } else if (action == ENGINE_TRIGGER_STOP) {
+                    did = mode == ENGINE_MODE_TOGGLE ? ENGINE_WHY_TOGGLE : ENGINE_WHY_RELEASE;
+                    engine_play_stop_why(play, macro->id, did);
+                }
             }
-            continue;
         }
-        if (macro->advanced && mode != ENGINE_MODE_ON_RELEASE) {
-            if (down && !was) {
-                if (once == ENGINE_LOCK_OPEN)
-                    once_start(play, macro);
-                else
-                    engine_play_start(play, macro, -1, 1);
-                if (once == ENGINE_LOCK_OPEN)
-                    engine_once_spend(play, macro->id);
-            } else if (!down && running && once != ENGINE_LOCK_OPEN &&
-                       holds_on_release(macro, spam, tap)) {
-                engine_play_ask_stop(play, macro->id);
-            }
-            continue;
-        }
-        action = engine_trigger_action(mode, down, was, running);
-        if (action == ENGINE_TRIGGER_START) {
-            if (once == ENGINE_LOCK_OPEN)
-                once_start(play, macro);
-            else
-                engine_play_start(play, macro, edge ? ENGINE_MODE_WHILE_HELD : -1, 1);
-            if (once == ENGINE_LOCK_OPEN)
-                engine_once_spend(play, macro->id);
-        } else if (action == ENGINE_TRIGGER_STOP) {
-            engine_play_stop(play, macro->id);
-        }
+        if (note >= 0)
+            play->notes[note].why = (uint8_t)did;
     }
 }
 
@@ -471,7 +589,7 @@ void engine_reap_orphans(struct engine_play *play, const struct engine_live_conf
             }
         }
         if (!found)
-            engine_play_stop(play, play->runners[i].id);
+            engine_play_stop_why(play, play->runners[i].id, ENGINE_WHY_ORPHAN);
     }
 }
 
@@ -612,52 +730,77 @@ int engine_state_frame(const struct engine_state_snapshot *snap,
     return at;
 }
 
-void engine_report_slot_init(struct engine_report_slot *slot)
+_Static_assert((ENGINE_REPORT_QUEUE_CAP & (ENGINE_REPORT_QUEUE_CAP - 1u)) == 0, "report cap");
+
+void engine_report_queue_init(struct engine_report_queue *queue)
 {
-    if (!slot)
+    if (!queue)
         return;
-    memset(slot, 0, sizeof *slot);
-    atomic_init(&slot->seq, 0u);
-    atomic_init(&slot->index, -1);
+    memset(queue, 0, sizeof *queue);
+    atomic_init(&queue->head, 0u);
+    atomic_init(&queue->tail, 0u);
+    atomic_init(&queue->overflow, 0);
 }
 
-void engine_report_slot_publish(struct engine_report_slot *slot, const struct engine_report *report)
+int engine_report_queue_push(struct engine_report_queue *queue, const struct engine_report *report)
 {
-    int cur;
-    int next;
+    unsigned head;
+    unsigned tail;
 
-    if (!slot || !report)
-        return;
-    cur = atomic_load_explicit(&slot->index, memory_order_relaxed);
-    next = cur == 0 ? 1 : 0;
-    slot->copy[next] = *report;
-    atomic_store_explicit(&slot->index, next, memory_order_release);
-    atomic_fetch_add_explicit(&slot->seq, 1u, memory_order_release);
-}
-
-int engine_report_slot_take(struct engine_report_slot *slot, uint32_t *seen,
-                            struct engine_report *out)
-{
-    uint32_t seq;
-    int index;
-    int tries;
-
-    if (!slot || !seen || !out)
+    if (!queue || !report)
         return 0;
-    for (tries = 0; tries < 8; tries++) {
-        seq = atomic_load_explicit(&slot->seq, memory_order_acquire);
-        if (seq == *seen)
-            return 0;
-        index = atomic_load_explicit(&slot->index, memory_order_acquire);
-        if (index != 0 && index != 1)
-            continue;
-        *out = slot->copy[index];
-        if (atomic_load_explicit(&slot->seq, memory_order_acquire) != seq)
-            continue;
-        *seen = seq;
-        return 1;
+    head = atomic_load_explicit(&queue->head, memory_order_acquire);
+    tail = atomic_load_explicit(&queue->tail, memory_order_relaxed);
+    if (tail - head >= ENGINE_REPORT_QUEUE_CAP) {
+        atomic_store_explicit(&queue->overflow, 1, memory_order_release);
+        return 0;
     }
-    return 0;
+    queue->slots[tail & (ENGINE_REPORT_QUEUE_CAP - 1u)] = *report;
+    atomic_store_explicit(&queue->tail, tail + 1u, memory_order_release);
+    return 1;
+}
+
+int engine_report_queue_pop(struct engine_report_queue *queue, struct engine_report *out)
+{
+    unsigned head;
+    unsigned tail;
+
+    if (!queue || !out)
+        return 0;
+    head = atomic_load_explicit(&queue->head, memory_order_relaxed);
+    tail = atomic_load_explicit(&queue->tail, memory_order_acquire);
+    if (head == tail)
+        return 0;
+    *out = queue->slots[head & (ENGINE_REPORT_QUEUE_CAP - 1u)];
+    atomic_store_explicit(&queue->head, head + 1u, memory_order_release);
+    return 1;
+}
+
+int engine_report_queue_take_overflow(struct engine_report_queue *queue)
+{
+    if (!queue)
+        return 0;
+    return atomic_exchange_explicit(&queue->overflow, 0, memory_order_acq_rel) != 0;
+}
+
+int engine_board_echo_written(struct engine_hook_state *hooks, const struct engine_report *report,
+                              int64_t now, int64_t freq)
+{
+    struct engine_report_echo echo[64];
+    int64_t until;
+    int stored = 0;
+    int n;
+    int i;
+
+    if (!hooks || !report)
+        return 0;
+    if (freq <= 0)
+        freq = 1000;
+    until = now + engine_ms_to_ticks(150, freq);
+    n = engine_report_echoes(report, echo, 64);
+    for (i = 0; i < n; i++)
+        stored += engine_echo_push(hooks, echo[i].id, echo[i].down != 0, until);
+    return stored;
 }
 
 int engine_report_frame(const struct engine_report *report, unsigned char *buf, int cap)

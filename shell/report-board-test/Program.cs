@@ -65,6 +65,46 @@ static class ReportBoardTest
         return lines;
     }
 
+    /* Every key id engine_key_id can compile (map_name in runner.c), with the
+       name AHK sends to the board for it. The native board line must use the
+       same HID usage as AHK's HidMap lookup of that name. */
+    static readonly (ushort Id, string Name)[] NativeKeys =
+    {
+        (0x08, "backspace"), (0x09, "tab"), (0x0D, "enter"), (0x14, "CapsLock"), (0x1B, "escape"),
+        (0x20, "space"), (0x25, "left"), (0x26, "up"), (0x27, "right"), (0x28, "down"),
+        (0x2D, "Insert"), (0x2E, "Delete"),
+        (0x5B, "LWin"), (0x5C, "RWin"),
+        (0xA0, "LShift"), (0xA1, "RShift"), (0xA2, "LCtrl"), (0xA3, "RCtrl"), (0xA4, "LAlt"), (0xA5, "RAlt"),
+        (0xBA, ";"), (0xBB, "="), (0xBC, ","), (0xBD, "-"), (0xBE, "."), (0xBF, "/"), (0xC0, "`"),
+        (0xDB, "["), (0xDC, "\\"), (0xDD, "]"), (0xDE, "'"),
+        (256, "numpadenter"),
+    };
+
+    static void CheckEveryNativeKey()
+    {
+        var keys = new List<(ushort Id, string Name)>(NativeKeys);
+        for (var c = 'a'; c <= 'z'; c++)
+            keys.Add(((ushort)(0x41 + (c - 'a')), c.ToString()));
+        for (var c = '0'; c <= '9'; c++)
+            keys.Add(((ushort)(0x30 + (c - '0')), c.ToString()));
+        for (var n = 1; n <= 12; n++)
+            keys.Add(((ushort)(0x70 + n - 1), "f" + n));
+        foreach (var (id, name) in keys)
+        {
+            Expect(HidMap.KeyUsage(name, out var usage), "AHK has a board usage for " + name);
+            var down = Image();
+            Down(down, id);
+            var lines = Lines(down, false, 0, out _);
+            Expect(lines.Count == 1 && lines[0] == "K " + usage + " 1",
+                   "native board down for " + name + " matches AHK");
+            var up = Image();
+            Up(up, id);
+            lines = Lines(up, false, 0, out _);
+            Expect(lines.Count == 1 && lines[0] == "K " + usage + " 0",
+                   "native board up for " + name + " matches AHK");
+        }
+    }
+
     static int Main()
     {
         var relative = Image();
@@ -144,6 +184,8 @@ static class ReportBoardTest
         Up(click, 257);
         lines = Lines(click, false, 0, out bits);
         Expect(bits == 0 && lines.Count == 2 && lines[0] == "M 1 0 0 0" && lines[1] == "M 0 0 0 0", "click down then up");
+
+        CheckEveryNativeKey();
 
         if (fails != 0)
         {

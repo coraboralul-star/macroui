@@ -16,6 +16,7 @@ profiles/*.json
 profiles/*.json.bak
 profiles/*.json.tmp
 profiles/shell.log
+profiles/engine.log
 shell/bin/**/runtimes/android-*/
 shell/bin/**/runtimes/linux-*/
 shell/bin/**/runtimes/maccatalyst-*/

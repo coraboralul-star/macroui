@@ -4,7 +4,32 @@
 
 The fake clock is the caller. `engine_runner_advance` takes `now` in the same unit as the QPC frequency stored on the runner. `engine-runner-test` uses frequency 1000, so the self-test's millisecond numbers land on the same integers. A frequency of 10000000 is checked once, and the wait becomes `scaled_ms * freq / 1000` with the truncation in `docs/engine/architecture.md`. The runner does not read the clock.
 
-`Advance` does not allocate. The caps are 32 runners, 16 frames, 64 holds, and 256 steps in the play arena. The arena is not reused until `engine_play_init`. Profile load replaces it with the immutable image. A full runner list, or a full arena, refuses the new start and does not stop the others. A full frame stack marks that runner done. A full hold list does the same. The AHK maps grow. These caps are the native bound.
+`Advance` does not allocate. The caps are 32 runners, 16 frames, 64 holds, 1024 steps in the play arena, and 1024 mute ids. A start copies the macro's steps and mute ids into those two tables. `engine_play_remove_done` compacts both: a done runner's spans are dropped and the live and pending runners slide down. A start that does not fit compacts once more before it is refused. Before this, the arena was never reused, so about 50 starts of a 5-step macro filled it and every later start was refused until the engine restarted. A full runner list, or tables that are still full after compaction, refuse the new start and do not stop the others. A full frame stack marks that runner done. A full hold list does the same. The AHK maps grow. These caps are the native bound.
+
+## Input path differences
+
+This is the native vs `engine/MacroEngine.ahk` review for #76. Rows marked kept are accepted differences.
+
+| Area | Native | AHK | State |
+|---|---|---|---|
+| Runner storage | Arena of 1024 steps and 1024 mute ids, compacted when runners finish | New `Runner` object per start | Fixed. The arena was never reused before |
+| Mute identity | Ids copied at start, slots on the frame | Id strings in `muted` | Fixed. Catalog indexes leaked a mute on a config switch |
+| Board reports | Ordered queue, echo tokens start at the write | `SendRaw` then `QueueHidEcho` in `Emit` | Fixed. A latest-wins slot could drop a down or an up |
+| Restart while held | Needs a new down edge | Needs a new down edge | Fixed. bc0472b's restart is gone |
+| Profile push | Reseeds trigger memory | `liveId := Chr(1)`, then `SeedTriggers` | Fixed |
+| Keyboard silence | Reinstall after 8 s while armed, unless a recent click and the mouse hook is needed | `NeedsKeyRaise` | Fixed |
+| Forget a trigger finger | On a focus swallow flip, an output change, a trigger leaving the set, and stop | `ClearHookBindings`, `SyncHooks` | Fixed |
+| Profile push hook raise | Hooks stay up. The parse is on the IPC thread | `hookSuspect` raises both | Kept |
+| Mouse silence | No rule | Reinstall after 8 s with no click | Kept |
+| Caps | 32 runners, 16 frames, 64 holds, 16 mute slots per frame | Unbounded | Kept. A refusal is logged |
+| Mouse 4 and 5 second down | Treated as a missed up | Not handled | Kept |
+| Panic source | Hook edge of Pause | `GetKeyState("Pause", "P")` | Kept |
+| `FingerDown` for a key never seen | Up | `GetKeyState("P")` | Kept |
+| Swallow after a focus change | From the map published by the previous tick | Hotkeys, at once | Kept |
+| A key-up after the map changed | Follows its own down, swallowed or passed | Follows the hotkey state at the up | Fixed on native. AHK can leave the key down in the game |
+| Win key and Start | Swallowed Win never reaches Windows. A passed Win down with a swallowed key before its up is masked with `vkE8` | `#MenuMaskKey`, default `vkE8` | Same |
+| Board HID usage | Key id named like AHK, then `HidMap` | Key name, then `HidMap` | Fixed. Native dropped punctuation, arrows, Tab, Esc, Backspace, Insert, Delete, and CapsLock on a board |
+| Play modes, exclusive, busy, mute skip, focus, enabled, once-lock, blocks | Same | Same | Same. The trace corpus has no diffs |
 
 ## Ported
 
@@ -22,7 +47,7 @@ The `repeat` step is in this slice because those first playback checks use it.
 
 ## holdLoop and mute
 
-`holdLoop` stores the child span in `first` and `count`, `swapAfterMs` in `a`, and the frame release stop in `b`. `0` does not swap. `b` keeps `finish` and `nextUp`. Anything else is none, and the macro's stop mode is used. `mute_at` and `mute_n` index the macro's mute table. Those entries are catalog indexes, the same kind `run` stores. The owner's own id is left out. `engine_play_advance` is the path that runs it. `engine_runner_advance` still skips it.
+`holdLoop` stores the child span in `first` and `count`, `swapAfterMs` in `a`, and the frame release stop in `b`. `0` does not swap. `b` keeps `finish` and `nextUp`. Anything else is none, and the macro's stop mode is used. `mute_at` and `mute_n` index the macro's mute table. The compiler stores catalog indexes. A start turns them into id strings in the play table, from the catalog that start came from, like AHK keeps the ids. The owner's own id is left out. An armed frame keeps the mute slot numbers it counted, and the release unmutes those slots. A config switch or a profile push between the arm and the release cannot unmute the wrong macro or leave one muted. Before this, the release looked the index up in the new catalog, so a reap on a config switch left the target muted for the life of the engine. A frame keeps at most 16 slots. An edge-hold `"block"` frame keeps at most 8. `engine_play_advance` is the path that runs it. `engine_runner_advance` still skips it.
 
 The finger snapshot is `engine_play_set_fingers`. A reported key that is down keeps the loop. A reported key that is up skips the loop before it starts, and ends it after the current pass. A key that was never reported still starts the loop, then the pass ends because it is not down. A missing snapshot is not a finger, so it does not set drain. An empty body waits 1 ms while the finger is down. `swapAfterMs` is compared to time since the runner started and is not divided by speed. When it is reached, and the finger is still down, the mute drops and the frame pops. The next block then runs.
 

@@ -15,7 +15,8 @@ hook thread                    playback thread                 IPC thread
 message pump                   tick, then the high-res wait    pipe, parse, windows
     |                                  |                            |
     |-- event ring (1024) ------------>|                            |
-    |<-- echo ring (64) ---------------|                            |
+    |<-- echo ring (64) -------------------------------------------|
+    |                                  |-- report queue (256) ----->|
     |<-- swallow map (latest) ---------|                            |
     |                                  |<-- commands (64) + quit ---|
     |                                  |<-- profile image -----------|
@@ -25,13 +26,13 @@ message pump                   tick, then the high-res wait    pipe, parse, wind
 
 | Thread | Owns | Does not |
 |---|---|---|
-| Hook | `WH_KEYBOARD_LL`, `WH_MOUSE_LL`, their message loop, the swallow return | Play a macro, parse, walk windows, call `SendInput`, take a lock |
+| Hook | `WH_KEYBOARD_LL`, `WH_MOUSE_LL`, their message loop, the swallow return, the Start menu mask | Play a macro, parse, walk windows, call `SendInput` for anything but the mask, take a lock |
 | Playback | Runners, the clock, `SendInput`, the report image, trigger decisions | Format text, parse JSON, call `GetForegroundWindow`, install a hook |
 | IPC | The pipe, JSON, profile load, foreground, the window list | Advance a runner, call `SendInput`, install a hook |
 
 The core is the playback work that is plain C: the step walk, the key array, the waits as integer ticks. The playback thread calls into that core and passes `now` in. The core does not read the clock and does not include Win32. Linux CI compiles that core. A later fake clock is a caller that passes ticks.
 
-The serial port stays in the shell. Playback emits one report image per publish. On a board, that image is the `report` frame in `docs/engine/ipc-protocol.md`. The engine does not open the port.
+The serial port stays in the shell. Playback emits one report image per publish. On a board, that image is the `report` frame in `docs/engine/ipc-protocol.md`. The engine does not open the port. A report is a diff of downs and ups, so board reports are a queue, not latest-wins: every image reaches the pipe in publish order. The IPC thread drains the queue first on every wake. After each write it pushes the echo tokens for that image, with a 150 ms window from the write, like AHK's `QueueHidEcho` after `SendRaw`. A full queue latches. Playback then calls `StopAll` and logs `report queue overflow`. With no client connected, the IPC thread drains and drops.
 
 ## How they share state
 
@@ -40,7 +41,8 @@ Lock-free. No mutex on these paths. `Local\MacroUI.Engine` is the process lifeti
 | Path | Shape | Writer | Reader |
 |---|---|---|---|
 | Keys and mouse buttons | Ring of 1024 events | Hook | Playback |
-| Board echo | Ring of 64 tokens | Playback | Hook |
+| Board echo | Ring of 64 tokens | IPC, after the report frame is written | Hook |
+| Board reports | Ordered queue of 256 images | Playback | IPC |
 | Swallow and pass | Two maps, one published index | Playback | Hook |
 | Commands | Ring of 64, plus a quit flag | IPC | Playback |
 | Profile | Immutable image, sequence number | IPC | Playback |
@@ -91,17 +93,36 @@ In order:
 1. Mouse move, vertical wheel, and horizontal wheel return through `CallNextHookEx`. They are not events and they do not wake playback.
 2. `dwExtraInfo == 0x56454E44` returns through `CallNextHookEx` and is not a finger. That marker is on every `INPUT` this process sends, keyboard and mouse.
 3. Injected input returns the same way. Keyboard flags `0x12`, mouse flags `0x03`.
-4. A board echo that matches a token is consumed, passed through, and not enqueued. The token's window is 150 ms of QPC. The match is this list, not a walk of the profile.
+4. A board echo that matches a token is consumed, passed through, and not enqueued. The token's window is 150 ms of QPC from when the IPC thread wrote that report frame. The match is this list, not a walk of the profile.
 5. Otherwise resolve the key id, enqueue, and wake if playback asked.
 6. The keyboard hook returns 1 when the published map says swallow. Middle and both side buttons return 1 from that same map, and only software output sets the bit. Board output passes those clicks. Left and right always call `CallNextHookEx` and never start a macro. Move and wheel always call `CallNextHookEx`.
+7. A down follows the map. Its up follows that down: the up is swallowed when the down was swallowed and passed when the down was passed, whatever the map says by then. That keeps a focus change mid-hold from leaving a key down in Windows, or from handing Windows a lone up.
+8. LWin and RWin are triggers like any key. A swallowed Win down and its up never reach Windows, so Start cannot open. When Windows did see a Win down and the hook swallowed any key or button before its up, that up is swallowed too. The hook then sends `vkE8` down and up and the Win up, tagged `0x56454E44`, the way AHK's `#MenuMaskKey` does. Windows sees a key between the Win down and up, so Start does not open. This is the only `SendInput` on the hook thread.
 
 Side keys are resolved here. Generic shift, ctrl, alt, and win become the left or right virtual key from the scan code and the extended bit. Right shift is scan `0x36`. Numpad Enter is virtual key `0x0D` with the extended bit, and its key id is 256. Every other key id is the virtual key, 1 through 255. Mouse buttons use the name-table ids 257 through 261. Those ids are not virtual keys.
 
 There is no `RegisterHotKey`. Software swallow and board swallow are both the return from this callback. The pass count is a bit in the same map, published with it. Middle and both side buttons use that return for software only. A board passes those clicks. Left and right are not triggers: the click always passes and the macro never starts. `SendInput` from this process is echo `0x56454E44` and is not a finger. Injected mouse flags `0x03` are not a finger either.
 
-The hook thread is the thread that installed the hooks, and it is the thread that reinstalls them. Reinstall runs between messages, not inside the callback. Unhook first. A handle Windows has already removed still looks valid. Playback posts that thread a message whenever it publishes a raise. The keyboard hook is installed with the thread. The mouse hook is not, so a mouse trigger never arrives until that message is posted.
+The hook thread is the thread that installed the hooks, and it is the thread that reinstalls them. Reinstall runs between messages, not inside the callback. Unhook first. A handle Windows has already removed still looks valid. Playback posts that thread a message whenever it publishes a raise. The keyboard hook is installed with the thread. The mouse hook is installed only while a live macro triggers on middle or a side button, and it is removed when none do. Switching the live config reinstalls that mouse hook when the new config has one of those triggers, and removes it when the new config does not. While armed or playing, a keyboard hook with no event for 8 s is reinstalled, like AHK `NeedsKeyRaise`, because Windows can remove a hook and leave its handle looking valid. A click inside that window, while the mouse hook is needed, keeps it, and the next silence raise waits another 8 s. Held fingers are kept. The log line says `reason=silent`. The mouse hook has no silence rule. AHK reinstalls it after 8 s without a click, and native leaves that out. The hook also comes back when its handle is missing, when the live config changes onto a mouse trigger, or when the input desktop returns after the lock screen. Install and remove lines in `profiles/engine.log` name the config and the reason. A key-down that no live macro uses is logged there too.
+
+A finger stays down until the hook reports the up. A start needs a down edge, like AHK. A runner that ends while its finger is still down is not started again until the key comes up and goes down. A new profile image reseeds the trigger memory, like AHK setting liveId to Chr(1), because that memory is by macro index. A key that was already down when the config armed does not start until it is released and pressed. Windows auto-repeats only the most recently pressed key, so a held key that has stopped repeating is still held. CapsLock and the punctuation keys, including backslash, are real triggers. A second down of mouse 4 or mouse 5, while that button is already down, is a missed up, and the new down lands after the rest of that batch. An up later in the same batch cancels it, so a click does not stay held. Left, right, middle, and a keyboard auto-repeat are not a missed up. GetAsyncKeyState is not a release. A key the hook swallows never shows up there, so that call would clear a trigger on the same tick it was pressed. The lock screen clears every finger. A trigger key also goes back to never reported, like AHK `physDown.Delete`, when its hotkey would go away in AHK: the live profile focus flips in or out (`SyncSwallow`), the output mode changes, the key stops being a trigger, or the engine is stopped. A lost up is then cleared by an alt-tab. Other keys are kept. The log line is `release <key> reason=forget`. Returning from it reinstalls the hooks and leaves a key down until the hook says otherwise. A piped profile is parsed on the IPC thread. AutoHotkey parses a profile on the hook thread and reinstalls both hooks once after that parse. Native leaves the hooks up across a profile update. The live config is chosen like AutoHotkey: case-insensitive file name, first `focusExe` match, and an empty `focusExe` falls back to `activeId`. A change of that config reseeds triggers. The chosen name, id, focus, and foreground exe are written to `profiles/engine.log`. An empty trigger button is not a key. It does not arm, it does not swallow, and it does not match a finger. Mouse 4 and mouse 5 share one path. The button number is the high word of the hook data, or the low word when the high word is 0.
 
 The watchdog rules in the analysis stay. Idle does not re-raise. The stamps live on the hook thread. The decision runs in step 4. That decision is `engine_hook_watch` in `engine-native/src/core/hook.c`. The hook thread reads the raise flags between messages and unhooks before it installs. `engine-native/src/win/hook_win.c` is that install. The resident process starts that thread. The playback thread does not call it.
+
+## engine.log
+
+`profiles/engine.log` sits next to `--profile`. The playback thread never opens it. A line is formatted into a 256-slot ring, and the IPC thread writes the ring through one open handle on every wake. The main thread drains it once more after the IPC thread has left. A full ring drops the line and later writes `log dropped <n>`.
+
+The core keeps a note ring on `struct engine_play` (`engine_play_note`), 128 entries per tick. Playback turns those notes into these lines after each tick:
+
+| Line | When |
+|---|---|
+| `trigger <key> down\|up macro="<name>" id=<id> action=<why>` | Every edge of a live trigger. `action` is what the edge did: `start`, `release`, `toggle`, `ask-stop`, `muted`, `once-done`, `focus`, `disabled`, `none`, or the refusal reason |
+| `runner start macro=... id=... mode=... reason=<why>` | A runner was queued: `edge`, `unmute`, `run`, `start` |
+| `runner stop macro=... id=... mode=... reason=<why> age=<ms>` | A runner left the list: `finished`, `release`, `toggle`, `next-up`, `ask-stop`, `scan-release`, `edge-release`, `focus`, `disabled`, `orphan`, `restart`, `exclusive`, `stop`, `stop-all`, `command`, `panic`, `overflow`, `unmute`, `frame-cap`, `hold-cap` |
+| `start blocked macro=... id=... mode=... reason=<why>` | A start was refused: `already-running`, `busy`, `runner-cap`, `arena-full`, `no-id`. A `run` step whose target is still live is not logged |
+
+The 2 s state line also carries `arena=<used>/<cap> mutes=<used>/<cap> muted=<id>:<count>,...`. When nothing is running, `arena` and `mutes` are 0.
 
 ## Playback priority
 

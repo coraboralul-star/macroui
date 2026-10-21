@@ -61,7 +61,17 @@ struct engine_cmd_ring {
 struct engine_trigger_mem {
     int need_seed;
     int count;
+    /* The profile image the seed belongs to. prev is by macro index, so a
+       new image reseeds, like AHK sets liveId to Chr(1) on a profile. */
+    uint64_t profile_seq;
     uint8_t prev[ENGINE_TRIGGER_MEM];
+};
+
+/* The triggers AHK would have hooked last tick, and its swallow focus. */
+struct engine_claim_mem {
+    int ready;
+    int swallow;
+    uint8_t claimed[ENGINE_SWALLOW_IDS];
 };
 
 struct engine_state_window {
@@ -69,10 +79,16 @@ struct engine_state_window {
     char title[ENGINE_STATE_TITLE_CAP];
 };
 
-struct engine_report_slot {
-    struct engine_report copy[2];
-    atomic_uint seq;
-    atomic_int index;
+/* Board reports, playback to the IPC thread. One writer, one reader, in
+   publish order. A report is a diff of downs and ups, so dropping one can
+   leave a key held on the board. A full queue refuses and latches. */
+#define ENGINE_REPORT_QUEUE_CAP 256u
+
+struct engine_report_queue {
+    struct engine_report slots[ENGINE_REPORT_QUEUE_CAP];
+    atomic_uint head;
+    atomic_uint tail;
+    atomic_int overflow;
 };
 
 /* Version 1 frames. A leading '{' is JSON. Short, bad magic, and a length
@@ -100,10 +116,14 @@ void engine_trigger_reseed(struct engine_trigger_mem *mem);
 void engine_trigger_seed(struct engine_trigger_mem *mem, const struct engine_live_config *live,
                          const struct engine_fingers *fingers);
 
+/* A new profile image reseeds on the next poll. */
+void engine_trigger_note_profile(struct engine_trigger_mem *mem, uint64_t seq);
+
 /* First ENGINE_TRIGGER_MEM macros. A tapHold or tapSpam block uses whileHeld
    for the edge. Advanced blocks ask-stop when the release should finish the
    pass. A done once-lock does not start the macro again. An open lock starts
-   it once, then the lock is spent. */
+   it once, then the lock is spent. A start needs a down edge, like AHK.
+   A runner that ends while the key is still down is not started again. */
 void engine_poll_triggers(struct engine_play *play, const struct engine_live_config *live,
                           struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
                           const char *front, const char *owner);
@@ -130,18 +150,46 @@ void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_liv
                         const char *front, const char *owner, int armed,
                         const struct engine_play *play);
 
+/* 1 when a live enabled macro with steps triggers on middle or a side button.
+   Left, right, and keyboard triggers do not install the mouse hook. */
+int engine_live_needs_mouse(const struct engine_live_config *live);
+
+/* 1 when an enabled macro with steps uses this id as its trigger. */
+int engine_live_claims(const struct engine_live_config *live, uint16_t id);
+
+void engine_claims_init(struct engine_claim_mem *mem);
+
+/* AHK forgets a trigger's finger when its hotkey goes away: SyncSwallow
+   flipping (focus in or out of the live profile), an output change, a key
+   that is no longer a trigger, and stop. Those keys go back to never
+   reported, so a lost up cannot keep a trigger held. Claims are empty while
+   disarmed. force is the output change. The first call only records.
+   Writes the forgotten ids that were down. Returns how many. */
+int engine_claims_sync(struct engine_claim_mem *mem, const struct engine_live_config *live,
+                       const char *front, const char *owner, int armed, int force,
+                       struct engine_fingers *fingers, uint16_t *out, int cap);
+
 /* 0 when the frame fits. -1 when cap is too small. Held ids without a name
    are omitted. Window extras past the cap are dropped from the front. */
 int engine_state_frame(const struct engine_state_snapshot *snap,
                        const struct engine_state_window *windows, int window_count,
                        unsigned char *buf, int cap);
 
-void engine_report_slot_init(struct engine_report_slot *slot);
-void engine_report_slot_publish(struct engine_report_slot *slot, const struct engine_report *report);
+void engine_report_queue_init(struct engine_report_queue *queue);
 
-/* 1 when seq changed. *seen is updated. */
-int engine_report_slot_take(struct engine_report_slot *slot, uint32_t *seen,
-                            struct engine_report *out);
+/* 1 when stored. 0 sets the overflow latch and stores nothing. */
+int engine_report_queue_push(struct engine_report_queue *queue, const struct engine_report *report);
+int engine_report_queue_pop(struct engine_report_queue *queue, struct engine_report *out);
+
+/* 1 once, then the latch is clear. */
+int engine_report_queue_take_overflow(struct engine_report_queue *queue);
+
+/* Call after the report frame is written. Each down and up in the report
+   gets an echo token that lasts 150 ms from now, so the Pico tap is not a
+   finger. AHK queues the token right after its pipe write. now and freq are
+   QPC. Returns the number of tokens stored. */
+int engine_board_echo_written(struct engine_hook_state *hooks, const struct engine_report *report,
+                              int64_t now, int64_t freq);
 
 /* Header plus the 156-byte image. Returns the byte count, or -1. */
 int engine_report_frame(const struct engine_report *report, unsigned char *buf, int cap);
