@@ -594,7 +594,7 @@ static void check_named_keys(void)
                "e starts the once macro");
         play->runners[0].done = 1;
         engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
-        expect(play->pending_count == 1, "e starts again while the finger stays down");
+        expect(play->pending_count == 0, "e waits for a new down edge, like AHK");
         free(play);
     }
     engine_profile_image_free(image);

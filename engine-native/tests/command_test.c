@@ -817,6 +817,8 @@ static void check_recover(void)
     }
 }
 
+/* AHK PollTriggers starts only on an edge. A runner that ends while the
+   key is still down stays ended until the key comes up and goes down. */
 static void check_held_again(void)
 {
     struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
@@ -860,7 +862,7 @@ static void check_held_again(void)
     engine_play_flush(play);
     play->runners[0].done = 1;
     engine_poll_triggers(play, &live, &mem, &fingers, "ShadowOfMordor.exe", "");
-    expect(play->pending_count == 1, "a hold loop starts again while e stays down");
+    expect(play->pending_count == 0, "a hold loop waits for a new down edge, like AHK");
 
     engine_play_init(play);
     macro.advanced = 0;
@@ -895,7 +897,7 @@ static void check_held_again(void)
     engine_play_flush(play);
     play->runners[0].done = 1;
     engine_poll_triggers(play, &live, &mem, &fingers, "game.exe", "");
-    expect(play->pending_count == 1, "while held starts again while 5 stays down");
+    expect(play->pending_count == 0, "while held waits for a new down edge, like AHK");
     free(play);
 }
 
@@ -1240,6 +1242,74 @@ static void check_report_queue(void)
     expect(decision.enqueued == 1, "a press after the window is a finger");
 }
 
+/* A profile push with the same macro count but a new order. */
+static void check_profile_reseed(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_step tap[5];
+    struct engine_macro first[2];
+    struct engine_macro second[2];
+    struct engine_profile_extra extras[2];
+    struct engine_live_config live_a;
+    struct engine_live_config live_b;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    int64_t now = 1;
+    int starts = 0;
+
+    if (!play) {
+        expect(0, "reseed play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(tap, (uint16_t)'Z');
+    memset(extras, 0, sizeof extras);
+    extras[0].enabled = 1;
+    extras[1].enabled = 1;
+    engine_macro_init(&first[0]);
+    first[0].mode = ENGINE_MODE_ONCE;
+    first[0].advanced = 1;
+    first[0].steps = tap;
+    first[0].step_count = 5;
+    first[0].top_count = 1;
+    first[1] = first[0];
+    snprintf(first[0].id, sizeof first[0].id, "x");
+    first[0].trigger = (uint16_t)'A';
+    snprintf(first[1].id, sizeof first[1].id, "y");
+    first[1].trigger = (uint16_t)'B';
+    second[0] = first[1];
+    second[1] = first[0];
+    memset(&live_a, 0, sizeof live_a);
+    live_a.macros = first;
+    live_a.extras = extras;
+    live_a.macro_count = 2;
+    live_b = live_a;
+    live_b.macros = second;
+
+    engine_play_set_macros(play, first, 2);
+    engine_trigger_init(&mem);
+    engine_trigger_note_profile(&mem, 1);
+    engine_fingers_clear(&fingers);
+    play_ms(play, &live_a, &mem, &fingers, &now, 5, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    play_ms(play, &live_a, &mem, &fingers, &now, 1, &starts);
+    expect(starts == 1, "x starts on a");
+    play_ms(play, &live_a, &mem, &fingers, &now, 5, NULL);
+
+    starts = 0;
+    engine_play_set_macros(play, second, 2);
+    engine_trigger_note_profile(&mem, 2);
+    play_ms(play, &live_b, &mem, &fingers, &now, 5, &starts);
+    expect(starts == 0, "a held across the push does not start x again");
+    engine_trigger_note_profile(&mem, 2);
+    engine_fingers_set(&fingers, (uint16_t)'A', 0);
+    play_ms(play, &live_b, &mem, &fingers, &now, 300, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'B', 1);
+    play_ms(play, &live_b, &mem, &fingers, &now, 1, &starts);
+    expect(starts == 1 && engine_play_has_runner(play, "y"), "b starts y in the new order");
+    free(play);
+}
+
 int main(void)
 {
     check_frames();
@@ -1257,6 +1327,7 @@ int main(void)
     check_mute_compaction();
     check_mute_switch();
     check_report_queue();
+    check_profile_reseed();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

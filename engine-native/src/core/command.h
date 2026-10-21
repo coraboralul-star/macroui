@@ -61,12 +61,10 @@ struct engine_cmd_ring {
 struct engine_trigger_mem {
     int need_seed;
     int count;
+    /* The profile image the seed belongs to. prev is by macro index, so a
+       new image reseeds, like AHK sets liveId to Chr(1) on a profile. */
+    uint64_t profile_seq;
     uint8_t prev[ENGINE_TRIGGER_MEM];
-    /* Set on a real down edge. Cleared on the up and on a reseed.
-       A hold that is still down uses it to start again after the runner
-       stops. The seed poll does not set it, so a key already held at arm
-       stays quiet. */
-    uint8_t latched[ENGINE_TRIGGER_MEM];
 };
 
 struct engine_state_window {
@@ -111,12 +109,14 @@ void engine_trigger_reseed(struct engine_trigger_mem *mem);
 void engine_trigger_seed(struct engine_trigger_mem *mem, const struct engine_live_config *live,
                          const struct engine_fingers *fingers);
 
+/* A new profile image reseeds on the next poll. */
+void engine_trigger_note_profile(struct engine_trigger_mem *mem, uint64_t seq);
+
 /* First ENGINE_TRIGGER_MEM macros. A tapHold or tapSpam block uses whileHeld
    for the edge. Advanced blocks ask-stop when the release should finish the
    pass. A done once-lock does not start the macro again. An open lock starts
-   it once, then the lock is spent. A while-held macro, or a once macro whose
-   block is a hold loop, starts again when that down edge already happened
-   and the finger is still down but the runner is gone. */
+   it once, then the lock is spent. A start needs a down edge, like AHK.
+   A runner that ends while the key is still down is not started again. */
 void engine_poll_triggers(struct engine_play *play, const struct engine_live_config *live,
                           struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
                           const char *front, const char *owner);

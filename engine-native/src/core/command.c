@@ -185,6 +185,14 @@ void engine_trigger_reseed(struct engine_trigger_mem *mem)
     mem->need_seed = 1;
 }
 
+void engine_trigger_note_profile(struct engine_trigger_mem *mem, uint64_t seq)
+{
+    if (!mem || mem->profile_seq == seq)
+        return;
+    mem->profile_seq = seq;
+    mem->need_seed = 1;
+}
+
 static int same_id(const char *a, const char *b)
 {
     if (!a || !b)
@@ -275,20 +283,6 @@ static int holds_on_release(const struct engine_macro *macro, int spam, int tap)
     return macro && (macro->mode == ENGINE_MODE_WHILE_HELD || macro->mode == ENGINE_MODE_TOGGLE);
 }
 
-/* A while-held play, or a once play whose block loops while the finger is
-   down, should be running for the whole hold. Toggle and onRelease stay on
-   the edge. A tapHold block owns its own stop. */
-static int stay_while_down(const struct engine_macro *macro, int edge)
-{
-    if (!macro)
-        return 0;
-    if (macro->mode == ENGINE_MODE_TOGGLE || macro->mode == ENGINE_MODE_ON_RELEASE)
-        return 0;
-    if (has_hold_block(macro))
-        return 1;
-    return !edge && macro->mode == ENGINE_MODE_WHILE_HELD;
-}
-
 static const struct engine_macro *find_macro(const struct engine_live_config *live, const char *id)
 {
     int i;
@@ -372,7 +366,6 @@ void engine_trigger_seed(struct engine_trigger_mem *mem, const struct engine_liv
     if (!mem)
         return;
     memset(mem->prev, 0, sizeof mem->prev);
-    memset(mem->latched, 0, sizeof mem->latched);
     mem->count = 0;
     mem->need_seed = 0;
     if (!live || !live->macros || live->macro_count <= 0)
@@ -413,18 +406,12 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
         int running;
         int once;
         int action;
-        int stay;
 
         if (!macro->id[0])
             continue;
         down = engine_fingers_down(fingers, macro->trigger);
         was = mem->prev[i] ? 1 : 0;
         mem->prev[i] = (uint8_t)(down ? 1 : 0);
-        if (down && !was)
-            mem->latched[i] = 1;
-        if (!down)
-            mem->latched[i] = 0;
-        stay = stay_while_down(macro, edge);
         if (!engine_can_trigger(macro->trigger))
             continue;
         if (engine_play_muted(play, macro->id))
@@ -455,8 +442,6 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
             } else if (!down && running && once != ENGINE_LOCK_OPEN &&
                        holds_on_release(macro, spam, tap)) {
                 engine_play_ask_stop(play, macro->id);
-            } else if (stay && down && mem->latched[i] && !running && once == ENGINE_LOCK_NONE) {
-                engine_play_start(play, macro, -1, 1);
             }
             continue;
         }
@@ -470,8 +455,6 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
                 engine_once_spend(play, macro->id);
         } else if (action == ENGINE_TRIGGER_STOP) {
             engine_play_stop(play, macro->id);
-        } else if (stay && down && mem->latched[i] && !running && once == ENGINE_LOCK_NONE) {
-            engine_play_start(play, macro, edge ? ENGINE_MODE_WHILE_HELD : -1, 1);
         }
     }
 }

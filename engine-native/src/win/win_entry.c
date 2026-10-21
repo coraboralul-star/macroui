@@ -1263,6 +1263,9 @@ static void playback_tick(int64_t now)
         g.profile_seq = seq;
         engine_reap_orphans(g.play, &live);
     }
+    /* AHK sets liveId to Chr(1) on a profile, so SeedTriggers runs. prev is
+       by macro index, and a new image can reorder or retrigger macros. */
+    engine_trigger_note_profile(&g.triggers, seq);
     /* A new profile image is parsed on the IPC thread, so it does not stall
        the hook thread. Reseed only when the live config changes, which is
        when ApplyLiveConfig seeds. A reinstall must not clear a held trigger.
