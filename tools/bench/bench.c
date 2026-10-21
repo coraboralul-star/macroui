@@ -88,6 +88,9 @@ static double *g_line_ms;
 static double *g_report_ms;
 static long g_lines_done;
 static long g_hid_seen;
+static long g_reply_ok;
+static long g_reply_busy;
+static long g_reply_other;
 
 static void trace(const char *fmt, ...) {
     va_list ap;
@@ -802,6 +805,12 @@ static void forward_names(const char *json, const char *field, int down, long lo
                 if (g_line_n < 200000)
                     g_line_ms[g_line_n++] = ms;
                 g_lines_done++;
+                if (strncmp(reply, "ok", 2) == 0)
+                    g_reply_ok++;
+                else if (strncmp(reply, "hid-busy", 8) == 0)
+                    g_reply_busy++;
+                else
+                    g_reply_other++;
                 if (last_ok)
                     *last_ok = qpc_now();
             }
@@ -1738,6 +1747,9 @@ static void test_board_spam(void) {
     g_report_n = 0;
     g_lines_done = 0;
     g_hid_seen = 0;
+    g_reply_ok = 0;
+    g_reply_busy = 0;
+    g_reply_other = 0;
     g_forward = 1;
     say("board spam %d s", g_seconds);
     sleep_watch(g_seconds * 1000, &cpu, &sw);
@@ -1753,7 +1765,9 @@ static void test_board_spam(void) {
     snprintf(note, sizeof note, "hid read to last ok of that report; %s; hid=%ld", mode, g_hid_seen);
     csv_row("board", "emit-to-ok", g_report_n, p50, p95, p99, mx, mean, cpu, sw, lines, -1, -1, (int)g_hid_seen,
         g_report_n > 0 ? "ok" : "fail", note);
-    snprintf(note, sizeof note, "one serial K line to its ok reply");
+    snprintf(note, sizeof note, "one serial K line to its reply; ok=%ld hid-busy=%ld other=%ld",
+        g_reply_ok, g_reply_busy, g_reply_other);
+    say("board replies ok=%ld hid-busy=%ld other=%ld", g_reply_ok, g_reply_busy, g_reply_other);
     csv_row("board", "line-to-ok", g_line_n, lp50, lp95, lp99, lmx, lmean, cpu, sw, lines, -1, -1, (int)g_lines_done,
         g_line_n > 0 ? "ok" : "fail", note);
 }
