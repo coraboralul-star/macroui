@@ -4,7 +4,7 @@
 
 The fake clock is the caller. `engine_runner_advance` takes `now` in the same unit as the QPC frequency stored on the runner. `engine-runner-test` uses frequency 1000, so the self-test's millisecond numbers land on the same integers. A frequency of 10000000 is checked once, and the wait becomes `scaled_ms * freq / 1000` with the truncation in `docs/engine/architecture.md`. The runner does not read the clock.
 
-`Advance` does not allocate. The caps are 32 runners, 16 frames, 64 holds, and 256 steps in the play arena. The arena is not reused until `engine_play_init`. Profile load replaces it with the immutable image. A full runner list, or a full arena, refuses the new start and does not stop the others. A full frame stack marks that runner done. A full hold list does the same. The AHK maps grow. These caps are the native bound.
+`Advance` does not allocate. The caps are 32 runners, 16 frames, 64 holds, 1024 steps in the play arena, and 1024 mute ids. A start copies the macro's steps and mute ids into those two tables. `engine_play_remove_done` compacts both: a done runner's spans are dropped and the live and pending runners slide down. A start that does not fit compacts once more before it is refused. Before this, the arena was never reused, so about 50 starts of a 5-step macro filled it and every later start was refused until the engine restarted. A full runner list, or tables that are still full after compaction, refuse the new start and do not stop the others. A full frame stack marks that runner done. A full hold list does the same. The AHK maps grow. These caps are the native bound.
 
 ## Ported
 

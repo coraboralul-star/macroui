@@ -899,6 +899,208 @@ static void check_held_again(void)
     free(play);
 }
 
+/* Ability in Overwatch Test: once, one onceHeld block that taps r. Five steps. */
+static void build_tap_block(struct engine_step *steps, uint16_t key)
+{
+    memset(steps, 0, 5 * sizeof *steps);
+    steps[0].type = ENGINE_STEP_ONCE_HELD;
+    steps[0].first = 1;
+    steps[0].count = 4;
+    steps[0].a = 150;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = key;
+    steps[2].type = ENGINE_STEP_WAIT;
+    steps[2].a = 18;
+    steps[3].type = ENGINE_STEP_KEY;
+    steps[3].action = ENGINE_ACT_UP;
+    steps[3].key = key;
+    steps[4].type = ENGINE_STEP_WAIT;
+    steps[4].a = 18;
+}
+
+/* One playback tick per millisecond: poll, then tick, like playback_tick. */
+static void play_ms(struct engine_play *play, const struct engine_live_config *live,
+                    struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
+                    int64_t *now, int ms, int *starts)
+{
+    int i;
+
+    for (i = 0; i < ms; i++) {
+        engine_play_set_fingers(play, fingers);
+        engine_poll_triggers(play, live, mem, fingers, "Overwatch.exe", "");
+        if (starts)
+            *starts += play->pending_count;
+        engine_play_tick(play, *now);
+        (*now)++;
+    }
+}
+
+static void check_many_starts(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_step tap[5];
+    struct engine_step loop[5];
+    struct engine_macro macros[2];
+    struct engine_profile_extra extras[2];
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    int64_t now = 1;
+    int starts = 0;
+    int typed = 0;
+    int i;
+
+    if (!play) {
+        expect(0, "many play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(tap, (uint16_t)'R');
+    build_tap_block(loop, (uint16_t)'A');
+    loop[0].type = ENGINE_STEP_HOLD_LOOP;
+    loop[0].a = 0;
+    memset(extras, 0, sizeof extras);
+    engine_macro_init(&macros[0]);
+    engine_macro_init(&macros[1]);
+    snprintf(macros[0].id, sizeof macros[0].id, "ability");
+    macros[0].mode = ENGINE_MODE_ONCE;
+    macros[0].advanced = 1;
+    macros[0].trigger = (uint16_t)'R';
+    macros[0].steps = tap;
+    macros[0].step_count = 5;
+    macros[0].top_count = 1;
+    snprintf(macros[1].id, sizeof macros[1].id, "reload");
+    macros[1].mode = ENGINE_MODE_WHILE_HELD;
+    macros[1].advanced = 1;
+    macros[1].trigger = (uint16_t)'A';
+    macros[1].steps = loop;
+    macros[1].step_count = 5;
+    macros[1].top_count = 1;
+    extras[0].enabled = 1;
+    extras[1].enabled = 1;
+    memset(&live, 0, sizeof live);
+    live.macros = macros;
+    live.extras = extras;
+    live.macro_count = 2;
+    engine_play_set_macros(play, macros, 2);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+
+    /* Reload stays held for the whole run, so its runner never leaves. */
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 5, &starts);
+    expect(starts == 1, "reload starts once and stays");
+    starts = 0;
+    for (i = 0; i < 500; i++) {
+        engine_fingers_set(&fingers, (uint16_t)'R', 1);
+        play_ms(play, &live, &mem, &fingers, &now, 1, &starts);
+        if (engine_play_has_runner(play, "ability"))
+            typed++;
+        play_ms(play, &live, &mem, &fingers, &now, 40, NULL);
+        engine_fingers_set(&fingers, (uint16_t)'R', 0);
+        play_ms(play, &live, &mem, &fingers, &now, 260, NULL);
+    }
+    expect(starts == 500, "500 taps of r start 500 runners");
+    expect(typed == 500, "every tap of r is running on its press tick");
+    expect(engine_play_has_runner(play, "reload"), "the held reload runner is still alive");
+    engine_fingers_set(&fingers, (uint16_t)'A', 0);
+    play_ms(play, &live, &mem, &fingers, &now, 100, NULL);
+    expect(engine_play_alive(play) == 0, "nothing runs once both keys are up");
+    expect(play->arena_count == 0, "the arena is empty when idle");
+    expect(play->mute_count == 0, "the mute table is empty when idle");
+    if (starts != 500)
+        fprintf(stderr, "many starts: %d of 500\n", starts);
+    free(play);
+}
+
+static void check_mute_compaction(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_step hold_x[5];
+    struct engine_step hold_y[5];
+    struct engine_step tap[5];
+    struct engine_macro macros[4];
+    struct engine_profile_extra extras[4];
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    static const int32_t mute_b[1] = { 2 };
+    static const int32_t mute_c[1] = { 3 };
+    const char *ids[4] = { "x", "y", "b", "c" };
+    const uint16_t keys[4] = { (uint16_t)'X', (uint16_t)'Y', (uint16_t)'B', (uint16_t)'C' };
+    int64_t now = 1;
+    int starts = 0;
+    int i;
+
+    if (!play) {
+        expect(0, "mute play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(hold_x, (uint16_t)'Q');
+    hold_x[0].type = ENGINE_STEP_HOLD_LOOP;
+    hold_x[0].a = 0;
+    hold_x[0].mute_n = 1;
+    memcpy(hold_y, hold_x, sizeof hold_y);
+    build_tap_block(tap, (uint16_t)'Z');
+    memset(extras, 0, sizeof extras);
+    for (i = 0; i < 4; i++) {
+        engine_macro_init(&macros[i]);
+        snprintf(macros[i].id, sizeof macros[i].id, "%s", ids[i]);
+        macros[i].mode = ENGINE_MODE_WHILE_HELD;
+        macros[i].advanced = 1;
+        macros[i].trigger = keys[i];
+        macros[i].steps = i == 0 ? hold_x : i == 1 ? hold_y : tap;
+        macros[i].step_count = 5;
+        macros[i].top_count = 1;
+        extras[i].enabled = 1;
+    }
+    macros[0].mutes = mute_b;
+    macros[0].mute_count = 1;
+    macros[1].mutes = mute_c;
+    macros[1].mute_count = 1;
+    memset(&live, 0, sizeof live);
+    live.macros = macros;
+    live.extras = extras;
+    live.macro_count = 4;
+    engine_play_set_macros(play, macros, 4);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+
+    /* y holds the first mute slot, x the second. */
+    engine_fingers_set(&fingers, (uint16_t)'Y', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+    engine_fingers_set(&fingers, (uint16_t)'X', 1);
+    play_ms(play, &live, &mem, &fingers, &now, 5, NULL);
+    expect(engine_play_muted(play, "b") && engine_play_muted(play, "c"), "x mutes b and y mutes c");
+    engine_fingers_set(&fingers, (uint16_t)'Y', 0);
+    play_ms(play, &live, &mem, &fingers, &now, 100, NULL);
+    expect(!engine_play_muted(play, "c") && engine_play_muted(play, "b"),
+           "y ending unmutes c and leaves b muted");
+    /* x's mute span slid down. Its release must still name b. */
+    for (i = 0; i < 300; i++) {
+        engine_fingers_set(&fingers, (uint16_t)'Y', 1);
+        play_ms(play, &live, &mem, &fingers, &now, 1, &starts);
+        play_ms(play, &live, &mem, &fingers, &now, 30, NULL);
+        engine_fingers_set(&fingers, (uint16_t)'Y', 0);
+        play_ms(play, &live, &mem, &fingers, &now, 60, NULL);
+    }
+    expect(starts == 300, "300 starts of a muting hold loop all start");
+    expect(engine_play_muted(play, "b") && !engine_play_muted(play, "c"), "b is still muted by x");
+    engine_fingers_set(&fingers, (uint16_t)'X', 0);
+    play_ms(play, &live, &mem, &fingers, &now, 100, NULL);
+    expect(!engine_play_muted(play, "b") && !engine_play_muted(play, "c"), "x ending unmutes b");
+    expect(play->mute_count == 0 && play->arena_count == 0, "both tables are empty when idle");
+    engine_fingers_set(&fingers, (uint16_t)'B', 1);
+    starts = 0;
+    play_ms(play, &live, &mem, &fingers, &now, 1, &starts);
+    expect(starts == 1, "b starts after the mute is gone");
+    free(play);
+}
+
 int main(void)
 {
     check_frames();
@@ -912,6 +1114,8 @@ int main(void)
     check_mouse_triggers();
     check_recover();
     check_held_again();
+    check_many_starts();
+    check_mute_compaction();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

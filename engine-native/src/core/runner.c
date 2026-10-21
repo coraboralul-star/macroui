@@ -2062,6 +2062,136 @@ static int arena_fits(const struct engine_play *play, uint32_t count)
     return play->arena_count <= ENGINE_STEP_CAP - count;
 }
 
+static int owns_arena(const struct engine_play *play, const struct engine_runner *runner)
+{
+    return runner->steps && runner->steps >= play->arena &&
+           runner->steps <= play->arena + ENGINE_STEP_CAP;
+}
+
+static void drop_spans(struct engine_runner *runner)
+{
+    runner->steps = NULL;
+    runner->step_count = 0;
+    runner->mute_first = 0;
+    runner->mute_len = 0;
+}
+
+/* A done runner never reads its steps again. Publish reads only its move,
+   wheel, and goto. So its spans are dropped, and live runners and pending
+   runners slide down. AHK built a new object per start and had no cap. */
+static void arena_compact(struct engine_play *play)
+{
+    struct engine_runner *owners[ENGINE_RUNNER_CAP * 2];
+    uint32_t at;
+    int n = 0;
+    int i;
+    int j;
+
+    for (i = 0; i < play->runner_count; i++) {
+        struct engine_runner *runner = &play->runners[i];
+
+        if (runner->done || !owns_arena(play, runner))
+            drop_spans(runner);
+        else
+            owners[n++] = runner;
+    }
+    for (i = 0; i < play->pending_count; i++) {
+        struct engine_runner *runner = &play->pending[i];
+
+        if (runner->done || !owns_arena(play, runner))
+            drop_spans(runner);
+        else
+            owners[n++] = runner;
+    }
+    for (i = 1; i < n; i++) {
+        struct engine_runner *hold = owners[i];
+
+        for (j = i; j > 0 && owners[j - 1]->steps > hold->steps; j--)
+            owners[j] = owners[j - 1];
+        owners[j] = hold;
+    }
+    at = 0;
+    for (i = 0; i < n; i++) {
+        uint32_t from = (uint32_t)(owners[i]->steps - play->arena);
+
+        if (from != at && owners[i]->step_count > 0)
+            memmove(play->arena + at, play->arena + from,
+                    owners[i]->step_count * sizeof play->arena[0]);
+        owners[i]->steps = play->arena + at;
+        at += owners[i]->step_count;
+    }
+    play->arena_count = at;
+
+    for (i = 1; i < n; i++) {
+        struct engine_runner *hold = owners[i];
+
+        for (j = i; j > 0 && owners[j - 1]->mute_first > hold->mute_first; j--)
+            owners[j] = owners[j - 1];
+        owners[j] = hold;
+    }
+    at = 0;
+    for (i = 0; i < n; i++) {
+        struct engine_runner *runner = owners[i];
+        uint32_t from = runner->mute_first;
+        uint32_t shift;
+        uint32_t k;
+
+        if (runner->mute_len == 0) {
+            runner->mute_first = 0;
+            continue;
+        }
+        if (from != at)
+            memmove(play->mute_ids + at, play->mute_ids + from,
+                    runner->mute_len * sizeof play->mute_ids[0]);
+        shift = from - at;
+        if (shift != 0) {
+            /* The runner's own copy of its steps names mute_ids by index. */
+            struct engine_step *steps = (struct engine_step *)runner->steps;
+
+            for (k = 0; k < runner->step_count; k++) {
+                if ((steps[k].type == ENGINE_STEP_HOLD_LOOP ||
+                     steps[k].type == ENGINE_STEP_SWAP_LOOP) && steps[k].mute_n > 0)
+                    steps[k].mute_at = (uint16_t)(steps[k].mute_at - shift);
+            }
+            for (k = 0; k < (uint32_t)runner->stack_count; k++) {
+                if (runner->stack[k].mute_n > 0)
+                    runner->stack[k].mute_at = (uint16_t)(runner->stack[k].mute_at - shift);
+            }
+        }
+        runner->mute_first = at;
+        at += runner->mute_len;
+    }
+    play->mute_count = at;
+}
+
+static uint32_t mutes_needed(const struct engine_step *steps, uint32_t count,
+                             const int32_t *mutes, uint32_t mute_count)
+{
+    uint32_t need = 0;
+    uint32_t i;
+
+    for (i = 0; i < count; i++) {
+        if (steps[i].type != ENGINE_STEP_HOLD_LOOP && steps[i].type != ENGINE_STEP_SWAP_LOOP)
+            continue;
+        if (steps[i].mute_n == 0 || !mutes || steps[i].mute_at > mute_count ||
+            steps[i].mute_n > mute_count - steps[i].mute_at)
+            continue;
+        need += steps[i].mute_n;
+    }
+    return need;
+}
+
+/* Compacts once when the new start would not fit. */
+static int room_for(struct engine_play *play, uint32_t steps, uint32_t mutes)
+{
+    if (steps > ENGINE_STEP_CAP || mutes > ENGINE_MUTE_ID_CAP)
+        return 0;
+    if (arena_fits(play, steps) && play->mute_count <= ENGINE_MUTE_ID_CAP - mutes)
+        return 1;
+    arena_compact(play);
+    return arena_fits(play, steps) && play->mute_count <= ENGINE_MUTE_ID_CAP - mutes;
+}
+
 /* Copies holdLoop and swapLoop mute indexes into the play table and rewrites
    the step. An invalid span is dropped. A full table refuses the start. */
 static int rebase_hold_mutes(struct engine_play *play, struct engine_step *steps, uint32_t count,
@@ -2106,6 +2236,7 @@ static int queue_runner(struct engine_play *play, const struct engine_macro *mac
     uint32_t count;
     uint32_t top;
     uint32_t offset;
+    uint32_t mute_first;
     int basic_count;
     int hold;
 
@@ -2132,10 +2263,11 @@ static int queue_runner(struct engine_play *play, const struct engine_macro *mac
         top = count;
     if (top > count)
         top = count;
-    if (!arena_fits(play, count))
+    if (!room_for(play, count, mutes_needed(src, count, macro->mutes, macro->mute_count)))
         return 0;
 
     offset = play->arena_count;
+    mute_first = play->mute_count;
     if (count > 0)
         memcpy(play->arena + offset, src, count * sizeof *src);
     play->arena_count += count;
@@ -2152,6 +2284,8 @@ static int queue_runner(struct engine_play *play, const struct engine_macro *mac
     runner->started_at = -1;
     runner->steps = play->arena + offset;
     runner->step_count = count;
+    runner->mute_first = mute_first;
+    runner->mute_len = play->mute_count - mute_first;
     runner->mode = mode;
     runner->release_stop = macro->release_stop == ENGINE_STOP_FINISH
                                ? ENGINE_STOP_FINISH
@@ -2374,7 +2508,7 @@ int engine_play_start(struct engine_play *play, const struct engine_macro *macro
         return 0;
     if (play->runner_count + play->pending_count >= ENGINE_RUNNER_CAP)
         return 0;
-    if (!arena_fits(play, macro_step_count(macro)))
+    if (!room_for(play, macro_step_count(macro), 0))
         return 0;
     mode = mode_override >= 0 ? mode_override : macro->mode;
     if (playing(play, id) && !restart)
@@ -2716,6 +2850,7 @@ void engine_play_remove_done(struct engine_play *play)
         write++;
     }
     play->runner_count = write;
+    arena_compact(play);
     engine_once_refresh(play);
 }
 

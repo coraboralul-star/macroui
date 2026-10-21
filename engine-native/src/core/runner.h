@@ -12,9 +12,9 @@
 #define ENGINE_RUNNER_CAP 32
 #define ENGINE_FRAME_CAP 16
 #define ENGINE_HOLD_CAP 64
-#define ENGINE_STEP_CAP 256
+#define ENGINE_STEP_CAP 1024
 #define ENGINE_ID_CAP 64
-#define ENGINE_MUTE_ID_CAP 256
+#define ENGINE_MUTE_ID_CAP 1024
 #define ENGINE_MUTE_SLOT_CAP 64
 #define ENGINE_ONCE_CAP 64
 #define ENGINE_LOCK_NONE 0
@@ -228,6 +228,10 @@ struct engine_runner {
     int32_t cycles;
     int took_short;
     uint16_t trigger;
+    /* This runner's span of play->mute_ids. The arena and the mute table
+       are compacted when runners finish, so both spans move. */
+    uint32_t mute_first;
+    uint32_t mute_len;
 };
 
 /* top_count 0 means the whole pool is the top frame.
