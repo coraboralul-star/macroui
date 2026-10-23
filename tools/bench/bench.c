@@ -246,6 +246,81 @@ static int running_count(const char *s) {
 }
 
 static void on_hid(const char *s, long long t_msg);
+static void on_report(const unsigned char *p, DWORD n, long long t_msg);
+
+/* Native frames, docs/engine/ipc-protocol.md. The tests still build the AHK
+   JSON messages. pipe_write turns them into frames once hello said MUI1. */
+#define FRAME_HELLO 1
+#define FRAME_STATE 2
+#define FRAME_ACK 3
+#define FRAME_REPORT 5
+#define FRAME_PROFILE 6
+#define FRAME_OUTPUT 7
+#define FRAME_COMMAND 8
+
+static volatile long g_native;
+
+static unsigned rd16(const unsigned char *p) {
+    return (unsigned)p[0] | ((unsigned)p[1] << 8);
+}
+
+static unsigned long rd32(const unsigned char *p) {
+    return (unsigned long)p[0] | ((unsigned long)p[1] << 8) | ((unsigned long)p[2] << 16) | ((unsigned long)p[3] << 24);
+}
+
+/* A string is a u16 count, then the bytes. Returns the bytes used, or -1. */
+static int frame_string(const unsigned char *p, DWORD left, char *out, int cap) {
+    unsigned n;
+    if (left < 2)
+        return -1;
+    n = rd16(p);
+    if (n + 2 > left)
+        return -1;
+    if (out && cap > 0) {
+        int c = (int)n < cap - 1 ? (int)n : cap - 1;
+        memcpy(out, p + 2, (size_t)c);
+        out[c] = 0;
+    }
+    return (int)n + 2;
+}
+
+static void on_frame(const unsigned char *buf, DWORD n, long long t) {
+    unsigned type;
+    unsigned long len;
+    const unsigned char *p = buf + 12;
+    if (n < 12)
+        return;
+    type = rd16(buf + 6);
+    len = rd32(buf + 8);
+    if (len + 12 != n)
+        return;
+    if (type == FRAME_HELLO) {
+        g_native = 1;
+        g_hello = 1;
+    } else if (type == FRAME_ACK && len >= 2) {
+        const char *whom = p[1] == 1 ? "command" : (p[1] == 2 ? "profile" : "");
+        EnterCriticalSection(&g_cs);
+        g_ack_qpc = t;
+        g_ack_ok = p[0] == 1;
+        strncpy(g_ack_for, whom, sizeof g_ack_for - 1);
+        g_ack_for[sizeof g_ack_for - 1] = 0;
+        LeaveCriticalSection(&g_cs);
+    } else if (type == FRAME_STATE && len >= 8) {
+        char front[128];
+        int used = frame_string(p + 8, len - 8, NULL, 0);
+        int got;
+        g_running = (long)rd16(p + 2);
+        if (used < 0)
+            return;
+        got = frame_string(p + 8 + used, len - 8 - used, front, sizeof front);
+        if (got > 0 && front[0]) {
+            strncpy(g_front, front, sizeof g_front - 1);
+            g_front[sizeof g_front - 1] = 0;
+        }
+    } else if (type == FRAME_REPORT && len == 156) {
+        on_report(p, len, t);
+    }
+}
 
 static DWORD WINAPI reader_thread(LPVOID unused) {
     char *buf = (char *)malloc(1024 * 1024);
@@ -275,6 +350,10 @@ static DWORD WINAPI reader_thread(LPVOID unused) {
         }
         buf[n] = 0;
         t = qpc_now();
+        if (n >= 4 && memcmp(buf, "MUI1", 4) == 0) {
+            on_frame((const unsigned char *)buf, n, t);
+            continue;
+        }
         json_field(buf, "type", type, sizeof type);
         if (strcmp(type, "hello") == 0) {
             g_hello = 1;
@@ -306,13 +385,11 @@ static DWORD WINAPI reader_thread(LPVOID unused) {
     return 0;
 }
 
-static int pipe_write(const char *s) {
+static int pipe_write_bytes(const void *s, DWORD n) {
     OVERLAPPED ov;
-    DWORD n;
     DWORD w = 0;
     if (g_pipe == INVALID_HANDLE_VALUE)
         return 0;
-    n = (DWORD)strlen(s);
     memset(&ov, 0, sizeof ov);
     ov.hEvent = g_write_ev;
     ResetEvent(g_write_ev);
@@ -327,6 +404,78 @@ static int pipe_write(const char *s) {
             return 0;
     }
     return w == n;
+}
+
+static int write_frame(unsigned type, const void *payload, DWORD len) {
+    unsigned char *f = (unsigned char *)malloc((size_t)len + 12);
+    int ok;
+    if (!f)
+        return 0;
+    memcpy(f, "MUI1", 4);
+    f[4] = 1;
+    f[5] = 0;
+    f[6] = (unsigned char)(type & 0xFF);
+    f[7] = (unsigned char)(type >> 8);
+    f[8] = (unsigned char)(len & 0xFF);
+    f[9] = (unsigned char)((len >> 8) & 0xFF);
+    f[10] = (unsigned char)((len >> 16) & 0xFF);
+    f[11] = (unsigned char)(len >> 24);
+    if (len)
+        memcpy(f + 12, payload, len);
+    ok = pipe_write_bytes(f, len + 12);
+    free(f);
+    return ok;
+}
+
+/* The bench's own JSON messages as frames. A profile message is
+   {"v":1,"type":"profile","profile":DOC}, and the frame carries DOC. */
+static int native_send(const char *s) {
+    char type[32];
+    char word[32];
+    unsigned char b;
+    json_field(s, "type", type, sizeof type);
+    if (strcmp(type, "command") == 0) {
+        json_field(s, "action", word, sizeof word);
+        b = strcmp(word, "start") == 0 ? 1 : strcmp(word, "stop") == 0 ? 2
+            : strcmp(word, "reload") == 0 ? 3 : strcmp(word, "quit") == 0 ? 4 : 0;
+        return write_frame(FRAME_COMMAND, &b, 1);
+    }
+    if (strcmp(type, "output") == 0) {
+        json_field(s, "mode", word, sizeof word);
+        b = strcmp(word, "rp2040") == 0 ? 1 : strcmp(word, "rp2350") == 0 ? 2 : 0;
+        return write_frame(FRAME_OUTPUT, &b, 1);
+    }
+    if (strcmp(type, "profile") == 0) {
+        const char *doc = strstr(s, "\"profile\":{");
+        const char *end = strrchr(s, '}');
+        unsigned char *payload;
+        DWORD n;
+        int ok;
+        if (!doc || !end)
+            return 0;
+        doc += strlen("\"profile\":");
+        if (end <= doc)
+            return 0;
+        n = (DWORD)(end - doc);
+        payload = (unsigned char *)malloc((size_t)n + 4);
+        if (!payload)
+            return 0;
+        payload[0] = (unsigned char)(n & 0xFF);
+        payload[1] = (unsigned char)((n >> 8) & 0xFF);
+        payload[2] = (unsigned char)((n >> 16) & 0xFF);
+        payload[3] = (unsigned char)(n >> 24);
+        memcpy(payload + 4, doc, n);
+        ok = write_frame(FRAME_PROFILE, payload, n + 4);
+        free(payload);
+        return ok;
+    }
+    return 0;
+}
+
+static int pipe_write(const char *s) {
+    if (g_native)
+        return native_send(s);
+    return pipe_write_bytes(s, (DWORD)strlen(s));
 }
 
 static int wait_ack_after(long long after, const char *whom, int timeout_ms, long long *when, int *ok) {
@@ -388,6 +537,7 @@ static int connect_pipe(void) {
     }
     g_pipe_dead = 0;
     g_hello = 0;
+    g_native = 0;
     g_reader = CreateThread(NULL, 0, reader_thread, NULL, 0, NULL);
     {
         long long t0 = qpc_now();
@@ -439,8 +589,11 @@ static int start_engine(void) {
     si.wShowWindow = SW_HIDE;
     wide_path(g_repo, cwd, MAX_PATH);
     if (g_engine_exe[0]) {
+        /* The shell passes --profile, and reload reads it. AHK reads the
+           same file without being told. */
         wide_path(g_engine_exe, exe, MAX_PATH);
-        _snwprintf(cmd, 2048, L"\"%s\"", exe);
+        wide_path(g_profile_path, script, MAX_PATH);
+        _snwprintf(cmd, 2048, L"\"%s\" --profile \"%s\"", exe, script);
     } else {
         snprintf(script_a, sizeof script_a, "%s\\engine\\MacroEngine.ahk", g_repo);
         wide_path(g_ahk, ahk, MAX_PATH);
@@ -762,6 +915,28 @@ static int usage_of(const char *name) {
     return -1;
 }
 
+static void forward_key(int usage, int down, long long *last_ok) {
+    char line[64];
+    char reply[64];
+    long long t0;
+    snprintf(line, sizeof line, "K %d %d\n", usage, down);
+    t0 = qpc_now();
+    if (board_cmd(line, reply, sizeof reply)) {
+        double ms = qpc_ms(t0, qpc_now());
+        if (g_line_n < 200000)
+            g_line_ms[g_line_n++] = ms;
+        g_lines_done++;
+        if (strncmp(reply, "ok", 2) == 0)
+            g_reply_ok++;
+        else if (strncmp(reply, "hid-busy", 8) == 0)
+            g_reply_busy++;
+        else
+            g_reply_other++;
+        if (last_ok)
+            *last_ok = qpc_now();
+    }
+}
+
 static void forward_names(const char *json, const char *field, int down, long long *last_ok) {
     char pat[32];
     const char *p;
@@ -780,9 +955,6 @@ static void forward_names(const char *json, const char *field, int down, long lo
         char name[32];
         int n;
         int usage;
-        char line[64];
-        char reply[64];
-        long long t0;
         if (*p != '"') {
             p++;
             continue;
@@ -797,25 +969,32 @@ static void forward_names(const char *json, const char *field, int down, long lo
         memcpy(name, q1, n);
         name[n] = 0;
         usage = usage_of(name);
-        if (usage >= 0) {
-            snprintf(line, sizeof line, "K %d %d\n", usage, down);
-            t0 = qpc_now();
-            if (board_cmd(line, reply, sizeof reply)) {
-                double ms = qpc_ms(t0, qpc_now());
-                if (g_line_n < 200000)
-                    g_line_ms[g_line_n++] = ms;
-                g_lines_done++;
-                if (strncmp(reply, "ok", 2) == 0)
-                    g_reply_ok++;
-                else if (strncmp(reply, "hid-busy", 8) == 0)
-                    g_reply_busy++;
-                else
-                    g_reply_other++;
-                if (last_ok)
-                    *last_ok = qpc_now();
-            }
-        }
+        if (usage >= 0)
+            forward_key(usage, down, last_ok);
         p = q2 + 1;
+    }
+}
+
+/* Native key ids are virtual keys (engine_key_id). Only the letters and F
+   keys the bench presses are mapped, the same set as usage_of. */
+static int usage_of_id(unsigned id) {
+    if (id >= 0x41 && id <= 0x5A)
+        return 0x04 + (int)(id - 0x41);
+    if (id >= 0x70 && id <= 0x7B)
+        return 0x3A + (int)(id - 0x70);
+    if (id >= 0x7C && id <= 0x87)
+        return 0x68 + (int)(id - 0x7C);
+    return -1;
+}
+
+static void forward_ids(const unsigned char *list, int count, int down, long long *last_ok) {
+    int i;
+    if (count > 32)
+        count = 32;
+    for (i = 0; i < count; i++) {
+        int usage = usage_of_id(rd16(list + i * 2));
+        if (usage >= 0)
+            forward_key(usage, down, last_ok);
     }
 }
 
@@ -826,6 +1005,20 @@ static void on_hid(const char *s, long long t_msg) {
     g_hid_seen++;
     forward_names(s, "down", 1, &last);
     forward_names(s, "up", 0, &last);
+    if (last && g_report_n < 100000)
+        g_report_ms[g_report_n++] = qpc_ms(t_msg, last);
+}
+
+/* Downs, then ups, like shell/ReportBoard.cs. The bench macros never move
+   the mouse. */
+static void on_report(const unsigned char *p, DWORD n, long long t_msg) {
+    long long last = 0;
+    (void)n;
+    if (!g_forward)
+        return;
+    g_hid_seen++;
+    forward_ids(p + 4, p[0], 1, &last);
+    forward_ids(p + 68, p[1], 0, &last);
     if (last && g_report_n < 100000)
         g_report_ms[g_report_n++] = qpc_ms(t_msg, last);
 }
@@ -1105,12 +1298,11 @@ static char *cpu_profile(int count) {
         return NULL;
     used = (size_t)snprintf(s, cap,
         "{\"v\":1,\"type\":\"profile\",\"profile\":{\"version\":1,\"name\":\"bench\",\"variables\":{},\"macros\":[");
-    for (i = 0; i < count; i++) {
+    /* F14 to F24, one key each. Native has no vkXX names, so 11 is the most
+       both engines can press without sharing a key. */
+    for (i = 0; i < count && i < 11; i++) {
         char key[16];
-        if (i < 11)
-            snprintf(key, sizeof key, "F%d", 14 + i);
-        else
-            snprintf(key, sizeof key, "vk%02X", 0x88 + (i - 11));
+        snprintf(key, sizeof key, "F%d", 14 + i);
         used += (size_t)snprintf(s + used, cap - used,
             "%s{\"id\":\"cpu-%d\",\"name\":\"cpu-%d\",\"enabled\":true,\"speed\":1,"
             "\"playMode\":\"repeat\",\"repeatCount\":200000,\"exclusive\":false,\"busy\":false,"
@@ -2031,7 +2223,7 @@ int main(int argc, char **argv) {
         if (!g_only[0] || strcmp(g_only, "cpu") == 0) {
             test_cpu(1);
             test_cpu(4);
-            test_cpu(16);
+            test_cpu(11);
         }
         if (!g_only[0] || strcmp(g_only, "board") == 0)
             test_board_spam();
