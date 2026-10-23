@@ -1,7 +1,7 @@
 # -Engine native skips AutoHotkey. The launcher passes the engine the shell
-# will start. The default stays ahk for anything that runs this without it.
+# will start. Native is the default, like the shell.
 param(
-    [ValidateSet("ahk", "native")][string]$Engine = "ahk"
+    [ValidateSet("ahk", "native")][string]$Engine = "native"
 )
 
 $ErrorActionPreference = "Stop"
