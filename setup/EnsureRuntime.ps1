@@ -1,3 +1,9 @@
+# -Engine native skips AutoHotkey. The launcher passes the engine the shell
+# will start. The default stays ahk for anything that runs this without it.
+param(
+    [ValidateSet("ahk", "native")][string]$Engine = "ahk"
+)
+
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
@@ -26,14 +32,14 @@ function Test-WebView {
 }
 
 function Test-Ready {
-    (Test-Ahk) -and (Test-DotNet) -and (Test-WebView)
+    (($Engine -ne "ahk") -or (Test-Ahk)) -and (Test-DotNet) -and (Test-WebView)
 }
 
 if (Test-Ready) { exit 0 }
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    $args = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    $args = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Engine $Engine"
     try {
         $proc = Start-Process -FilePath "powershell.exe" -ArgumentList $args -Verb RunAs -Wait -PassThru -WindowStyle Hidden
     } catch {
@@ -72,7 +78,7 @@ if (-not (Test-WebView)) {
     Invoke-Installer $exe "/silent /install"
 }
 
-if (-not (Test-Ahk)) {
+if ($Engine -eq "ahk" -and -not (Test-Ahk)) {
     Write-Host "Installing AutoHotkey..."
     $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/AutoHotkey/AutoHotkey/releases/latest" -Headers @{ "User-Agent" = "MacroUI" }
     $asset = $rel.assets | Where-Object { $_.name -like "AutoHotkey_*_setup.exe" } | Select-Object -First 1

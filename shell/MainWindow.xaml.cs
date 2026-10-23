@@ -50,6 +50,13 @@ public partial class MainWindow : Window
     int _inputGen;
     string _closeMode = "tray";
     string _engineChoice = "ahk";
+    // False until shell.json names an engine or the user picks one. An unsaved
+    // choice is not written, so a clean PC can start native and still follow
+    // the default later.
+    bool _engineSaved;
+    // Native failed twice with no AutoHotkey to fall back to. Cleared when the
+    // user picks an engine.
+    volatile bool _nativeGaveUp;
     string _wire = "";
     int _nativeStrikes;
     int _expectExit;
@@ -139,11 +146,22 @@ public partial class MainWindow : Window
                 _closeMode = close;
             var engine = node?["engine"]?.ToString();
             if (engine == "ahk" || engine == "native")
+            {
                 _engineChoice = engine;
+                _engineSaved = true;
+            }
         }
         catch (Exception ex)
         {
             Log("shell settings " + ex.Message);
+        }
+        finally
+        {
+            if (!_engineSaved && !AhkInstalled() && NativeExe() != null)
+            {
+                _engineChoice = "native";
+                Log("AutoHotkey is not installed, starting native without saving it");
+            }
         }
     }
 
@@ -152,7 +170,8 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_shellPath)!);
-            File.WriteAllText(_shellPath, "{\"close\":\"" + _closeMode + "\",\"engine\":\"" + _engineChoice + "\"}", new UTF8Encoding(false));
+            var engine = _engineSaved ? ",\"engine\":\"" + _engineChoice + "\"" : "";
+            File.WriteAllText(_shellPath, "{\"close\":\"" + _closeMode + "\"" + engine + "}", new UTF8Encoding(false));
         }
         catch (Exception ex)
         {
@@ -680,10 +699,12 @@ public partial class MainWindow : Window
     {
         if (want != "ahk" && want != "native")
             return;
-        if (want == _engineChoice)
+        if (want == _engineChoice && !_nativeGaveUp)
             return;
         _engineChoice = want;
+        _engineSaved = true;
         _nativeStrikes = 0;
+        _nativeGaveUp = false;
         SaveShellSettings();
         SendToPage(LinkJson());
         _ = Task.Run(RestartEngine);
@@ -779,9 +800,20 @@ public partial class MainWindow : Window
     {
         _nativeStrikes++;
         Log(why + " (" + _nativeStrikes + ")");
+        if (_nativeStrikes >= 2 && !AhkInstalled())
+        {
+            // Nothing to fall back to. Stop retrying until the user picks an
+            // engine or restarts.
+            _nativeStrikes = 0;
+            _nativeGaveUp = true;
+            PostError(ErrorJson("shell", "engine-failed", "The native engine failed twice. AutoHotkey is not installed, so nothing is running."));
+            SendToPage(LinkJson());
+            return;
+        }
         if (_nativeStrikes >= 2)
         {
             _engineChoice = "ahk";
+            _engineSaved = true;
             _nativeStrikes = 0;
             SaveShellSettings();
             PostError(ErrorJson("shell", "engine-fallback", "The native engine failed twice. AutoHotkey is running."));
@@ -818,6 +850,8 @@ public partial class MainWindow : Window
         // One engine. A second process would share the mutex and exit, or
         // AutoHotkey's #SingleInstance Force would kill the resident one.
         if (_engine is { HasExited: false })
+            return;
+        if (_nativeGaveUp && _engineChoice == "native")
             return;
         if (_engine != null)
         {
@@ -886,13 +920,22 @@ public partial class MainWindow : Window
         }
     }
 
+    static string AhkPath() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "AutoHotkey", "v2", "AutoHotkey64.exe");
+
+    bool AhkInstalled() =>
+        File.Exists(AhkPath()) && File.Exists(Path.Combine(_repo, "engine", "MacroEngine.ahk"));
+
     void StartAhk()
     {
-        var ahk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "AutoHotkey", "v2", "AutoHotkey64.exe");
+        var ahk = AhkPath();
         var script = Path.Combine(_repo, "engine", "MacroEngine.ahk");
         if (!File.Exists(ahk) || !File.Exists(script))
         {
             Log("AutoHotkey engine was not found");
+            // The launcher installs AutoHotkey on the next start once it is the saved engine.
+            if (!File.Exists(ahk))
+                PostError(ErrorJson("shell", "ahk-missing", "AutoHotkey is not installed. Close and reopen H&le to install it, or pick native."));
             if (_hosted)
                 PublishBootFailure("The macro system did not start.");
             return;
@@ -1691,7 +1734,9 @@ public partial class MainWindow : Window
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir != null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "engine", "MacroEngine.ahk")))
+            // Same rule as the launcher's InstallLayout.IsRoot.
+            if (File.Exists(Path.Combine(dir.FullName, "engine", "MacroEngine.ahk"))
+                || File.Exists(Path.Combine(dir.FullName, "setup", "EnsureRuntime.ps1")))
                 return dir.FullName;
             dir = dir.Parent;
         }

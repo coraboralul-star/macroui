@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Launcher build
 
-`H&le.exe` in the repo root is how the app is opened. After any change under `ui/`, `shell/`, `engine/`, or `launcher/` that the launcher runs, do this before the work is finished:
+`H&le.exe` in the repo root is how the app is opened. After any change under `ui/`, `shell/`, `engine/`, `engine-native/`, or `launcher/` that the launcher runs, do this before the work is finished:
 
 1. Rebuild what changed.
    - Editor: `npm run build` in `ui/`, so `ui/dist` matches the source.
@@ -17,7 +17,7 @@ alwaysApply: true
 dotnet publish launcher/Vendetta.csproj -c Release -o launcher/publish
 ```
 
-That publish copies `H&le.exe` to the repo root.
+That publish copies `H&le.exe` to the repo root. Building the launcher runs `launcher/stage-payload.ps1`, which also builds the native engine in Release with CMake (`-A x64`, into `launcher/obj/.../native-build`), checks its `--self-test` line, and ships `macroui-engine.exe` next to `MacroShell.exe` in the payload. CMake and the Visual Studio C++ tools are needed for that. `engine-native/build` is not touched.
 4. Do not commit `H&le.exe`, `ui/dist`, or `shell/bin`. They are build output. A dev launch rebuilds `ui/dist` and the window when they are missing or stale. Republish `H&le.exe` locally when `launcher/` changes; it stays untracked.
 
 The launcher loads `ui/dist` through the shell exe. A source-only change leaves the app on the previous local build.

@@ -86,8 +86,10 @@ static class InstallLayout
         }
     }
 
+    // Everything the payload ships. Both engines are in it until #54.
     static bool Ready(string root) =>
         File.Exists(Path.Combine(root, "shell", "bin", "Debug", "net10.0-windows", "MacroShell.exe"))
+        && File.Exists(Path.Combine(root, "shell", "bin", "Debug", "net10.0-windows", "macroui-engine.exe"))
         && File.Exists(Path.Combine(root, "ui", "dist", "index.html"))
         && File.Exists(Path.Combine(root, "engine", "MacroEngine.ahk"))
         && File.Exists(Path.Combine(root, "engine", "JSON.ahk"))
@@ -138,12 +140,18 @@ static class InstallLayout
         var dir = new DirectoryInfo(start);
         while (dir != null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "engine", "MacroEngine.ahk")))
+            if (IsRoot(dir.FullName))
                 return dir.FullName;
             dir = dir.Parent;
         }
         return null;
     }
+
+    // An app folder, whichever engine it has. setup\EnsureRuntime.ps1 is in the
+    // repo and the payload, and stays when the AHK files go in #54.
+    public static bool IsRoot(string dir) =>
+        File.Exists(Path.Combine(dir, "engine", "MacroEngine.ahk"))
+        || File.Exists(Path.Combine(dir, "setup", "EnsureRuntime.ps1"));
 
     static bool IsDevRepo(string root) =>
         File.Exists(Path.Combine(root, "shell", "MacroShell.csproj"))

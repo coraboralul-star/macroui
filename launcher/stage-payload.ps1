@@ -25,6 +25,20 @@ foreach ($path in $required) {
     }
 }
 
+# The native engine ships next to MacroShell.exe, where NativeExe() looks. It
+# builds here in Release, beside the stage, so engine-native\build is not touched.
+if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+    throw "CMake was not found. Install CMake and the Visual Studio C++ tools to build the native engine."
+}
+$nativeBuild = Join-Path (Split-Path -Parent $Stage) "native-build"
+$nativeExe = Join-Path $nativeBuild "macroui-engine.exe"
+& cmake -S (Join-Path $Repo "engine-native") -B $nativeBuild -A x64 | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "The native engine did not configure." }
+& cmake --build $nativeBuild --config Release --target macroui-engine | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "The native engine did not build." }
+$selfTest = (& $nativeExe --self-test | Out-String).Trim()
+if ($selfTest -ne "macroui-engine 0") { throw "The native engine self-test printed '$selfTest'." }
+
 if (Test-Path -LiteralPath $Stage) {
     Remove-Item -LiteralPath $Stage -Recurse -Force
 }
@@ -47,6 +61,7 @@ Get-ChildItem -LiteralPath $shellOut -Recurse -File | ForEach-Object {
     }
     Copy-Item -LiteralPath $_.FullName -Destination $dest
 }
+Copy-Item -LiteralPath $nativeExe -Destination (Join-Path $shellDest "macroui-engine.exe")
 
 New-Item -ItemType Directory -Path (Join-Path $Stage "engine") -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $Repo "engine\MacroEngine.ahk") -Destination (Join-Path $Stage "engine\MacroEngine.ahk")
@@ -93,6 +108,7 @@ try {
     $need = @(
         "shell/bin/Debug/net10.0-windows/MacroShell.exe",
         "shell/bin/Debug/net10.0-windows/runtimes/win-x64/native/WebView2Loader.dll",
+        "shell/bin/Debug/net10.0-windows/macroui-engine.exe",
         "ui/dist/index.html",
         "engine/MacroEngine.ahk",
         "engine/JSON.ahk",
