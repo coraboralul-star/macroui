@@ -22,7 +22,7 @@ because a real keyboard types into whatever has focus.
 ## What the board does and does not do
 
 The board has no idea what a macro is. All timing, blocks, repeats, hold modes
-and mute logic stay in `engine/MacroEngine.ahk`. The engine decides every press,
+and mute logic stay in the engine. The engine decides every press,
 release and movement, then sends it here one line at a time.
 
 That split is the point. New editor features change what the engine decides,
@@ -35,16 +35,18 @@ One cable, three interfaces:
 
 | Interface | Purpose |
 | --- | --- |
-| HID keyboard | Modifier byte, a reserved byte, then 16 key slots |
-| HID mouse | 5 buttons, 16 bit relative x and y, wheel |
+| HID keyboard | Boot keyboard: modifier byte, a reserved byte, then 6 key slots |
+| HID mouse | Boot mouse: 5 buttons, 8 bit relative x and y, wheel |
 | CDC serial | Control channel, this is how the shell talks to the board |
 
-The keyboard carries 16 key slots because a boot keyboard only holds 6 and a
-macro can hold more than that at once. The first two bytes keep the boot layout
-so anything expecting that still reads the modifiers correctly.
+Windows only turns HID reports into keystrokes when the keyboard uses the boot
+subclass, so both are plain boot devices. Both poll every 1 ms.
 
-Mouse x and y are 16 bit on purpose. The engine clamps movement to plus or minus
-2000 per tick, which does not fit the 8 bit field a plain boot mouse uses.
+The firmware tracks 16 held keys and the report carries the first 6. A seventh
+held key reaches Windows once one of the first six is released.
+
+One mouse report moves at most 127 per axis. A bigger move is carried into the
+next reports, one per millisecond, so it is never thrown away.
 
 The USB product string is `Vendetta RP2040` or `Vendetta RP2350`. The shell finds
 the board by matching that string, which is more reliable than guessing a
@@ -58,7 +60,11 @@ One command per line. Lines end with `\n`. A line that does not parse is ignored
 K <hid-usage> <0|1>              key down when 1, up when 0
 M <buttons> <dx> <dy> <wheel>    buttons are absolute, movement adds on
 ?                                replies with the USB product string
+!                                replies hid <kb ready> <mouse ready> mounted <0|1>
 ```
+
+`K` and `M` each reply `ok`, or `hid-busy` when the HID endpoint was not free
+within 50 ms. A busy report is sent again when the endpoint frees.
 
 `K` takes a HID usage id, not a letter. Decimal or `0x` hex both work. Usages
 224 to 231 are the modifiers and go into the modifier byte. Everything else takes
@@ -187,7 +193,7 @@ Closing the port should release anything still held. To check that, send
 
 ## Status
 
-Written but not yet compiled or flashed. This machine has no CMake, no ARM
-toolchain and no Pico SDK, so the code has not been through a compiler. Expect to
-fix small build errors on the first run, most likely around TinyUSB version
-differences in the SDK you install.
+Builds with Pico SDK 2.3.1 and runs on an RP2350. The board on the dev PC was
+flashed with the Sep 30 build, from before the #17 retry. The comparison, the
+serial timing, and the rollback image are in `docs/engine/firmware-review.md`.
+Keep a flash dump before reflashing. `firmware/out` is not in git.

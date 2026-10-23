@@ -1772,6 +1772,127 @@ static void test_board_spam(void) {
         g_line_n > 0 ? "ok" : "fail", note);
 }
 
+/* #51: k key downs on F15 up. Lockstep is what the shell does, one K line then
+   its reply. Piped writes all k lines at once and reads the replies after. Span
+   is the first write to the hook seeing the last down. Spread is first down to
+   last down in the hook, so it is the HID report gap and not serial time. */
+static void board_burst(int k, int piped) {
+    int reps = g_triggers / 10;
+    double *span;
+    double *spread;
+    double p50, p95, p99, mx, mean;
+    double sp50, sp95, sp99, smx, smean;
+    long ok = 0;
+    long busy = 0;
+    long other = 0;
+    long miss = 0;
+    int n = 0;
+    int r;
+    int j;
+    char kase[32];
+    char note[220];
+    if (reps < 3)
+        reps = 3;
+    span = (double *)malloc(reps * sizeof(double));
+    spread = (double *)malloc(reps * sizeof(double));
+    if (!span || !spread) {
+        free(span);
+        free(spread);
+        return;
+    }
+    snprintf(kase, sizeof kase, "%s-%d", piped ? "piped" : "lockstep", k);
+    for (r = 0; r < reps; r++) {
+        int cursor = ev_count();
+        long long t0;
+        long long first = 0;
+        long long last = 0;
+        int got = 1;
+        if (piped) {
+            char buf[128];
+            int len = 0;
+            for (j = 0; j < k; j++)
+                len += snprintf(buf + len, sizeof buf - len, "K %d 1\n", 0x6A + j);
+            EnterCriticalSection(&g_cs);
+            t0 = qpc_now();
+            if (serial_write(buf)) {
+                for (j = 0; j < k; j++) {
+                    char reply[64];
+                    if (serial_line(reply, sizeof reply, 800) < 0)
+                        other++;
+                    else if (strncmp(reply, "ok", 2) == 0)
+                        ok++;
+                    else if (strncmp(reply, "hid-busy", 8) == 0)
+                        busy++;
+                    else
+                        other++;
+                }
+            }
+            LeaveCriticalSection(&g_cs);
+        } else {
+            t0 = qpc_now();
+            for (j = 0; j < k; j++) {
+                char line[32];
+                char reply[64];
+                snprintf(line, sizeof line, "K %d 1\n", 0x6A + j);
+                if (!board_cmd(line, reply, sizeof reply))
+                    other++;
+                else if (strncmp(reply, "ok", 2) == 0)
+                    ok++;
+                else if (strncmp(reply, "hid-busy", 8) == 0)
+                    busy++;
+                else
+                    other++;
+            }
+        }
+        for (j = 0; j < k; j++) {
+            int c = cursor;
+            Ev e;
+            if (!wait_ev(&c, t0, 0x7E + j, 1, 1, 200, &e)) {
+                got = 0;
+                break;
+            }
+            if (!first || e.qpc < first)
+                first = e.qpc;
+            if (e.qpc > last)
+                last = e.qpc;
+        }
+        for (j = 0; j < k; j++)
+            board_key(0x6A + j, 0);
+        Sleep(5);
+        if (!got) {
+            miss++;
+            continue;
+        }
+        span[n] = qpc_ms(t0, last);
+        spread[n] = qpc_ms(first, last);
+        n++;
+    }
+    stats_of(span, n, &p50, &p95, &p99, &mx, &mean);
+    stats_of(spread, n, &sp50, &sp95, &sp99, &smx, &smean);
+    snprintf(note, sizeof note, "first write to last down in the hook; ok=%ld hid-busy=%ld other=%ld miss=%ld",
+        ok, busy, other, miss);
+    csv_row("burst", kase, n, p50, p95, p99, mx, mean, -1, -1, -1, -1, -1, (int)miss, n > 0 ? "ok" : "fail", note);
+    snprintf(kase, sizeof kase, "%s-%d-spread", piped ? "piped" : "lockstep", k);
+    csv_row("burst", kase, n, sp50, sp95, sp99, smx, smean, -1, -1, -1, -1, -1, (int)miss, n > 0 ? "ok" : "fail",
+        "first down to last down in the hook");
+    free(span);
+    free(spread);
+}
+
+static void test_board_burst(void) {
+    static const int sizes[] = {1, 2, 4, 6};
+    int i;
+    if (g_serial == INVALID_HANDLE_VALUE) {
+        csv_row("burst", "lockstep-1", 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, "skip", "no board");
+        return;
+    }
+    say("board burst");
+    for (i = 0; i < 4; i++) {
+        board_burst(sizes[i], 0);
+        board_burst(sizes[i], 1);
+    }
+}
+
 static void cleanup(void) {
     if (InterlockedExchange(&g_cleaning, 1))
         return;
@@ -1887,7 +2008,7 @@ int main(int argc, char **argv) {
         test_idle();
     if (g_only[0] && strcmp(g_only, "jitter") != 0 && strcmp(g_only, "trigger") != 0
         && strcmp(g_only, "cpu") != 0 && strcmp(g_only, "board") != 0 && strcmp(g_only, "pipe") != 0
-        && strcmp(g_only, "idle") != 0) {
+        && strcmp(g_only, "idle") != 0 && strcmp(g_only, "burst") != 0) {
         say("unknown --only %s", g_only);
         cleanup();
         return 2;
@@ -1914,6 +2035,8 @@ int main(int argc, char **argv) {
         }
         if (!g_only[0] || strcmp(g_only, "board") == 0)
             test_board_spam();
+        if (strcmp(g_only, "burst") == 0)
+            test_board_burst();
     }
     if (!g_only[0] || strcmp(g_only, "pipe") == 0)
         test_pipe();
