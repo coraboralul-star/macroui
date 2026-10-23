@@ -10,7 +10,7 @@
 | OS | Windows 10 Pro 26H2, build 26300.9711 |
 | Power | High performance |
 | Board | Vendetta RP2350 on COM7 |
-| Firmware on the board | The Sep 30 build, from before #17. See "What is on the board". |
+| Firmware on the board | The Sep 30 build, from before #17, for every table below. See "What is on the board". |
 | Engine for the spam rows | AutoHotkey v2, `engine/MacroEngine.ahk` |
 
 ## What the firmware does today
@@ -97,7 +97,7 @@ This keeps every old board and the AHK path working.
 
 ## What is on the board
 
-The board runs the Sep 30 build, from before the #17 retry. On that build a keyboard report that gets `hid-busy` clears `kb_dirty` and is never sent again. With zero `hid-busy` above, that did not change any number here. A key-up that does get `hid-busy` stays unsent until the next `K` line, so Windows sees the key held.
+The measurements above ran on the Sep 30 build, from before the #17 retry. On that build a keyboard report that gets `hid-busy` clears `kb_dirty` and is never sent again. With zero `hid-busy` above, that did not change any number here. A key-up that does get `hid-busy` stays unsent until the next `K` line, so Windows sees the key held.
 
 How this was checked (SDK 2.3.1 for every build):
 
@@ -110,7 +110,9 @@ How this was checked (SDK 2.3.1 for every build):
 
 Only the program family blocks are compared. The SDK build also writes an absolute-family block near the top of flash, which a readback does not have. A rebuild is never byte-identical: the build date is in the image, and the link order follows the build path.
 
-The `main` build is ready to flash. The rollback is the flash dump in `firmware/out/backup`. `firmware/out` is not in git.
+The `main` build (SHA-256 `74a43f84…`) was flashed on 2026-10-23. The rollback is the Oct 22 flash dump in `firmware/out/backup`. `firmware/out` is not in git.
+
+After the flash, `?` still replies `Vendetta RP2350` and `!` replies `hid 1 1 mounted 1`. One burst run of 200 per case matched the tables above. Lockstep span p50 was 0.72, 1.76, 3.77 and 5.79 ms for 1, 2, 4 and 6 keys, and there was no `hid-busy`. The serial reply cannot show which build is running, so this checks that nothing regressed, not which image is on the board.
 
 ## Other findings
 

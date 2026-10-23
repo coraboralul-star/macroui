@@ -193,7 +193,8 @@ Closing the port should release anything still held. To check that, send
 
 ## Status
 
-Builds with Pico SDK 2.3.1 and runs on an RP2350. The board on the dev PC was
-flashed with the Sep 30 build, from before the #17 retry. The comparison, the
-serial timing, and the rollback image are in `docs/engine/firmware-review.md`.
+Builds with Pico SDK 2.3.1 and runs on an RP2350. The board on the dev PC runs
+the `main` build with the #17 retry, flashed 2026-10-23. The comparison with the
+build it replaced, the serial timing, and the rollback image are in
+`docs/engine/firmware-review.md`.
 Keep a flash dump before reflashing. `firmware/out` is not in git.
