@@ -49,11 +49,11 @@ public partial class MainWindow : Window
     readonly Queue<byte[]> _reportPending = new();
     int _inputGen;
     string _closeMode = "tray";
-    string _engineChoice = "ahk";
-    // False until shell.json names an engine or the user picks one. An unsaved
-    // choice is not written, so a clean PC can start native and still follow
-    // the default later.
-    bool _engineSaved;
+    // The engine that runs. Native is the default (#54 step 1).
+    string _engineChoice = "native";
+    // The engine shell.json names, or null until the user picks one. Only this
+    // is written, so the default and a fallback for one session never stick.
+    string? _savedEngine;
     // Native failed twice with no AutoHotkey to fall back to. Cleared when the
     // user picks an engine.
     volatile bool _nativeGaveUp;
@@ -148,7 +148,7 @@ public partial class MainWindow : Window
             if (engine == "ahk" || engine == "native")
             {
                 _engineChoice = engine;
-                _engineSaved = true;
+                _savedEngine = engine;
             }
         }
         catch (Exception ex)
@@ -157,10 +157,10 @@ public partial class MainWindow : Window
         }
         finally
         {
-            if (!_engineSaved && !AhkInstalled() && NativeExe() != null)
+            if (_savedEngine == null && NativeExe() == null && AhkInstalled())
             {
-                _engineChoice = "native";
-                Log("AutoHotkey is not installed, starting native without saving it");
+                _engineChoice = "ahk";
+                Log("the native engine exe was not found, starting AutoHotkey without saving it");
             }
         }
     }
@@ -170,7 +170,7 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_shellPath)!);
-            var engine = _engineSaved ? ",\"engine\":\"" + _engineChoice + "\"" : "";
+            var engine = _savedEngine != null ? ",\"engine\":\"" + _savedEngine + "\"" : "";
             File.WriteAllText(_shellPath, "{\"close\":\"" + _closeMode + "\"" + engine + "}", new UTF8Encoding(false));
         }
         catch (Exception ex)
@@ -542,8 +542,22 @@ public partial class MainWindow : Window
                     _nativeStrikes = 0;
                 misses = 0;
                 SendToPage(LinkJson());
+                // An engine left running from before, such as a resident AHK
+                // after the default became native. The quit goes over this
+                // pipe, so it releases keys before the chosen engine starts.
+                var switching = _wire != _engineChoice && !_nativeGaveUp
+                    && Volatile.Read(ref _suppressLaunch) == 0 && Volatile.Read(ref _expectExit) == 0;
+                if (switching)
+                {
+                    Log("engine on the pipe is " + _wire + ", switching to " + _engineChoice);
+                    _ = Task.Run(RestartEngine);
+                }
                 AcceptMessage(buf.AsSpan(0, first));
-                if (peer == EnginePeer.Native)
+                if (switching)
+                {
+                    /* that engine is quitting; the next one gets the profile */
+                }
+                else if (peer == EnginePeer.Native)
                     await SendNativeProfile().ConfigureAwait(false);
                 else
                 {
@@ -702,7 +716,7 @@ public partial class MainWindow : Window
         if (want == _engineChoice && !_nativeGaveUp)
             return;
         _engineChoice = want;
-        _engineSaved = true;
+        _savedEngine = want;
         _nativeStrikes = 0;
         _nativeGaveUp = false;
         SaveShellSettings();
@@ -812,11 +826,10 @@ public partial class MainWindow : Window
         }
         if (_nativeStrikes >= 2)
         {
+            // For this session only. The next start tries native again.
             _engineChoice = "ahk";
-            _engineSaved = true;
             _nativeStrikes = 0;
-            SaveShellSettings();
-            PostError(ErrorJson("shell", "engine-fallback", "The native engine failed twice. AutoHotkey is running."));
+            PostError(ErrorJson("shell", "engine-fallback", "The native engine failed twice. AutoHotkey is running until H&le is restarted."));
             SendToPage(LinkJson());
             Interlocked.Exchange(ref _suppressLaunch, 1);
             try

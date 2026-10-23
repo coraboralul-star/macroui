@@ -44,7 +44,7 @@ export function App() {
   const [menu, setMenu] = useState<TriggerMenu | null>(null);
   const [graphId, setGraphId] = useState<string | null>(null);
   const [closeMode, setCloseMode] = useState<CloseMode>(readClose);
-  const [engineChoice, setEngineChoice] = useState<EngineKind>("ahk");
+  const [engineChoice, setEngineChoice] = useState<EngineKind>("native");
 
   useEffect(() => {
     localStorage.setItem(CLOSE_KEY, closeMode);

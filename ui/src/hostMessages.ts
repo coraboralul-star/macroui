@@ -16,7 +16,7 @@ export function parseLink(message: HostMessage): { shell: boolean; pipe: boolean
   if (message.type !== "link") return null;
   const pipe = Boolean(message.pipe);
   const engine = pipe ? parseEngineKind(message.engine) : "";
-  const choice = parseEngineKind(message.choice) || "ahk";
+  const choice = parseEngineKind(message.choice) || "native";
   return { shell: Boolean(message.shell), pipe, engine, choice };
 }
 

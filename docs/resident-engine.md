@@ -1,5 +1,7 @@
 # Resident engine
 
+**Status (#54 step 1):** the native engine (`engine-native/`, `macroui-engine.exe`) is now the default. The shell starts it unless `profiles/shell.json` saves `"engine":"ahk"`, or the native exe is missing. AutoHotkey stays selectable in Settings, and it runs for the rest of a session after native fails twice. The notes below describe the AutoHotkey engine they were written for. The native threads are in `docs/engine/architecture.md`. This file is rewritten when AutoHotkey is removed in #54 step 2.
+
 Clean-room notes from the local SteelSeries GG 120 install, mapped onto the current MacroUI split (`ui/`, `shell/`, `engine/`). This is not a source recovery. Nothing here should be copied from SteelSeries assets, certificates, device specs, or handler scripts.
 
 ## Evidence and limits

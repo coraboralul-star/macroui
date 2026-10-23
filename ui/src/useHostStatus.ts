@@ -20,7 +20,7 @@ export function useHostStatus() {
   const [shell, setShell] = useState(false);
   const [pipe, setPipe] = useState(false);
   const [engineWire, setEngineWire] = useState<EngineKind | "">("");
-  const [engineChoice, setEngineChoice] = useState<EngineKind>("ahk");
+  const [engineChoice, setEngineChoice] = useState<EngineKind>("native");
   const [engine, setEngine] = useState<EngineState>({ armed: false, running: [], held: [], activeId: "" });
   const [fault, setFault] = useState<string | null>(null);
   const [ports, setPorts] = useState<BoardPort[]>([]);

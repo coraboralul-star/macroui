@@ -97,7 +97,7 @@ export function SettingsPage({
                 <div className="settings-row is-static">
                   <span>
                     <span className="settings-row-name">Engine</span>
-                    <span className="settings-row-note">AutoHotkey is the default. Native is the new engine. Only one runs at a time.</span>
+                    <span className="settings-row-note">Native is the default. AutoHotkey is still here if you need it. Only one runs at a time.</span>
                   </span>
                 </div>
                 <div className="settings-choices is-pair" role="radiogroup" aria-label="Engine">
@@ -109,7 +109,7 @@ export function SettingsPage({
                     onClick={() => onEngine("ahk")}
                   >
                     <span className="settings-row-name">AutoHotkey</span>
-                    <span className="settings-row-note">The current engine.</span>
+                    <span className="settings-row-note">The old engine. Needs AutoHotkey installed.</span>
                   </button>
                   <button
                     type="button"

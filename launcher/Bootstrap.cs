@@ -230,8 +230,8 @@ sealed class Bootstrap
     }
 
     // AutoHotkey is needed when it is the saved engine. With no saved engine
-    // the shell starts native when AutoHotkey is missing, so a clean PC does
-    // not install it. Without a native exe it still falls back to AutoHotkey.
+    // the shell starts native, the default, so it is not installed. Without a
+    // native exe the shell starts AutoHotkey instead.
     bool NeedsAhk()
     {
         var saved = SavedEngine();
