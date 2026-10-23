@@ -1,8 +1,10 @@
-# One command for the #39 AHK baseline.
+# One command for the #39 AHK baseline, and the native run for #53.
 # Builds tools/bench/bench.c, runs it three times, writes out/results.csv and out/summary.txt.
+# With -EngineExe the files are out/results-native.csv and out/summary-native.txt.
 # Usage from the repo root:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\bench\run.ps1
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\bench\run.ps1 -Smoke
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\bench\run.ps1 -EngineExe engine-native\build\macroui-engine.exe
 
 param(
     [switch]$Smoke,
@@ -41,11 +43,18 @@ $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
 $os = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
 $build = "$($os.CurrentBuild).$($os.UBR)"
 $plan = (powercfg /getactivescheme) -join " "
+$native = $EngineExe -ne ""
 $ahk = Join-Path $env:ProgramFiles "AutoHotkey\v2\AutoHotkey64.exe"
-if (-not (Test-Path $ahk)) { throw "AutoHotkey v2 was not found at $ahk" }
+if ($native) {
+    $EngineExe = (Resolve-Path $EngineExe).Path
+} elseif (-not (Test-Path $ahk)) {
+    throw "AutoHotkey v2 was not found at $ahk"
+}
+$tag = if ($native) { "-native" } else { "" }
+$label = if ($native) { "Native engine" } else { "AHK baseline" }
 
-$csv = Join-Path $outDir "results.csv"
-$sum = Join-Path $outDir "summary.txt"
+$csv = Join-Path $outDir "results$tag.csv"
+$sum = Join-Path $outDir "summary$tag.txt"
 $header = "run,test,case,n,p50_ms,p95_ms,p99_ms,max_ms,mean_ms,cpu_pct,switches_per_s,lines_per_s,ack_ms,gap_ms,events,status,note"
 Set-Content -Path $csv -Value $header -Encoding ascii
 
@@ -61,14 +70,22 @@ $machine = @(
 Set-Content -Path (Join-Path $outDir "machine.txt") -Value $machine -Encoding utf8
 Write-Host $machine
 
-$self = Join-Path $outDir "self-test.txt"
-$selfResult = Join-Path $repo "engine\self-test-result.txt"
-Write-Host "running AHK --self-test"
-$ahkArgs = @((Join-Path $repo "engine\MacroEngine.ahk"), "--self-test")
-& $ahk @ahkArgs *> $self
-$selfCode = $LASTEXITCODE
-if (Test-Path $selfResult) {
-    Add-Content -Path $self -Value (Get-Content $selfResult)
+$self = Join-Path $outDir "self-test$tag.txt"
+if ($native) {
+    Write-Host "running native --self-test"
+    # Like CI: the line is the check, PowerShell does not get an exit code here.
+    $line = (& $EngineExe --self-test | Out-String).Trim()
+    Set-Content -Path $self -Value $line -Encoding utf8
+    $selfCode = if ($line -eq "macroui-engine 0") { 0 } else { 1 }
+} else {
+    $selfResult = Join-Path $repo "engine\self-test-result.txt"
+    Write-Host "running AHK --self-test"
+    $ahkArgs = @((Join-Path $repo "engine\MacroEngine.ahk"), "--self-test")
+    & $ahk @ahkArgs *> $self
+    $selfCode = $LASTEXITCODE
+    if (Test-Path $selfResult) {
+        Add-Content -Path $self -Value (Get-Content $selfResult)
+    }
 }
 $st = if ($selfCode -eq 0) { "ok" } else { "fail" }
 Add-Content -Path $csv -Value "0,self-test,clock-5,,,,,,,,,,,,,$st,exit $selfCode"
@@ -76,11 +93,15 @@ Get-Content $self | Select-Object -Last 8 | ForEach-Object { Write-Host $_ }
 
 $runs = 3
 $extra = @()
+if (-not $native) {
+    $extra += "--ahk"
+    $extra += $ahk
+}
 if ($Smoke) {
     $runs = 1
     $extra += "--smoke"
 }
-if ($EngineExe -ne "") {
+if ($native) {
     $extra += "--engine-exe"
     $extra += $EngineExe
 }
@@ -101,7 +122,7 @@ function Release-Board {
         $p.DtrEnable = $true
         $p.RtsEnable = $true
         $p.Open()
-        foreach ($usage in @(104, 69, 105)) {
+        foreach ($usage in @(104, 69, 105, 106, 107, 108, 109, 110, 111)) {
             $p.WriteLine("K $usage 0")
             try { $p.ReadLine() | Out-Null } catch { }
         }
@@ -116,7 +137,7 @@ function Release-Board {
 try {
     for ($run = 1; $run -le $runs; $run++) {
         Write-Host "run $run of $runs"
-        & $exe --repo $repo --ahk $ahk --out $csv --run $run @extra
+        & $exe --repo $repo --out $csv --run $run @extra
         if ($LASTEXITCODE -ne 0) { throw "bench.exe run $run failed: $LASTEXITCODE" }
     }
 } finally {
@@ -126,7 +147,7 @@ try {
 try {
     $rows = Import-Csv $csv
     $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add("AHK baseline")
+    $lines.Add($label)
     $lines.Add($machine)
     $lines.Add("")
     $lines.Add("self-test exit $selfCode")
