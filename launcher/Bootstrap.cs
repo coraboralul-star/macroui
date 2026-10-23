@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 
@@ -26,7 +27,7 @@ sealed class Bootstrap
 
     public async Task<(bool Ok, string? Error)> Prepare()
     {
-        if (!File.Exists(Path.Combine(_repo, "engine", "MacroEngine.ahk")))
+        if (!InstallLayout.IsRoot(_repo) || (!HasAhkScript() && NativeEngine() == null))
             return (false, "The H&le folder was not found.");
 
         // This repo rebuilds when sources are newer. A shipped exe has no Node or SDK, so it skips that.
@@ -81,11 +82,13 @@ sealed class Bootstrap
             return (false, "The editor is missing.");
         }
 
-        if (!RuntimeReady())
+        var needAhk = NeedsAhk();
+        if (!RuntimeReady(needAhk))
         {
             _status("WINDOWS WILL ASK FOR APPROVAL");
             var script = Path.Combine(_repo, "setup", "EnsureRuntime.ps1");
-            if (await Shell("powershell.exe", _repo, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script) != 0)
+            if (await Shell("powershell.exe", _repo, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,
+                "-Engine", needAhk ? "ahk" : "native") != 0)
                 return (false, "Setup did not finish. Run this again when you are online.");
         }
         if (!File.Exists(ShellExe))
@@ -211,10 +214,54 @@ sealed class Bootstrap
         }
     }
 
-    static bool RuntimeReady()
+    bool HasAhkScript() => File.Exists(Path.Combine(_repo, "engine", "MacroEngine.ahk"));
+
+    // The places the shell's NativeExe() looks, in its order.
+    string? NativeEngine()
+    {
+        string[] paths =
+        [
+            Path.Combine(_repo, "engine-native", "build", "Release", "macroui-engine.exe"),
+            Path.Combine(_repo, "engine-native", "build", "Debug", "macroui-engine.exe"),
+            Path.Combine(_repo, "engine-native", "build", "macroui-engine.exe"),
+            Path.Combine(Path.GetDirectoryName(ShellExe)!, "macroui-engine.exe"),
+        ];
+        return paths.FirstOrDefault(File.Exists);
+    }
+
+    // AutoHotkey is needed when it is the saved engine. With no saved engine
+    // the shell starts native when AutoHotkey is missing, so a clean PC does
+    // not install it. Without a native exe it still falls back to AutoHotkey.
+    bool NeedsAhk()
+    {
+        var saved = SavedEngine();
+        if (saved == "ahk")
+            return true;
+        if (saved == "native")
+            return false;
+        return NativeEngine() == null;
+    }
+
+    string? SavedEngine()
+    {
+        try
+        {
+            var path = Path.Combine(_repo, "profiles", "shell.json");
+            if (!File.Exists(path))
+                return null;
+            var engine = JsonNode.Parse(File.ReadAllText(path))?["engine"]?.ToString();
+            return engine is "ahk" or "native" ? engine : null;
+        }
+        catch
+        {
+            return null; /* a broken file is read again by the shell, which logs it */
+        }
+    }
+
+    static bool RuntimeReady(bool needAhk)
     {
         var programs = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-        if (!File.Exists(Path.Combine(programs, "AutoHotkey", "v2", "AutoHotkey64.exe")))
+        if (needAhk && !File.Exists(Path.Combine(programs, "AutoHotkey", "v2", "AutoHotkey64.exe")))
             return false;
         var desktop = Path.Combine(programs, "dotnet", "shared", "Microsoft.WindowsDesktop.App");
         if (!Directory.Exists(desktop) || !Directory.EnumerateDirectories(desktop, "10.*").Any())
