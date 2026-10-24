@@ -283,6 +283,24 @@ static int holds_on_release(const struct engine_macro *macro, int spam, int tap)
     return macro && (macro->mode == ENGINE_MODE_WHILE_HELD || macro->mode == ENGINE_MODE_TOGGLE);
 }
 
+/* Run Once: play once, with no block that loops while the finger is down.
+   One press is one whole pass, so a press while it plays is ignored. A hold
+   loop or a tap block has its own release rule and is left alone. */
+static int run_once(const struct engine_macro *macro, int mode)
+{
+    return macro && mode == ENGINE_MODE_ONCE && !has_hold_block(macro);
+}
+
+/* The press is dropped, not queued. The pass that is playing finishes. */
+static int still_playing(struct engine_play *play, const struct engine_macro *macro, int mode,
+                         int running)
+{
+    if (!running || !run_once(macro, mode))
+        return 0;
+    engine_play_note(play, ENGINE_NOTE_BLOCK, macro->id, ENGINE_WHY_PLAYING, mode, 0, 0, 0);
+    return 1;
+}
+
 static const struct engine_macro *find_macro(const struct engine_live_config *live, const char *id)
 {
     int i;
@@ -497,7 +515,9 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
                     engine_once_ensure(play, macro->id, macro->trigger);
                 }
             } else if (macro->advanced && mode != ENGINE_MODE_ON_RELEASE) {
-                if (down && !was) {
+                if (down && !was && still_playing(play, macro, mode, running)) {
+                    did = ENGINE_WHY_PLAYING;
+                } else if (down && !was) {
                     int ok;
 
                     if (once == ENGINE_LOCK_OPEN)
@@ -514,7 +534,9 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
                 }
             } else {
                 action = engine_trigger_action(mode, down, was, running);
-                if (action == ENGINE_TRIGGER_START) {
+                if (action == ENGINE_TRIGGER_START && still_playing(play, macro, mode, running)) {
+                    did = ENGINE_WHY_PLAYING;
+                } else if (action == ENGINE_TRIGGER_START) {
                     int ok;
 
                     if (once == ENGINE_LOCK_OPEN)
@@ -624,12 +646,11 @@ void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_liv
                 continue;
             if (!engine_can_trigger(id))
                 continue;
-            /* Keyboard triggers are swallowed for software and for a board.
-               Middle and both side buttons are swallowed only in software.
-               A board lets those clicks through. Left and right never reach here. */
-            if (focus_ok &&
-                (!engine_is_mouse_button(id) || !play ||
-                 play->output.mode == ENGINE_OUTPUT_SOFTWARE))
+            /* Keys, middle, and both side buttons are swallowed for software
+               and for a board. A board's own clicks match an echo token
+               before this map is read, so they still pass. Left and right
+               never reach here. */
+            if (focus_ok)
                 swallow[id] = 1;
         }
     }

@@ -2,6 +2,7 @@
    This is not a latency report. */
 
 #include "hook_win.h"
+#include "raw_win.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -216,11 +217,64 @@ static int check_live(void)
     return stop_and_join(thread);
 }
 
+static struct engine_raw_mouse raw_tally;
+static struct engine_win_raw raw;
+
+static DWORD WINAPI raw_thread(LPVOID param)
+{
+    engine_win_raw_run((struct engine_win_raw *)param);
+    return 0;
+}
+
+/* The board is never counted. The thread registers on request and stops.
+   A runner with no desktop may refuse Raw Input: that is FAILED, not a hang. */
+static int check_raw(void)
+{
+    HANDLE thread;
+    int status = ENGINE_RAW_OFF;
+    int i;
+
+    if (!engine_win_raw_is_board(L"\\\\?\\HID#VID_CAFE&PID_4004&MI_01#8&1&0000#{378de44c}"))
+        return fail("board device name");
+    if (!engine_win_raw_is_board(L"\\\\?\\hid#vid_cafe&pid_4004#x"))
+        return fail("board device name, lower case");
+    if (engine_win_raw_is_board(L"\\\\?\\HID#VID_046D&PID_C539&MI_01#x") ||
+        engine_win_raw_is_board(NULL))
+        return fail("a real mouse is not the board");
+    engine_raw_mouse_init(&raw_tally);
+    engine_win_raw_open(&raw, &raw_tally);
+    thread = CreateThread(NULL, 0, raw_thread, &raw, 0, NULL);
+    if (!thread)
+        return fail("raw thread");
+    for (i = 0; i < 3000 && engine_win_raw_want(&raw, 1) != 0; i++)
+        Sleep(1);
+    for (i = 0; i < 3000 && status == ENGINE_RAW_OFF; i++) {
+        status = atomic_load_explicit(&raw.status, memory_order_acquire);
+        Sleep(1);
+    }
+    if (status == ENGINE_RAW_OFF) {
+        engine_win_raw_stop(&raw);
+        WaitForSingleObject(thread, 3000);
+        return fail("raw input never answered");
+    }
+    if ((status == ENGINE_RAW_ON) != (atomic_load_explicit(&raw_tally.ok, memory_order_acquire) == 1))
+        return fail("raw ok follows the status");
+    printf("raw input %s\n", status == ENGINE_RAW_ON ? "on" : "unavailable");
+    if (engine_win_raw_stop(&raw) != 0 || WaitForSingleObject(thread, 3000) != WAIT_OBJECT_0)
+        return fail("raw thread stop");
+    CloseHandle(thread);
+    if (atomic_load_explicit(&raw_tally.ok, memory_order_acquire) != 0)
+        return fail("raw ok clears on stop");
+    return 0;
+}
+
 int main(void)
 {
     if (check_structs() != 0)
         return 1;
     if (check_live() != 0)
+        return 1;
+    if (check_raw() != 0)
         return 1;
     printf("ok\n");
     return 0;

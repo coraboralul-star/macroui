@@ -22,6 +22,7 @@
 #include "output_win.h"
 #include "process.h"
 #include "profile.h"
+#include "raw_win.h"
 #include "version.h"
 #include "win_entry.h"
 
@@ -114,8 +115,19 @@ struct engine_resident {
     int armed;
     HANDLE play_wake;
     int64_t finger_at[ENGINE_KEY_ID_MAX + 1];
-    uint16_t defer_down[8];
-    int defer_count;
+    /* The hook's answer for the last down of each id, for the trigger line.
+       repeat_logged is one "repeat ignored" line per hold, cleared on the up. */
+    uint8_t last_swallow[ENGINE_KEY_ID_MAX + 1];
+    uint8_t repeat_logged[ENGINE_KEY_ID_MAX + 1];
+    /* Raw Input's up count for middle and side buttons, and its thread.
+       raw_want is the last registration the thread accepted, -1 before the
+       first. raw_logged is the last status written to the log. */
+    struct engine_raw_mouse raw;
+    struct engine_finger_lost lost;
+    struct engine_win_raw raw_win;
+    HANDLE raw_thread;
+    int raw_want;
+    int raw_logged;
     int desktop_known;
     int desktop_open;
     int64_t log_beat;
@@ -958,30 +970,41 @@ static void log_released(const uint16_t *ids, int n, const char *reason)
     }
 }
 
-static void drain_fingers(int64_t now)
+static void log_trigger_event(const struct engine_live_config *live, uint16_t id,
+                              const char *what);
+
+static void drain_fingers(int64_t now, const struct engine_live_config *live)
 {
     struct engine_finger ev;
     int pause;
 
     if (!g.play)
         return;
-    g.defer_count = 0;
     pause = engine_fingers_down(&g.fingers, ENGINE_KEY_PAUSE);
     while (engine_event_pop(&g.hooks, &ev)) {
-        int deferred;
+        int noted;
 
         if (ev.id == ENGINE_KEY_PAUSE && engine_panic_edge(ev.id, pause, ev.down))
             engine_play_stop_all_why(g.play, ENGINE_WHY_PANIC);
-        deferred = engine_finger_note(&g.fingers, ev.id, ev.down, g.defer_down, &g.defer_count, 8);
-        if (deferred) {
-            char line[128];
-            const char *name = engine_key_name(ev.id);
-
-            if (name)
-                snprintf(line, sizeof line, "release %s reason=second-down", name);
-            else
-                snprintf(line, sizeof line, "release %u reason=second-down", (unsigned)ev.id);
-            engine_log(line);
+        /* Windows auto-repeat, or a second mouse 4 or 5 down, while the
+           finger is down. It is not an edge, so a held trigger never starts
+           again. One line per hold. A middle or side button that Raw Input
+           saw go up lost its up in the hook: it is released for this tick
+           and pressed again after it, a new press. */
+        noted = engine_finger_note(&g.fingers, ev.id, ev.down, &g.lost);
+        if (noted == ENGINE_FINGER_REPEAT) {
+            if (!g.repeat_logged[ev.id] && engine_live_claims(live, ev.id)) {
+                g.repeat_logged[ev.id] = 1;
+                log_trigger_event(live, ev.id, "repeat ignored");
+            }
+        } else if (noted == ENGINE_FINGER_LOST) {
+            g.repeat_logged[ev.id] = 0;
+            g.last_swallow[ev.id] = ev.swallowed ? 1 : 0;
+            log_trigger_event(live, ev.id, "lost release, new press");
+        } else if (ev.down) {
+            g.last_swallow[ev.id] = ev.swallowed ? 1 : 0;
+        } else {
+            g.repeat_logged[ev.id] = 0;
         }
         engine_finger_at_touch(g.finger_at, ENGINE_KEY_ID_MAX + 1, ev.id, ev.qpc ? ev.qpc : now);
         if (ev.id == ENGINE_KEY_PAUSE)
@@ -996,6 +1019,46 @@ static void drain_fingers(int64_t now)
         engine_play_stop_all_why(g.play, ENGINE_WHY_OVERFLOW);
         engine_log("report queue overflow");
     }
+}
+
+/* The tick after a lost release saw the up. Press those buttons again, so
+   the next poll sees a new down edge. */
+static void redo_fingers(int64_t now)
+{
+    uint16_t ids[ENGINE_REDO_CAP];
+    int n = engine_finger_redo(&g.fingers, &g.lost, ids, ENGINE_REDO_CAP);
+    int i;
+
+    for (i = 0; i < n; i++)
+        engine_finger_at_touch(g.finger_at, ENGINE_KEY_ID_MAX + 1, ids[i], now);
+}
+
+/* Raw Input is registered only while the config has a middle or side
+   trigger. A failed post is tried again next tick. */
+static void sync_raw(int need_mouse)
+{
+    int status;
+
+    if (g.raw_thread && g.raw_want != need_mouse &&
+        engine_win_raw_want(&g.raw_win, need_mouse) == 0)
+        g.raw_want = need_mouse;
+    status = atomic_load_explicit(&g.raw_win.status, memory_order_acquire);
+    if (status == g.raw_logged)
+        return;
+    g.raw_logged = status;
+    if (status == ENGINE_RAW_ON)
+        engine_log("raw input on");
+    else if (status == ENGINE_RAW_FAILED)
+        engine_log("raw input unavailable, a lost mouse release waits for the next up");
+    else
+        engine_log("raw input off");
+}
+
+static DWORD WINAPI raw_thread(LPVOID param)
+{
+    (void)param;
+    engine_win_raw_run(&g.raw_win);
+    return 0;
 }
 
 static int input_desktop_open(void)
@@ -1039,17 +1102,6 @@ static void reconcile_fingers(void)
     n = engine_fingers_release_down(&g.fingers, 1, 1, ids, 16);
     if (n > 0)
         log_released(ids, n, "desktop");
-}
-
-static void apply_deferred(int64_t now)
-{
-    int i;
-
-    for (i = 0; i < g.defer_count; i++) {
-        engine_fingers_set(&g.fingers, g.defer_down[i], 1);
-        engine_finger_at_touch(g.finger_at, ENGINE_KEY_ID_MAX + 1, g.defer_down[i], now);
-    }
-    g.defer_count = 0;
 }
 
 static const char *mode_name(int mode)
@@ -1181,6 +1233,25 @@ static const char *macro_name(const struct engine_live_config *live, const char 
     return "";
 }
 
+static void log_trigger_event(const struct engine_live_config *live, uint16_t id,
+                              const char *what)
+{
+    const char *key = engine_key_name(id);
+    int m;
+
+    if (!live || !live->macros || !live->extras)
+        return;
+    for (m = 0; m < live->macro_count; m++) {
+        char line[320];
+
+        if (live->macros[m].trigger != id)
+            continue;
+        snprintf(line, sizeof line, "trigger %s %s macro=\"%s\" id=%s", key ? key : "?", what,
+                 live->extras[m].name, live->macros[m].id);
+        engine_log(line);
+    }
+}
+
 /* Matched trigger edges, starts, stops, and refusals from this tick. */
 static void log_notes(const struct engine_live_config *live)
 {
@@ -1199,8 +1270,11 @@ static void log_notes(const struct engine_live_config *live)
         if (note->kind == ENGINE_NOTE_EDGE) {
             const char *key = engine_key_name(note->key);
 
-            snprintf(line, sizeof line, "trigger %s %s macro=\"%s\" id=%s action=%s",
-                     key ? key : "?", note->down ? "down" : "up", name, note->id, why);
+            /* swallow is what the hook did with the finger's down. A down
+               the game saw is a trigger leaking through. */
+            snprintf(line, sizeof line, "trigger %s %s macro=\"%s\" id=%s action=%s swallow=%s",
+                     key ? key : "?", note->down ? "down" : "up", name, note->id, why,
+                     note->key <= ENGINE_KEY_ID_MAX && g.last_swallow[note->key] ? "yes" : "no");
         } else if (note->kind == ENGINE_NOTE_START) {
             snprintf(line, sizeof line, "runner start macro=\"%s\" id=%s mode=%s reason=%s", name,
                      note->id, mode_name(note->mode), why);
@@ -1470,7 +1544,7 @@ static void playback_tick(int64_t now)
 
     apply_commands(now);
     watch_hooks(now, engine_live_needs_mouse(&live), switched);
-    drain_fingers(now);
+    drain_fingers(now, &live);
     log_unmatched(&live);
     reconcile_fingers();
     {
@@ -1486,7 +1560,8 @@ static void playback_tick(int64_t now)
     if (g.armed)
         engine_poll_triggers(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner);
     engine_play_tick(g.play, now);
-    apply_deferred(now);
+    redo_fingers(now);
+    sync_raw(engine_live_needs_mouse(&live));
     log_notes(&live);
     log_state(now);
     send_play_report(&g.play->last, g.play->output.mode, now);
@@ -1695,6 +1770,16 @@ static int finish_resident(void)
             atomic_store_explicit(&g.fail, 1, memory_order_release);
     }
     engine_win_hook_close(&g.hook);
+    if (g.raw_thread) {
+        for (i = 0; i < 50; i++) {
+            if (engine_win_raw_stop(&g.raw_win) == 0)
+                break;
+            Sleep(1);
+        }
+        WaitForSingleObject(g.raw_thread, ENGINE_JOIN_MS);
+        CloseHandle(g.raw_thread);
+        g.raw_thread = NULL;
+    }
 
     close_timer();
     if (g.release_pipe)
@@ -1751,6 +1836,11 @@ static int run_resident(const struct engine_args *args)
     engine_trigger_init(&g.triggers);
     engine_claims_init(&g.claims);
     engine_fingers_clear(&g.fingers);
+    engine_raw_mouse_init(&g.raw);
+    g.lost.raw = &g.raw;
+    engine_win_raw_open(&g.raw_win, &g.raw);
+    g.raw_want = -1;
+    g.raw_logged = ENGINE_RAW_OFF;
     engine_report_queue_init(&g.reports);
     g.play = (struct engine_play *)calloc(1, sizeof *g.play);
     if (!g.play) {
@@ -1798,6 +1888,10 @@ static int run_resident(const struct engine_args *args)
     if (!g.hook_thread || wait_entered(&g.hook_entered) != 0 ||
         atomic_load_explicit(&g.fail, memory_order_acquire))
         return finish_resident();
+
+    /* Without Raw Input a lost mouse release waits for the next up, so a
+       failed thread is not a failed engine. */
+    g.raw_thread = CreateThread(NULL, 0, raw_thread, NULL, 0, NULL);
 
     g.playback_thread = start_thread(playback_thread);
     if (!g.playback_thread || wait_entered(&g.play_entered) != 0 ||

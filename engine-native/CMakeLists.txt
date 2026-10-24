@@ -71,7 +71,8 @@ add_executable(engine-command-test tests/command_test.c)
 target_link_libraries(engine-command-test PRIVATE engine_core)
 
 if(WIN32)
-  add_library(engine_win STATIC src/win/win_entry.c src/win/clock_win.c src/win/hook_win.c src/win/output_win.c)
+  add_library(engine_win STATIC src/win/win_entry.c src/win/clock_win.c src/win/hook_win.c src/win/output_win.c
+                        src/win/raw_win.c)
   target_include_directories(engine_win PUBLIC src/win)
   target_link_libraries(engine_win PUBLIC engine_core user32 shell32)
   target_link_libraries(macroui-engine PRIVATE engine_win)

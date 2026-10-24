@@ -57,7 +57,8 @@
 struct engine_finger {
     uint16_t id;
     uint8_t down;
-    uint8_t unused;
+    /* The hook returned 1 for this event, so the app in front never saw it. */
+    uint8_t swallowed;
     int64_t qpc;
 };
 
@@ -158,6 +159,30 @@ struct engine_hook_watch_out {
     int silent;
 };
 
+/* Raw Input's count of ups for middle, mouse 4 and mouse 5, from a real
+   mouse, not the board and not injected input. The Raw Input thread writes
+   it. A low-level hook that swallows a button does not stop Raw Input, so an
+   up counted here that the hook never reported is a lost release. ok is 0
+   until Raw Input is registered. */
+#define ENGINE_RAW_BUTTONS 3
+
+struct engine_raw_mouse {
+    atomic_int ok;
+    atomic_uint ups[ENGINE_RAW_BUTTONS];
+};
+
+#define ENGINE_REDO_CAP 8
+
+/* What the finger drain keeps for lost releases. raw NULL turns the check
+   off. ups_at_down is the raw count when each button last went down. redo is
+   a button let go for one tick, to be pressed again after it. */
+struct engine_finger_lost {
+    struct engine_raw_mouse *raw;
+    uint32_t ups_at_down[ENGINE_RAW_BUTTONS];
+    uint16_t redo[ENGINE_REDO_CAP];
+    int redo_count;
+};
+
 struct engine_swallow_rule {
     int is_trigger;
     int focus_ok;
@@ -165,6 +190,15 @@ struct engine_swallow_rule {
 };
 
 void engine_hook_init(struct engine_hook_state *st);
+
+void engine_raw_mouse_init(struct engine_raw_mouse *raw);
+void engine_raw_mouse_set_ok(struct engine_raw_mouse *raw, int ok);
+
+/* One up from a real mouse. Other ids and downs are ignored. */
+void engine_raw_mouse_up(struct engine_raw_mouse *raw, uint16_t id);
+
+/* 0, 1 or 2 for middle, mouse 4 and mouse 5. -1 for any other id. */
+int engine_raw_slot(uint16_t id);
 
 /* Virtual key after side resolution, or 256 for numpad enter.
    0 is not a key. Right shift is scan 0x36. */
@@ -181,10 +215,6 @@ const char *engine_key_name(uint16_t id);
 
 int engine_is_mouse_button(uint16_t id);
 
-/* A second down of mouse 4 or mouse 5, while that button is already down, is
-   a missed up. Left, right, middle, and a keyboard auto-repeat are not. */
-int engine_repeat_is_missed_up(uint16_t id, int down, int already);
-
 /* Pause, left click, right click, and an empty id are not triggers.
    Middle and both side buttons are. */
 int engine_can_trigger(uint16_t id);
@@ -199,9 +229,8 @@ int engine_shell_in_front(const char *front, const char *owner);
 int engine_focus_swallow(const char *focus_exe, const char *front, const char *owner);
 
 /* Swallow when it is a trigger, focus matches, and the pass count is 0.
-   Keyboard software and board use the same bits. Middle and both side buttons
-   are swallowed only for software output. Board output passes those clicks.
-   Left and right always pass. */
+   Software and board use the same bits for keys, middle, and both side
+   buttons. Left and right always pass. */
 void engine_swallow_for_trigger(const struct engine_swallow_rule *rule,
                                 int *swallow, int *pass);
 

@@ -1,6 +1,7 @@
 #include "runner.h"
 
 #include "clock.h"
+#include "hook.h"
 
 #include <math.h>
 #include <string.h>
@@ -2451,30 +2452,68 @@ int engine_fingers_release_os_up(struct engine_fingers *fingers, const uint8_t *
     return n;
 }
 
-int engine_finger_note(struct engine_fingers *fingers, uint16_t id, int down,
-                       uint16_t *defer, int *defer_count, int cap)
+static uint32_t raw_ups(const struct engine_finger_lost *lost, int slot)
 {
+    return atomic_load_explicit(&lost->raw->ups[slot], memory_order_acquire);
+}
+
+static int raw_ok(const struct engine_finger_lost *lost)
+{
+    return lost && lost->raw && atomic_load_explicit(&lost->raw->ok, memory_order_acquire);
+}
+
+static void drop_redo(struct engine_finger_lost *lost, uint16_t id)
+{
+    int kept = 0;
     int i;
-    int kept;
+
+    for (i = 0; i < lost->redo_count; i++) {
+        if (lost->redo[i] != id)
+            lost->redo[kept++] = lost->redo[i];
+    }
+    lost->redo_count = kept;
+}
+
+int engine_finger_note(struct engine_fingers *fingers, uint16_t id, int down,
+                       struct engine_finger_lost *lost)
+{
+    int slot = engine_raw_slot(id);
 
     if (!fingers)
-        return 0;
-    if (engine_repeat_is_missed_up(id, down, engine_fingers_down(fingers, id))) {
+        return ENGINE_FINGER_SET;
+    if (down && engine_fingers_down(fingers, id)) {
+        if (slot < 0 || !raw_ok(lost) || raw_ups(lost, slot) == lost->ups_at_down[slot] ||
+            lost->redo_count >= ENGINE_REDO_CAP)
+            return ENGINE_FINGER_REPEAT;
         engine_fingers_set(fingers, id, 0);
-        if (defer && defer_count && *defer_count < cap)
-            defer[(*defer_count)++] = id;
-        return 1;
+        lost->redo[lost->redo_count++] = id;
+        return ENGINE_FINGER_LOST;
     }
+    if (lost && !down)
+        drop_redo(lost, id);
+    if (lost && down && slot >= 0 && raw_ok(lost))
+        lost->ups_at_down[slot] = raw_ups(lost, slot);
     engine_fingers_set(fingers, id, down);
-    if (down || !defer || !defer_count)
+    return ENGINE_FINGER_SET;
+}
+
+int engine_finger_redo(struct engine_fingers *fingers, struct engine_finger_lost *lost,
+                       uint16_t *out, int cap)
+{
+    int n = 0;
+    int i;
+
+    if (!fingers || !lost)
         return 0;
-    kept = 0;
-    for (i = 0; i < *defer_count; i++) {
-        if (defer[i] != id)
-            defer[kept++] = defer[i];
+    for (i = 0; i < lost->redo_count; i++) {
+        uint16_t id = lost->redo[i];
+
+        engine_finger_note(fingers, id, 1, lost);
+        if (out && n < cap)
+            out[n++] = id;
     }
-    *defer_count = kept;
-    return 0;
+    lost->redo_count = 0;
+    return n;
 }
 
 int engine_fingers_release_down(struct engine_fingers *fingers, int keys, int mouse,
@@ -2535,7 +2574,7 @@ static const char *const k_why[ENGINE_WHY_COUNT] = {
     "busy", "runner-cap", "arena-full", "no-id", "muted", "once-done", "focus", "disabled",
     "finished", "release", "next-up", "scan-release", "edge-release", "toggle", "stop",
     "stop-all", "exclusive", "restart", "orphan", "frame-cap", "hold-cap", "ask-stop",
-    "panic", "overflow", "command", "start"
+    "panic", "overflow", "command", "start", "playing"
 };
 
 const char *engine_why_name(int why)
