@@ -114,8 +114,10 @@ struct engine_resident {
     int armed;
     HANDLE play_wake;
     int64_t finger_at[ENGINE_KEY_ID_MAX + 1];
-    uint16_t defer_down[8];
-    int defer_count;
+    /* The hook's answer for the last down of each id, for the trigger line.
+       repeat_logged is one "repeat ignored" line per hold, cleared on the up. */
+    uint8_t last_swallow[ENGINE_KEY_ID_MAX + 1];
+    uint8_t repeat_logged[ENGINE_KEY_ID_MAX + 1];
     int desktop_known;
     int desktop_open;
     int64_t log_beat;
@@ -958,30 +960,31 @@ static void log_released(const uint16_t *ids, int n, const char *reason)
     }
 }
 
-static void drain_fingers(int64_t now)
+static void log_repeat(const struct engine_live_config *live, uint16_t id);
+
+static void drain_fingers(int64_t now, const struct engine_live_config *live)
 {
     struct engine_finger ev;
     int pause;
 
     if (!g.play)
         return;
-    g.defer_count = 0;
     pause = engine_fingers_down(&g.fingers, ENGINE_KEY_PAUSE);
     while (engine_event_pop(&g.hooks, &ev)) {
-        int deferred;
-
         if (ev.id == ENGINE_KEY_PAUSE && engine_panic_edge(ev.id, pause, ev.down))
             engine_play_stop_all_why(g.play, ENGINE_WHY_PANIC);
-        deferred = engine_finger_note(&g.fingers, ev.id, ev.down, g.defer_down, &g.defer_count, 8);
-        if (deferred) {
-            char line[128];
-            const char *name = engine_key_name(ev.id);
-
-            if (name)
-                snprintf(line, sizeof line, "release %s reason=second-down", name);
-            else
-                snprintf(line, sizeof line, "release %u reason=second-down", (unsigned)ev.id);
-            engine_log(line);
+        /* Windows auto-repeat, or a second mouse 4 or 5 down, while the
+           finger is down. It is not an edge, so a held trigger never starts
+           again. One line per hold. */
+        if (engine_finger_note(&g.fingers, ev.id, ev.down)) {
+            if (!g.repeat_logged[ev.id] && engine_live_claims(live, ev.id)) {
+                g.repeat_logged[ev.id] = 1;
+                log_repeat(live, ev.id);
+            }
+        } else if (ev.down) {
+            g.last_swallow[ev.id] = ev.swallowed ? 1 : 0;
+        } else {
+            g.repeat_logged[ev.id] = 0;
         }
         engine_finger_at_touch(g.finger_at, ENGINE_KEY_ID_MAX + 1, ev.id, ev.qpc ? ev.qpc : now);
         if (ev.id == ENGINE_KEY_PAUSE)
@@ -1039,17 +1042,6 @@ static void reconcile_fingers(void)
     n = engine_fingers_release_down(&g.fingers, 1, 1, ids, 16);
     if (n > 0)
         log_released(ids, n, "desktop");
-}
-
-static void apply_deferred(int64_t now)
-{
-    int i;
-
-    for (i = 0; i < g.defer_count; i++) {
-        engine_fingers_set(&g.fingers, g.defer_down[i], 1);
-        engine_finger_at_touch(g.finger_at, ENGINE_KEY_ID_MAX + 1, g.defer_down[i], now);
-    }
-    g.defer_count = 0;
 }
 
 static const char *mode_name(int mode)
@@ -1181,6 +1173,24 @@ static const char *macro_name(const struct engine_live_config *live, const char 
     return "";
 }
 
+static void log_repeat(const struct engine_live_config *live, uint16_t id)
+{
+    const char *key = engine_key_name(id);
+    int m;
+
+    if (!live || !live->macros || !live->extras)
+        return;
+    for (m = 0; m < live->macro_count; m++) {
+        char line[320];
+
+        if (live->macros[m].trigger != id)
+            continue;
+        snprintf(line, sizeof line, "trigger %s repeat ignored macro=\"%s\" id=%s",
+                 key ? key : "?", live->extras[m].name, live->macros[m].id);
+        engine_log(line);
+    }
+}
+
 /* Matched trigger edges, starts, stops, and refusals from this tick. */
 static void log_notes(const struct engine_live_config *live)
 {
@@ -1199,8 +1209,11 @@ static void log_notes(const struct engine_live_config *live)
         if (note->kind == ENGINE_NOTE_EDGE) {
             const char *key = engine_key_name(note->key);
 
-            snprintf(line, sizeof line, "trigger %s %s macro=\"%s\" id=%s action=%s",
-                     key ? key : "?", note->down ? "down" : "up", name, note->id, why);
+            /* swallow is what the hook did with the finger's down. A down
+               the game saw is a trigger leaking through. */
+            snprintf(line, sizeof line, "trigger %s %s macro=\"%s\" id=%s action=%s swallow=%s",
+                     key ? key : "?", note->down ? "down" : "up", name, note->id, why,
+                     note->key <= ENGINE_KEY_ID_MAX && g.last_swallow[note->key] ? "yes" : "no");
         } else if (note->kind == ENGINE_NOTE_START) {
             snprintf(line, sizeof line, "runner start macro=\"%s\" id=%s mode=%s reason=%s", name,
                      note->id, mode_name(note->mode), why);
@@ -1470,7 +1483,7 @@ static void playback_tick(int64_t now)
 
     apply_commands(now);
     watch_hooks(now, engine_live_needs_mouse(&live), switched);
-    drain_fingers(now);
+    drain_fingers(now, &live);
     log_unmatched(&live);
     reconcile_fingers();
     {
@@ -1486,7 +1499,6 @@ static void playback_tick(int64_t now)
     if (g.armed)
         engine_poll_triggers(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner);
     engine_play_tick(g.play, now);
-    apply_deferred(now);
     log_notes(&live);
     log_state(now);
     send_play_report(&g.play->last, g.play->output.mode, now);

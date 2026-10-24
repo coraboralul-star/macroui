@@ -2451,29 +2451,13 @@ int engine_fingers_release_os_up(struct engine_fingers *fingers, const uint8_t *
     return n;
 }
 
-int engine_finger_note(struct engine_fingers *fingers, uint16_t id, int down,
-                       uint16_t *defer, int *defer_count, int cap)
+int engine_finger_note(struct engine_fingers *fingers, uint16_t id, int down)
 {
-    int i;
-    int kept;
-
     if (!fingers)
         return 0;
-    if (engine_repeat_is_missed_up(id, down, engine_fingers_down(fingers, id))) {
-        engine_fingers_set(fingers, id, 0);
-        if (defer && defer_count && *defer_count < cap)
-            defer[(*defer_count)++] = id;
+    if (down && engine_fingers_down(fingers, id))
         return 1;
-    }
     engine_fingers_set(fingers, id, down);
-    if (down || !defer || !defer_count)
-        return 0;
-    kept = 0;
-    for (i = 0; i < *defer_count; i++) {
-        if (defer[i] != id)
-            defer[kept++] = defer[i];
-    }
-    *defer_count = kept;
     return 0;
 }
 
@@ -2535,7 +2519,7 @@ static const char *const k_why[ENGINE_WHY_COUNT] = {
     "busy", "runner-cap", "arena-full", "no-id", "muted", "once-done", "focus", "disabled",
     "finished", "release", "next-up", "scan-release", "edge-release", "toggle", "stop",
     "stop-all", "exclusive", "restart", "orphan", "frame-cap", "hold-cap", "ask-stop",
-    "panic", "overflow", "command", "start"
+    "panic", "overflow", "command", "start", "playing"
 };
 
 const char *engine_why_name(int why)

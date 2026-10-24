@@ -123,7 +123,9 @@ void engine_trigger_note_profile(struct engine_trigger_mem *mem, uint64_t seq);
    for the edge. Advanced blocks ask-stop when the release should finish the
    pass. A done once-lock does not start the macro again. An open lock starts
    it once, then the lock is spent. A start needs a down edge, like AHK.
-   A runner that ends while the key is still down is not started again. */
+   A runner that ends while the key is still down is not started again.
+   A Run Once (play once, no hold loop) that is still playing ignores a new
+   down edge: one press is one whole pass. The edge is noted as "playing". */
 void engine_poll_triggers(struct engine_play *play, const struct engine_live_config *live,
                           struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
                           const char *front, const char *owner);
@@ -137,15 +139,14 @@ void engine_once_arm(struct engine_play *play, const struct engine_live_config *
 /* Mark a runner done when its id is not in the live catalog. */
 void engine_reap_orphans(struct engine_play *play, const struct engine_live_config *live);
 
-/* Empty when disarmed. An armed keyboard trigger is swallowed when the live
-   profile focus says so, for software and for a board. That is the AHK $*
-   hotkey, and the board low-level hook that still eats the real key.
-   A mouse trigger is swallowed only in software. Board output passes the
-   click. Unmatched focus and the editor pass the button. Pause, left click,
+/* Empty when disarmed. An armed trigger, a key, middle, or a side button, is
+   swallowed when the live profile focus says so, for software and for a
+   board. That is the AHK $* hotkey, and the board low-level hook that eats
+   the real key or click. A board's own clicks match an echo token first and
+   pass. Unmatched focus and the editor pass the button. Pause, left click,
    and right click are not triggers, so those clicks always pass and never
    start a macro. Middle and both side buttons are triggers. A once-lock pass
-   count lets that button through. A null play has no pass list and treats
-   output as software. */
+   count lets that button through. A null play has no pass list. */
 void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_live_config *live,
                         const char *front, const char *owner, int armed,
                         const struct engine_play *play);

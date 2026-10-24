@@ -63,7 +63,9 @@
 #define ENGINE_WHY_OVERFLOW 30
 #define ENGINE_WHY_COMMAND 31
 #define ENGINE_WHY_START 32
-#define ENGINE_WHY_COUNT 33
+/* A Run Once is still playing. A press is ignored until it is done. */
+#define ENGINE_WHY_PLAYING 33
+#define ENGINE_WHY_COUNT 34
 
 #define ENGINE_NOTE_EDGE 1
 #define ENGINE_NOTE_START 2
@@ -491,12 +493,11 @@ void engine_finger_at_touch(int64_t *at, int count, uint16_t id, int64_t now);
 int engine_fingers_release_os_up(struct engine_fingers *fingers, const uint8_t *up,
                                  const uint8_t *blocked, uint16_t *out, int cap);
 
-/* Apply one hook event. A second down of mouse 4 or 5 clears the finger and
-   appends id to defer. A later up of that id removes the defer and leaves the
-   finger up, so a click in one batch does not stay held. Every other event,
-   including a second left click, applies immediately. Returns 1 when deferred. */
-int engine_finger_note(struct engine_fingers *fingers, uint16_t id, int down,
-                       uint16_t *defer, int *defer_count, int cap);
+/* Apply one hook event. A down while that finger is already down is a
+   repeat, Windows auto-repeat or a second mouse 4 or 5 down: nothing changes,
+   so it is never an edge. Only an up and then a down is a new press.
+   Returns 1 for a repeat. */
+int engine_finger_note(struct engine_fingers *fingers, uint16_t id, int down);
 
 /* Releases every down id. keys 1 includes non-mouse ids. mouse 1 includes
    mouse buttons. Writes the released ids. Returns how many were released. */

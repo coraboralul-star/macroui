@@ -300,13 +300,6 @@ int engine_is_mouse_button(uint16_t id)
     return id >= ENGINE_KEY_LBUTTON && id <= ENGINE_KEY_XBUTTON2;
 }
 
-int engine_repeat_is_missed_up(uint16_t id, int down, int already)
-{
-    if (!down || !already)
-        return 0;
-    return id == ENGINE_KEY_XBUTTON1 || id == ENGINE_KEY_XBUTTON2;
-}
-
 int engine_can_trigger(uint16_t id)
 {
     if (id == 0 || id == ENGINE_KEY_PAUSE)
@@ -568,29 +561,30 @@ void engine_hook_classify(struct engine_hook_state *st,
     if (engine_echo_match(st, id, down, sample->now))
         return;
 
+    if (id != ENGINE_KEY_LBUTTON && id != ENGINE_KEY_RBUTTON) {
+        bits = swallow_bits(st, id);
+        if (down) {
+            out->swallow = (bits & ENGINE_SWALLOW_BIT) && !(bits & ENGINE_PASS_BIT);
+            st->down_blocked[id] = (uint8_t)out->swallow;
+        } else {
+            /* The map can change between a down and its up. Swallowing an up
+               whose down passed leaves the key down in Windows. Passing an up
+               whose down was swallowed hands Windows a lone up. */
+            out->swallow = st->down_blocked[id] ? 1 : 0;
+            st->down_blocked[id] = 0;
+        }
+        note_win(st, id, down, out);
+    }
+
     finger.id = id;
     finger.down = down ? 1 : 0;
-    finger.unused = 0;
+    finger.swallowed = out->swallow ? 1 : 0;
     finger.qpc = sample->now;
     if (engine_event_push(st, &finger)) {
         out->enqueued = 1;
         if (atomic_load_explicit(&st->wake_on_input, memory_order_acquire))
             out->wake = 1;
     }
-    if (id == ENGINE_KEY_LBUTTON || id == ENGINE_KEY_RBUTTON)
-        return;
-    bits = swallow_bits(st, id);
-    if (down) {
-        out->swallow = (bits & ENGINE_SWALLOW_BIT) && !(bits & ENGINE_PASS_BIT);
-        st->down_blocked[id] = (uint8_t)out->swallow;
-    } else {
-        /* The map can change between a down and its up. Swallowing an up
-           whose down passed leaves the key down in Windows. Passing an up
-           whose down was swallowed hands Windows a lone up. */
-        out->swallow = st->down_blocked[id] ? 1 : 0;
-        st->down_blocked[id] = 0;
-    }
-    note_win(st, id, down, out);
 }
 
 void engine_hook_watch(const struct engine_hook_watch_in *in,

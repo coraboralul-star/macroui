@@ -57,7 +57,8 @@
 struct engine_finger {
     uint16_t id;
     uint8_t down;
-    uint8_t unused;
+    /* The hook returned 1 for this event, so the app in front never saw it. */
+    uint8_t swallowed;
     int64_t qpc;
 };
 
@@ -181,10 +182,6 @@ const char *engine_key_name(uint16_t id);
 
 int engine_is_mouse_button(uint16_t id);
 
-/* A second down of mouse 4 or mouse 5, while that button is already down, is
-   a missed up. Left, right, middle, and a keyboard auto-repeat are not. */
-int engine_repeat_is_missed_up(uint16_t id, int down, int already);
-
 /* Pause, left click, right click, and an empty id are not triggers.
    Middle and both side buttons are. */
 int engine_can_trigger(uint16_t id);
@@ -199,9 +196,8 @@ int engine_shell_in_front(const char *front, const char *owner);
 int engine_focus_swallow(const char *focus_exe, const char *front, const char *owner);
 
 /* Swallow when it is a trigger, focus matches, and the pass count is 0.
-   Keyboard software and board use the same bits. Middle and both side buttons
-   are swallowed only for software output. Board output passes those clicks.
-   Left and right always pass. */
+   Software and board use the same bits for keys, middle, and both side
+   buttons. Left and right always pass. */
 void engine_swallow_for_trigger(const struct engine_swallow_rule *rule,
                                 int *swallow, int *pass);
 
