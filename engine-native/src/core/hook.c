@@ -182,6 +182,42 @@ void engine_hook_init(struct engine_hook_state *st)
     atomic_init(&st->stop, 0);
 }
 
+void engine_raw_mouse_init(struct engine_raw_mouse *raw)
+{
+    int i;
+
+    if (!raw)
+        return;
+    atomic_init(&raw->ok, 0);
+    for (i = 0; i < ENGINE_RAW_BUTTONS; i++)
+        atomic_init(&raw->ups[i], 0u);
+}
+
+void engine_raw_mouse_set_ok(struct engine_raw_mouse *raw, int ok)
+{
+    if (raw)
+        atomic_store_explicit(&raw->ok, ok ? 1 : 0, memory_order_release);
+}
+
+void engine_raw_mouse_up(struct engine_raw_mouse *raw, uint16_t id)
+{
+    int slot = engine_raw_slot(id);
+
+    if (raw && slot >= 0)
+        atomic_fetch_add_explicit(&raw->ups[slot], 1u, memory_order_acq_rel);
+}
+
+int engine_raw_slot(uint16_t id)
+{
+    if (id == ENGINE_KEY_MBUTTON)
+        return 0;
+    if (id == ENGINE_KEY_XBUTTON1)
+        return 1;
+    if (id == ENGINE_KEY_XBUTTON2)
+        return 2;
+    return -1;
+}
+
 uint16_t engine_resolve_key(uint32_t vk, uint32_t scan, uint32_t flags)
 {
     int extended = (flags & ENGINE_KEY_EXTENDED) != 0;

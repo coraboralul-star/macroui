@@ -493,11 +493,28 @@ void engine_finger_at_touch(int64_t *at, int count, uint16_t id, int64_t now);
 int engine_fingers_release_os_up(struct engine_fingers *fingers, const uint8_t *up,
                                  const uint8_t *blocked, uint16_t *out, int cap);
 
+#define ENGINE_FINGER_SET 0
+#define ENGINE_FINGER_REPEAT 1
+#define ENGINE_FINGER_LOST 2
+
+struct engine_finger_lost;
+
 /* Apply one hook event. A down while that finger is already down is a
    repeat, Windows auto-repeat or a second mouse 4 or 5 down: nothing changes,
-   so it is never an edge. Only an up and then a down is a new press.
-   Returns 1 for a repeat. */
-int engine_finger_note(struct engine_fingers *fingers, uint16_t id, int down);
+   so it is never an edge, and this returns REPEAT. Only an up and then a down
+   is a new press.
+   The one exception is a middle or side button that Raw Input saw go up
+   since its last down. The hook lost that up. The finger goes up now and the
+   id is queued in lost->redo, so this tick sees the release and
+   engine_finger_redo presses it after the tick. Returns LOST. An up drops its
+   id from redo. A null lost, or Raw Input not registered, is always REPEAT. */
+int engine_finger_note(struct engine_fingers *fingers, uint16_t id, int down,
+                       struct engine_finger_lost *lost);
+
+/* After the tick: press every queued id again, so the next poll sees a new
+   down edge. Writes the ids. Returns how many. */
+int engine_finger_redo(struct engine_fingers *fingers, struct engine_finger_lost *lost,
+                       uint16_t *out, int cap);
 
 /* Releases every down id. keys 1 includes non-mouse ids. mouse 1 includes
    mouse buttons. Writes the released ids. Returns how many were released. */

@@ -159,6 +159,30 @@ struct engine_hook_watch_out {
     int silent;
 };
 
+/* Raw Input's count of ups for middle, mouse 4 and mouse 5, from a real
+   mouse, not the board and not injected input. The Raw Input thread writes
+   it. A low-level hook that swallows a button does not stop Raw Input, so an
+   up counted here that the hook never reported is a lost release. ok is 0
+   until Raw Input is registered. */
+#define ENGINE_RAW_BUTTONS 3
+
+struct engine_raw_mouse {
+    atomic_int ok;
+    atomic_uint ups[ENGINE_RAW_BUTTONS];
+};
+
+#define ENGINE_REDO_CAP 8
+
+/* What the finger drain keeps for lost releases. raw NULL turns the check
+   off. ups_at_down is the raw count when each button last went down. redo is
+   a button let go for one tick, to be pressed again after it. */
+struct engine_finger_lost {
+    struct engine_raw_mouse *raw;
+    uint32_t ups_at_down[ENGINE_RAW_BUTTONS];
+    uint16_t redo[ENGINE_REDO_CAP];
+    int redo_count;
+};
+
 struct engine_swallow_rule {
     int is_trigger;
     int focus_ok;
@@ -166,6 +190,15 @@ struct engine_swallow_rule {
 };
 
 void engine_hook_init(struct engine_hook_state *st);
+
+void engine_raw_mouse_init(struct engine_raw_mouse *raw);
+void engine_raw_mouse_set_ok(struct engine_raw_mouse *raw, int ok);
+
+/* One up from a real mouse. Other ids and downs are ignored. */
+void engine_raw_mouse_up(struct engine_raw_mouse *raw, uint16_t id);
+
+/* 0, 1 or 2 for middle, mouse 4 and mouse 5. -1 for any other id. */
+int engine_raw_slot(uint16_t id);
 
 /* Virtual key after side resolution, or 256 for numpad enter.
    0 is not a key. Right shift is scan 0x36. */

@@ -808,25 +808,58 @@ static void check_recover(void)
 
         engine_fingers_clear(&fingers);
         engine_fingers_set(&fingers, ENGINE_KEY_LBUTTON, 1);
-        expect(engine_finger_note(&fingers, ENGINE_KEY_LBUTTON, 1) == 1 &&
+        expect(engine_finger_note(&fingers, ENGINE_KEY_LBUTTON, 1, NULL) == 1 &&
                    engine_fingers_down(&fingers, ENGINE_KEY_LBUTTON),
                "a second left click keeps it down");
-        expect(engine_finger_note(&fingers, ENGINE_KEY_LBUTTON, 0) == 0 &&
+        expect(engine_finger_note(&fingers, ENGINE_KEY_LBUTTON, 0, NULL) == 0 &&
                    !engine_fingers_down(&fingers, ENGINE_KEY_LBUTTON),
                "the left click up clears a stuck left button");
 
-        expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1) == 0 &&
+        expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1, NULL) == 0 &&
                    engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
                "the first mouse 5 down is a press");
-        expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1) == 1 &&
+        expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1, NULL) == 1 &&
                    engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
                "a second mouse 5 down is a repeat and stays down");
-        expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 0) == 0 &&
+        expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 0, NULL) == 0 &&
                    !engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
                "the mouse 5 up releases it");
         engine_fingers_set(&fingers, 0x34, 1);
-        expect(engine_finger_note(&fingers, 0x34, 1) == 1 && engine_fingers_down(&fingers, 0x34),
+        expect(engine_finger_note(&fingers, 0x34, 1, NULL) == 1 && engine_fingers_down(&fingers, 0x34),
                "a keyboard repeat is a repeat");
+        {
+            struct engine_raw_mouse raw;
+            struct engine_finger_lost lost;
+            uint16_t redo[4];
+
+            engine_raw_mouse_init(&raw);
+            engine_raw_mouse_set_ok(&raw, 1);
+            memset(&lost, 0, sizeof lost);
+            lost.raw = &raw;
+            engine_fingers_clear(&fingers);
+            engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1, &lost);
+            expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1, &lost) ==
+                       ENGINE_FINGER_REPEAT,
+                   "mouse 5 held in Raw Input: a second down is a repeat");
+            engine_raw_mouse_up(&raw, ENGINE_KEY_XBUTTON2);
+            expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1, &lost) ==
+                           ENGINE_FINGER_LOST &&
+                       !engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+                   "mouse 5 up in Raw Input: the down lets go for one tick");
+            expect(engine_finger_redo(&fingers, &lost, redo, 4) == 1 &&
+                       redo[0] == ENGINE_KEY_XBUTTON2 &&
+                       engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+                   "after the tick the lost release is pressed again");
+            expect(engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1, &lost) ==
+                       ENGINE_FINGER_REPEAT,
+                   "the redo takes a new Raw Input count");
+            engine_raw_mouse_up(&raw, ENGINE_KEY_XBUTTON2);
+            engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 1, &lost);
+            engine_finger_note(&fingers, ENGINE_KEY_XBUTTON2, 0, &lost);
+            expect(engine_finger_redo(&fingers, &lost, redo, 4) == 0 &&
+                       !engine_fingers_down(&fingers, ENGINE_KEY_XBUTTON2),
+                   "an up in the same drain drops the redo");
+        }
     }
 }
 
@@ -938,10 +971,14 @@ struct held_run {
     int swallowed;
     int starts;
     int playing;
+    int lost_count;
+    /* raw NULL is no Raw Input. */
+    struct engine_finger_lost lost;
 };
 
 /* playback_tick in one millisecond: publish the swallow map, take the hook
-   events the way drain_fingers does, poll, tick, then read the notes. */
+   events the way drain_fingers does, poll, tick, press a lost release again,
+   then read the notes. */
 static void held_ms(struct engine_play *play, const struct engine_live_config *live,
                     struct engine_hook_state *hooks, struct engine_trigger_mem *mem,
                     struct engine_fingers *fingers, int64_t now, struct held_run *run)
@@ -949,11 +986,14 @@ static void held_ms(struct engine_play *play, const struct engine_live_config *l
     struct engine_finger ev;
     int i;
 
-    while (engine_event_pop(hooks, &ev))
-        engine_finger_note(fingers, ev.id, ev.down);
+    while (engine_event_pop(hooks, &ev)) {
+        if (engine_finger_note(fingers, ev.id, ev.down, &run->lost) == ENGINE_FINGER_LOST)
+            run->lost_count++;
+    }
     engine_play_set_fingers(play, fingers);
     engine_poll_triggers(play, live, mem, fingers, "helldivers2.exe", "");
     engine_play_tick(play, now);
+    engine_finger_redo(fingers, &run->lost, NULL, 0);
     for (i = 0; i < play->note_count; i++) {
         if (play->notes[i].kind == ENGINE_NOTE_START)
             run->starts++;
@@ -1013,6 +1053,8 @@ static void check_run_once_held(void)
     struct engine_trigger_mem mem;
     struct engine_fingers fingers;
     struct engine_hook_decision decision;
+    /* Raw Input is up and sees the button held the whole time: no ups. */
+    struct engine_raw_mouse raw;
     char label[128];
     int t;
     int o;
@@ -1022,6 +1064,8 @@ static void check_run_once_held(void)
         expect(0, "run once play alloc");
         return;
     }
+    engine_raw_mouse_init(&raw);
+    engine_raw_mouse_set_ok(&raw, 1);
     build_stratagem(steps);
     memset(&decision, 0, sizeof decision);
     engine_macro_init(&macro);
@@ -1046,6 +1090,7 @@ static void check_run_once_held(void)
             int64_t now;
 
             memset(&run, 0, sizeof run);
+            run.lost.raw = &raw;
             engine_hook_init(&hooks);
             engine_play_init(play);
             play->output.mode = outputs[o];
@@ -1076,7 +1121,7 @@ static void check_run_once_held(void)
             }
             snprintf(label, sizeof label, "%s %s held 3 s with repeats plays exactly once",
                      output_names[o], names[t]);
-            expect(run.downs == 77 && run.starts == 1, label);
+            expect(run.downs == 77 && run.starts == 1 && run.lost_count == 0, label);
             snprintf(label, sizeof label, "%s %s run once finishes", output_names[o], names[t]);
             expect(engine_play_alive(play) == 0, label);
             snprintf(label, sizeof label, "%s swallows every %s down, repeats too",
@@ -1117,6 +1162,70 @@ static void check_run_once_held(void)
         snprintf(label, sizeof label, "%s a press after the pass is done plays it again",
                  adv ? "advanced" : "basic");
         expect(run.starts == 2 && run.playing == 1 && engine_play_alive(play) == 0, label);
+    }
+
+    /* The hook loses mouse 4's up, and Raw Input still sees it. The next down
+       is a new press, not a dead one. After the pass it plays again. While
+       the pass plays, it is ignored like any press. Without Raw Input, or
+       for a key, it stays a repeat: that press is dead, the one after its up
+       plays. */
+    for (o = 0; o < 2; o++) {
+        static const char *cases[] = { "after the pass", "mid-run", "no raw input", "a key" };
+        int c;
+
+        for (c = 0; c < 4; c++) {
+            struct engine_raw_mouse tally;
+            struct held_run run;
+            uint16_t id = c == 3 ? 0x34 : ENGINE_KEY_XBUTTON1;
+            int64_t again = c == 1 ? 200 : 1000;
+            int64_t now;
+
+            engine_raw_mouse_init(&tally);
+            engine_raw_mouse_set_ok(&tally, c != 2);
+            memset(&run, 0, sizeof run);
+            run.lost.raw = &tally;
+            macro.advanced = 1;
+            macro.trigger = id;
+            engine_hook_init(&hooks);
+            engine_play_init(play);
+            play->output.mode = outputs[o];
+            engine_play_set_macros(play, &macro, 1);
+            engine_trigger_init(&mem);
+            engine_fingers_clear(&fingers);
+            engine_arm_swallow(&hooks, &live, "helldivers2.exe", "", 1, play);
+            for (now = 0; now < 3000; now++) {
+                if (now == 100 || now == again || now == 2000)
+                    hook_event(&hooks, id, 1, now, &decision);
+                /* The real up: Raw Input counts it, the hook never reports it. */
+                if (now == again - 50)
+                    engine_raw_mouse_up(&tally, id);
+                if (now == again + 100) {
+                    engine_raw_mouse_up(&tally, id);
+                    hook_event(&hooks, id, 0, now, &decision);
+                }
+                if (now == 2100) {
+                    engine_raw_mouse_up(&tally, id);
+                    hook_event(&hooks, id, 0, now, &decision);
+                }
+                held_ms(play, &live, &hooks, &mem, &fingers, now, &run);
+                if (now == again + 20 && c == 1) {
+                    snprintf(label, sizeof label,
+                             "%s a lost release mid-run is a press the pass ignores",
+                             output_names[o]);
+                    expect(run.lost_count == 1 && run.starts == 1 && run.playing == 1, label);
+                }
+            }
+            snprintf(label, sizeof label, "%s lost release %s: starts", output_names[o], cases[c]);
+            if (c == 0)
+                expect(run.lost_count == 1 && run.starts == 3, label);
+            else if (c == 1)
+                expect(run.lost_count == 1 && run.starts == 2 && run.playing == 1, label);
+            else
+                expect(run.lost_count == 0 && run.starts == 2, label);
+            snprintf(label, sizeof label, "%s lost release %s: ends up and idle", output_names[o],
+                     cases[c]);
+            expect(!engine_fingers_down(&fingers, id) && engine_play_alive(play) == 0, label);
+        }
     }
     free(play);
 }
