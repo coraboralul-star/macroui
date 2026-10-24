@@ -221,11 +221,14 @@ PhysKeyProc(nCode, wParam, lParam) {
 }
 
 PhysMouseProc(nCode, wParam, lParam) {
+    block := false
     ; Movement and the wheel are not triggers. Handling them here cuts the mouse rate.
     if (nCode >= 0 && Engine.hMouseHook && wParam != 0x200 && wParam != 0x20A && wParam != 0x20E) {
         Engine.mouseHookTick := A_TickCount
-        try Engine.ReadMouse(wParam, lParam)
+        try block := Engine.ReadMouse(wParam, lParam)
     }
+    if block
+        return 1
     return DllCall("CallNextHookEx", "Ptr", 0, "Int", nCode, "Ptr", wParam, "Ptr", lParam, "Ptr")
 }
 
@@ -1264,6 +1267,11 @@ class Engine {
     static profilePath := ""
     static hooks := Map()
     static physDown := Map()
+    ; Set by the LL hooks, logged by PollTriggers. A hook callback must not write a file.
+    ; repeatSeen: a down while the finger was already down. lastSwallow: the hook's answer to the down.
+    static repeatSeen := Map()
+    static repeatLogged := Map()
+    static lastSwallow := Map()
     static echo := 0x56454E44
     static vkName := Map()
     static rawOk := false
@@ -1457,8 +1465,21 @@ class Engine {
             return false
         if this.MatchHidEcho(name, !up)
             return false
-        this.NotePhysical(name, !up)
-        return this.PassBoard() && this.Hooked(name) && this.SwallowTriggers()
+        return this.NoteHooked(name, !up)
+    }
+
+    ; Windows auto-repeat, or a second side-button down, while the finger is down.
+    ; It is not an edge: physDown is already true, so PollTriggers sees no new press.
+    ; Board: the LL hook is the swallow. Software: the $* hotkey is.
+    static NoteHooked(name, down) {
+        repeat := down && this.physDown.Has(name) && this.physDown[name]
+        if repeat
+            this.repeatSeen[name] := true
+        this.NotePhysical(name, down)
+        block := this.PassBoard() && this.Hooked(name) && this.SwallowTriggers() && !this.PassKey(name)
+        if (down && !repeat)
+            this.lastSwallow[name] := block
+        return block
     }
 
     static Hooked(name) {
@@ -1470,13 +1491,15 @@ class Engine {
         return this.hooks.Has(folded)
     }
 
+    ; Returns true to swallow. On a board this is the only swallow for middle and
+    ; side triggers, like ReadKey for keys. The board's own clicks match hidEcho first.
     static ReadMouse(which, info) {
         flags := NumGet(info, 12, "UInt")
         if (flags & 0x03)
-            return
+            return false
         extraOff := A_PtrSize = 8 ? 24 : 20
         if (NumGet(info, extraOff, "Ptr") = this.echo)
-            return
+            return false
         name := ""
         down := false
         if (which = 0x201 || which = 0x202) {
@@ -1494,10 +1517,15 @@ class Engine {
             down := which = 0x20B
         }
         if (name = "")
-            return
+            return false
         if this.MatchHidEcho(name, down)
-            return
-        this.NotePhysical(name, down)
+            return false
+        ; Left and right are never triggers. Their clicks always reach the game.
+        if (name = "LButton" || name = "RButton") {
+            this.NotePhysical(name, down)
+            return false
+        }
+        return this.NoteHooked(name, down)
     }
 
     static Now() {
@@ -2402,55 +2430,110 @@ class Engine {
             down := this.KeyDown(button)
             was := this.prevDown.Has(id) ? this.prevDown[id] : false
             this.prevDown[id] := down
-            if this.IsMuted(id)
-                continue
-            if !Field(macro, "enabled", true) || !this.FocusOk(macro) {
-                this.StopRunner(id)
-                continue
+            key := NormKey(button)
+            ; A repeat left physDown true, so it is not an edge. One line per hold.
+            if (key != "" && down && this.repeatSeen.Has(key) && !this.repeatLogged.Has(key)) {
+                this.repeatLogged[key] := true
+                this.Log(Format('trigger {} repeat ignored macro="{}" id={}', key, Field(macro, "name", ""), id))
             }
-            if this.OnceDone(id) {
-                if this.HasRunner(id) {
-                    mode := String(Field(macro, "playMode", "once"))
-                    if this.HasTapHold(macro)
-                        mode := "whileHeld"
-                    if (!down && (mode = "whileHeld"))
-                        this.AskStop(id)
-                    continue
+            if (key != "" && !down && this.repeatLogged.Has(key))
+                this.repeatLogged.Delete(key)
+            did := this.PollOne(macro, id, down, was)
+            if (key != "" && down != was)
+                this.Log(Format('trigger {} {} macro="{}" id={} action={} swallow={}', key, down ? "down" : "up",
+                    Field(macro, "name", ""), id, did, this.TriggerSwallowed(key) ? "yes" : "no"))
+            if (did = "playing")
+                this.Log(Format('start blocked macro="{}" id={} mode=once reason=playing', Field(macro, "name", ""), id))
+        }
+        this.repeatSeen := Map()
+    }
+
+    ; What the hook did with this trigger's down. Software swallows with the $* hotkey.
+    static TriggerSwallowed(key) {
+        if this.PassBoard()
+            return this.lastSwallow.Has(key) && this.lastSwallow[key]
+        return this.Hooked(key) && SubStr(HookSpec(key), 1, 1) != "~"
+    }
+
+    ; Run Once: play once, with no block that loops while the trigger is held.
+    ; One press is one whole pass, so a press while it plays is ignored.
+    static IsRunOnce(macro) {
+        if (String(Field(macro, "playMode", "once")) != "once" || this.HasTapHold(macro))
+            return false
+        blocks := Field(macro, "blocks", [])
+        if (Field(macro, "advanced", false) && (blocks is Array)) {
+            for block in blocks {
+                kind := (block is Map) ? String(Field(block, "type", "")) : ""
+                if (kind = "whileHeld" || kind = "swapAfter" || kind = "onceHeld")
+                    return false
+            }
+        }
+        return true
+    }
+
+    ; One macro's trigger. Returns what it did, for the log.
+    static PollOne(macro, id, down, was) {
+        if this.IsMuted(id)
+            return "muted"
+        if !Field(macro, "enabled", true) || !this.FocusOk(macro) {
+            this.StopRunner(id)
+            return Field(macro, "enabled", true) ? "focus" : "disabled"
+        }
+        if this.OnceDone(id) {
+            if this.HasRunner(id) {
+                mode := String(Field(macro, "playMode", "once"))
+                if this.HasTapHold(macro)
+                    mode := "whileHeld"
+                if (!down && (mode = "whileHeld")) {
+                    this.AskStop(id)
+                    return "ask-stop"
                 }
-                this.EnsurePass(id)
-                continue
+                return "once-done"
             }
-            once := this.OnceOpen(id)
-            mode := String(Field(macro, "playMode", "once"))
-            if this.HasTapHold(macro)
-                mode := "whileHeld"
-            ; Playback "On release" means start when the key comes up. That is not
-            ; the editor On release (nearest up / play full) stop rule.
-            if (Field(macro, "advanced", false) && mode != "onRelease") {
-                if (down && !was) {
-                    if once
-                        this.StartOncePlay(macro)
-                    else
-                        this.StartRunner(macro)
-                    if once
-                        this.SpendOnce(id)
-                } else if (!down && this.HasRunner(id) && !once) {
-                    if this.HoldsOnRelease(macro)
-                        this.AskStop(id)
-                }
-                continue
-            }
-            action := this.TriggerAction(mode, down, was, this.HasRunner(id))
-            if (action = "start") {
+            this.EnsurePass(id)
+            return "once-done"
+        }
+        once := this.OnceOpen(id)
+        mode := String(Field(macro, "playMode", "once"))
+        if this.HasTapHold(macro)
+            mode := "whileHeld"
+        ; Playback "On release" means start when the key comes up. That is not
+        ; the editor On release (nearest up / play full) stop rule.
+        if (Field(macro, "advanced", false) && mode != "onRelease") {
+            if (down && !was) {
+                if (this.HasRunner(id) && this.IsRunOnce(macro))
+                    return "playing"
                 if once
                     this.StartOncePlay(macro)
                 else
                     this.StartRunner(macro)
                 if once
                     this.SpendOnce(id)
-            } else if (action = "stop")
-                this.StopRunner(id)
+                return "start"
+            } else if (!down && this.HasRunner(id) && !once) {
+                if this.HoldsOnRelease(macro) {
+                    this.AskStop(id)
+                    return "ask-stop"
+                }
+            }
+            return "none"
         }
+        action := this.TriggerAction(mode, down, was, this.HasRunner(id))
+        if (action = "start") {
+            if (this.HasRunner(id) && this.IsRunOnce(macro))
+                return "playing"
+            if once
+                this.StartOncePlay(macro)
+            else
+                this.StartRunner(macro)
+            if once
+                this.SpendOnce(id)
+            return "start"
+        } else if (action = "stop") {
+            this.StopRunner(id)
+            return "release"
+        }
+        return "none"
     }
 
     static HasTapHold(macro) {
@@ -3223,8 +3306,12 @@ class Engine {
         }
     }
 
+    ; profiles\engine.log, next to the profile, in the native engine's format.
+    ; Only one engine runs at a time, so both write the same file.
+    ; The self-test points logPath at a temp file so it never writes the real log.
+    static logPath := A_ScriptDir "\..\profiles\engine.log"
     static Log(message) {
-        try FileAppend(FormatTime(, "HH:mm:ss") " " message "`n", A_ScriptDir "\engine.log", "UTF-8")
+        try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " " message "`n", this.logPath, "UTF-8")
     }
 }
 
@@ -3249,6 +3336,8 @@ HasVal(list, key) {
 SelfTest() {
     fails := 0
     try FileDelete(A_ScriptDir "\self-test-result.txt")
+    Engine.logPath := A_Temp "\macroui-self-test.log"
+    try FileDelete(Engine.logPath)
     try fails := RunChecks(fails)
     catch as err
         fails := Check(false, "exception " err.Message " line " err.Line, fails)
@@ -4532,5 +4621,180 @@ RunChecks(fails) {
     Engine.StopAll()
     Engine.RemoveDone()
     DllCall("Winmm.dll\timeEndPeriod", "UInt", 1)
+    fails := RunOnceChecks(fails)
+    return fails
+}
+
+; One low-level keyboard event, built like KBDLLHOOKSTRUCT.
+TestKey(key, down) {
+    vk := key = "LWin" ? 0x5B : Ord(StrUpper(key))
+    info := Buffer(24, 0)
+    NumPut("UInt", vk, info, 0)
+    NumPut("UInt", (down ? 0 : 0x80) | (key = "LWin" ? 1 : 0), info, 8)
+    return Engine.ReadKey(down ? 0x100 : 0x101, info)
+}
+
+; One low-level mouse button event, built like MSLLHOOKSTRUCT.
+TestMouse(key, down) {
+    info := Buffer(A_PtrSize = 8 ? 32 : 24, 0)
+    if (key = "XButton1" || key = "XButton2") {
+        NumPut("UInt", (key = "XButton1" ? 1 : 2) << 16, info, 8)
+        msg := down ? 0x20B : 0x20C
+    } else if (key = "MButton")
+        msg := down ? 0x207 : 0x208
+    else
+        msg := key = "LButton" ? (down ? 0x201 : 0x202) : (down ? 0x204 : 0x205)
+    return Engine.ReadMouse(msg, info)
+}
+
+TestTrigger(key, down) {
+    return IsMouseButton(key) ? TestMouse(key, down) : TestKey(key, down)
+}
+
+; Tick order without the clock: poll, flush, advance, flush, drop finished.
+; Returns how many runners this millisecond started.
+TestTick(now) {
+    started := 0
+    Engine.sendNow := Map()
+    Engine.focusCache := Map()
+    Engine.PollTriggers()
+    Engine.RemoveDone()
+    started += Engine.pending.Length
+    Engine.FlushPending()
+    for r in Engine.runners
+        r.Advance(now)
+    started += Engine.pending.Length
+    Engine.FlushPending()
+    Engine.RemoveDone()
+    return started
+}
+
+; Run Once on a held trigger. Windows repeats a held key after 500 ms, then
+; every 33 ms, with no up. That is never a new edge. Only an up and then a down
+; starts it again, and not while the last pass is still playing. A board
+; swallows middle and side triggers like keys.
+RunOnceChecks(fails) {
+    saved := Map("rawOk", Engine.rawOk, "mouse", Engine.hMouseHook, "out", Engine.outputMode,
+        "profile", Engine.profile, "known", Engine.frontKnown, "front", Engine.frontExe, "dry", Engine.dry)
+    Engine.BuildVkMap()
+    Engine.dry := true
+    Engine.rawOk := true
+    Engine.hMouseHook := 1
+    Engine.frontKnown := true
+    Engine.frontExe := "helldivers2.exe"
+    Engine.hidEcho := []
+    strat := "[{'type':'key','action':'down','key':'c'},{'type':'wait','ms':30},{'type':'key','action':'down','key':'f'},{'type':'wait','ms':30},{'type':'key','action':'up','key':'f'},{'type':'wait','ms':30},{'type':'key','action':'down','key':'d'},{'type':'wait','ms':30},{'type':'key','action':'up','key':'d'},{'type':'wait','ms':30},{'type':'key','action':'up','key':'c'}]"
+    for key in ["4", "LWin", "XButton1", "XButton2"] {
+        for mode in ["software", "rp2350"] {
+            orbital := J("{'id':'orbital','name':'Orbital','enabled':true,'advanced':true,'playMode':'once','releaseStop':'nextUp','trigger':{'kind':'key','button':'" key "'},'steps':[],'blocks':[{'type':'steps','steps':" strat "}]}")
+            Engine.outputMode := mode
+            Engine.profile := Map("macros", [orbital])
+            Engine.hooks := Map(key, true)
+            Engine.physDown := Map()
+            Engine.lastSwallow := Map()
+            Engine.repeatSeen := Map()
+            Engine.repeatLogged := Map()
+            Engine.SeedTriggers()
+            starts := 0, downs := 0, swallowed := 0
+            repeatAt := 600
+            now := 0
+            while (now < 4000) {
+                fed := false
+                if (now = 100) {
+                    fed := true
+                    ll := TestTrigger(key, true)
+                } else if (now = repeatAt && now < 3100) {
+                    fed := true
+                    ll := TestTrigger(key, true)
+                    repeatAt += 33
+                } else if (now = 3100)
+                    TestTrigger(key, false)
+                if fed {
+                    downs++
+                    ; Software swallows with the $* hotkey, a board with the LL hook.
+                    if (mode = "software" ? (SubStr(HookSpec(key), 1, 1) = "$" && !ll) : ll)
+                        swallowed++
+                }
+                starts += TestTick(now)
+                now++
+            }
+            label := mode " " key
+            fails := Check(downs = 77 && starts = 1, label " held 3 s with repeats plays exactly once", fails)
+            fails := Check(!Engine.HasRunner("orbital"), label " run once finishes", fails)
+            fails := Check(swallowed = downs, label " swallows every down, repeats too", fails)
+            Engine.StopAll()
+            Engine.RemoveDone()
+        }
+    }
+
+    ; A real up and down while the pass plays is ignored. After it is done, the
+    ; next press plays it again. Advanced and plain steps alike.
+    for adv in [true, false] {
+        body := adv ? "'advanced':true,'steps':[],'blocks':[{'type':'steps','steps':" strat "}]" : "'basic':false,'steps':" strat
+        orbital := J("{'id':'orbital','name':'Orbital','enabled':true,'playMode':'once','trigger':{'kind':'side','button':'XButton1'}," body "}")
+        Engine.outputMode := "rp2350"
+        Engine.profile := Map("macros", [orbital])
+        Engine.hooks := Map("XButton1", true)
+        Engine.physDown := Map()
+        Engine.SeedTriggers()
+        starts := 0
+        mid := 0
+        now := 0
+        while (now < 1500) {
+            if (now = 100 || now = 200 || now = 1000)
+                TestMouse("XButton1", true)
+            else if (now = 150 || now = 250 || now = 1100)
+                TestMouse("XButton1", false)
+            starts += TestTick(now)
+            if (now = 220)
+                mid := starts
+            now++
+        }
+        label := adv ? "advanced" : "plain"
+        fails := Check(mid = 1, label " a second press mid-run does not restart it", fails)
+        fails := Check(starts = 2 && !Engine.HasRunner("orbital"), label " a press after the pass is done plays it again", fails)
+        Engine.StopAll()
+        Engine.RemoveDone()
+    }
+
+    Engine.outputMode := "rp2350"
+    Engine.hooks := Map("XButton1", true)
+    Engine.physDown := Map()
+    fails := Check(TestMouse("XButton1", true) && TestMouse("XButton1", false), "a board swallows a mouse 4 trigger, down and up", fails)
+    fails := Check(!TestMouse("XButton2", true), "a board passes a side button that is not a trigger", fails)
+    TestMouse("XButton2", false)
+    Engine.hooks["LButton"] := true
+    fails := Check(!TestMouse("LButton", true), "left click always passes", fails)
+    TestMouse("LButton", false)
+    Engine.hooks.Delete("LButton")
+    Engine.QueueHidEcho("XButton1", true)
+    fails := Check(!TestMouse("XButton1", true) && !Engine.KeyDown("XButton1"), "the board's own mouse 4 passes and is not a finger", fails)
+    Engine.hidEcho := []
+    Engine.passKeys := Map("XButton1", 1)
+    fails := Check(!TestMouse("XButton1", true), "a once-lock pass lets mouse 4 through on a board", fails)
+    TestMouse("XButton1", false)
+    Engine.passKeys := Map()
+    Engine.outputMode := "software"
+    fails := Check(!TestMouse("XButton1", true) && HookSpec("XButton1") = "$*XButton1", "software leaves the swallow to the $* hotkey", fails)
+    TestMouse("XButton1", false)
+
+    logged := ""
+    try logged := FileRead(Engine.logPath, "UTF-8")
+    fails := Check(InStr(logged, "trigger XButton1 repeat ignored macro=" Chr(34) "Orbital"), "a held trigger logs repeat ignored", fails)
+    fails := Check(InStr(logged, "action=start swallow=yes"), "a trigger line says it was swallowed", fails)
+    fails := Check(InStr(logged, "reason=playing"), "a press mid-run logs reason=playing", fails)
+
+    Engine.hooks := Map()
+    Engine.physDown := Map()
+    Engine.lastSwallow := Map()
+    Engine.repeatSeen := Map()
+    Engine.repeatLogged := Map()
+    Engine.rawOk := saved["rawOk"]
+    Engine.hMouseHook := saved["mouse"]
+    Engine.outputMode := saved["out"]
+    Engine.profile := saved["profile"]
+    Engine.frontKnown := saved["known"]
+    Engine.frontExe := saved["front"]
+    Engine.dry := saved["dry"]
     return fails
 }
