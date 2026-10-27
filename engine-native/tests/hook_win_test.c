@@ -260,11 +260,34 @@ static int check_raw(void)
     if ((status == ENGINE_RAW_ON) != (atomic_load_explicit(&raw_tally.ok, memory_order_acquire) == 1))
         return fail("raw ok follows the status");
     printf("raw input %s\n", status == ENGINE_RAW_ON ? "on" : "unavailable");
+    /* The keyboard is its own registration. A desktop runner registers it.
+       Off again, the mouse one stays. */
+    if (engine_win_raw_want_keys(&raw, 1) != 0)
+        return fail("raw keys post");
+    for (i = 0; i < 1000 && !atomic_load_explicit(&raw_tally.keys_ok, memory_order_acquire); i++)
+        Sleep(1);
+    printf("raw keys %s\n",
+           atomic_load_explicit(&raw_tally.keys_ok, memory_order_acquire) ? "on" : "unavailable");
+    if (engine_win_raw_want_keys(&raw, 0) != 0)
+        return fail("raw keys off post");
+    for (i = 0; i < 1000 && atomic_load_explicit(&raw_tally.keys_ok, memory_order_acquire); i++)
+        Sleep(1);
+    if (atomic_load_explicit(&raw_tally.keys_ok, memory_order_acquire) != 0)
+        return fail("raw keys clear");
+    if ((status == ENGINE_RAW_ON) != (atomic_load_explicit(&raw_tally.ok, memory_order_acquire) == 1))
+        return fail("the keyboard leaves the mouse registration alone");
+    if (engine_win_raw_want_keys(&raw, 1) != 0)
+        return fail("raw keys post again");
+    for (i = 0; i < 1000 && !atomic_load_explicit(&raw_tally.keys_ok, memory_order_acquire) &&
+                status == ENGINE_RAW_ON; i++)
+        Sleep(1);
     if (engine_win_raw_stop(&raw) != 0 || WaitForSingleObject(thread, 3000) != WAIT_OBJECT_0)
         return fail("raw thread stop");
     CloseHandle(thread);
     if (atomic_load_explicit(&raw_tally.ok, memory_order_acquire) != 0)
         return fail("raw ok clears on stop");
+    if (atomic_load_explicit(&raw_tally.keys_ok, memory_order_acquire) != 0)
+        return fail("raw keys clear on stop");
     return 0;
 }
 
