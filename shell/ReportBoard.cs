@@ -36,9 +36,11 @@ public static class ReportBoard
         var dy = ReadI32(image, 136);
         var wheel = ReadI32(image, 140);
         var absolute = (Flags(image) & 1) != 0;
+        // Bit 2: dx and dy are device counts already (a turn step). Not scaled.
+        var counts = (Flags(image) & 4) != 0;
         var dpi = ReadU32(image, 152);
         var mouseTouch = false;
-        if (!absolute)
+        if (!absolute && !counts)
         {
             if (dpi == 0)
                 dpi = 96;

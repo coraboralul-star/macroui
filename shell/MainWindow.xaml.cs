@@ -386,6 +386,8 @@ public partial class MainWindow : Window
     {
         if (msg == 0x0219)
             QueuePortRefresh();
+        else if (msg == 0x00FF)
+            OnTurnRawInput(lParam);
         return IntPtr.Zero;
     }
 
@@ -415,6 +417,11 @@ public partial class MainWindow : Window
         if (type == "flushed")
         {
             FinishQuit();
+            return;
+        }
+        if (type == "turn")
+        {
+            OnTurnMessage(node);
             return;
         }
         if (type == "window")

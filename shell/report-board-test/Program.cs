@@ -105,6 +105,50 @@ static class ReportBoardTest
         }
     }
 
+    /* F10 is 0x79. Press, turn, press. Only the hand on the physical mouse counts. */
+    static void CheckTurnCalibrator()
+    {
+        var cal = new TurnCalibrator();
+        Expect(!cal.Swallows(0x79), "off swallows nothing");
+        cal.Arm(0x79);
+        Expect(cal.Swallows(0x79) && !cal.Swallows(0x78), "armed swallows only its key");
+        cal.Raw(500, false, false, false);
+        Expect(cal.Key(0x79, true) == "turning" && cal.Counts == 0, "the first press starts at 0");
+        Expect(cal.Key(0x79, true) == "", "a held key's repeat is not a press");
+        cal.Key(0x79, false);
+        cal.Raw(8000, false, false, false);
+        cal.Raw(-500, false, false, false);
+        cal.Raw(9000, false, false, false);
+        cal.Raw(1000, false, true, false);
+        cal.Raw(1000, false, false, true);
+        cal.Raw(1000, true, false, false);
+        Expect(cal.Counts == 16500, "injected, board and absolute moves are not counted");
+        Expect(cal.Key(0x79, true) == "done" && cal.State == TurnCalibrator.Phase.Off && cal.Counts == 16500,
+            "the second press is the result");
+
+        cal.Arm(0x79);
+        cal.Key(0x79, true);
+        cal.Key(0x79, false);
+        cal.Raw(-30, false, false, false);
+        Expect(cal.Key(0x79, true) == "short" && cal.State == TurnCalibrator.Phase.Armed, "a tiny turn asks again");
+        cal.Key(0x79, false);
+        cal.Key(0x79, true);
+        cal.Key(0x79, false);
+        cal.Raw(-12000, false, false, false);
+        Expect(cal.Key(0x79, true) == "done" && cal.Counts == 12000, "a left turn counts as positive");
+
+        cal.Test(0x7A, 40000);
+        Expect(cal.Key(0x7A, true) == "test" && cal.Key(0x7A, true) == "", "test sends once per press");
+        cal.Key(0x7A, false);
+        Expect(cal.Key(0x7A, true) == "test", "the next press tests again");
+        cal.Cancel();
+        Expect(!cal.Swallows(0x7A), "cancel lets the key through");
+
+        var pieces = TurnCalibrator.Pieces(40000);
+        Expect(pieces.Count == 3 && pieces[0] == 16000 && pieces[1] == 16000 && pieces[2] == 8000, "a test turn goes out in 16000 pieces");
+        Expect(TurnCalibrator.Pieces(-100).Count == 1 && TurnCalibrator.Pieces(-100)[0] == -100, "pieces keep the sign");
+    }
+
     static int Main()
     {
         var relative = Image();
@@ -119,6 +163,12 @@ static class ReportBoardTest
         Rel(scaled, 1, -1, 1, 144);
         lines = Lines(scaled, false, 0, out _);
         Expect(lines[1] == "M 0 2 -2 -1", "dpi 144 scales half away");
+
+        var counts = Image();
+        Rel(counts, 315, -3, 0, 144);
+        BinaryPrimitives.WriteUInt16LittleEndian(counts.AsSpan(2), 4);
+        lines = Lines(counts, false, 0, out _);
+        Expect(lines.Count == 1 && lines[0] == "M 0 315 -3 0", "a counts report is not scaled by dpi");
 
         var dpi0 = Image();
         Rel(dpi0, 4, -3, 0, 0);
@@ -186,6 +236,7 @@ static class ReportBoardTest
         Expect(bits == 0 && lines.Count == 2 && lines[0] == "M 1 0 0 0" && lines[1] == "M 0 0 0 0", "click down then up");
 
         CheckEveryNativeKey();
+        CheckTurnCalibrator();
 
         if (fails != 0)
         {
