@@ -27,6 +27,30 @@ public sealed class TurnCalibrator
     /* The counts so far, as a positive number. */
     public int Counts => (int)Math.Min(Math.Abs(_sum), MaxCounts);
 
+    /* VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2: watched with the mouse hook. */
+    public static bool IsMouse(int vk) => vk is 0x04 or 0x05 or 0x06;
+
+    /* Left and right click are never the calibration button, like triggers. */
+    public static bool Usable(int vk) => vk is not (0x01 or 0x02);
+
+    /* A low-level mouse message as a vk and a down. Vk 0 is not a button we watch. */
+    public static (int Vk, bool Down) MouseButton(int msg, uint mouseData)
+    {
+        switch (msg)
+        {
+            case 0x207:
+                return (0x04, true);
+            case 0x208:
+                return (0x04, false);
+            case 0x20B:
+            case 0x20C:
+                var which = (mouseData >> 16) & 0xFFFF;
+                var vk = which == 1 ? 0x05 : which == 2 ? 0x06 : 0;
+                return (vk, msg == 0x20B);
+        }
+        return (0, false);
+    }
+
     public void Arm(int vk)
     {
         Vk = vk;

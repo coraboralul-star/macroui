@@ -6556,6 +6556,19 @@ input.ev-delay {
   margin-top: 12px;
 }
 
+.turn-input {
+  min-width: 4.5rem;
+  padding: 0.45rem 0.8rem;
+  background: var(--key);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  font-weight: 650;
+}
+
+.turn-input:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
 .turn-counts input {
   width: 7rem;
 }

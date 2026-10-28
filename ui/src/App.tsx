@@ -337,6 +337,7 @@ export function App() {
             configName={profile.name}
             countsPer360={turn?.countsPer360}
             onCountsPer360={setTurnCounts}
+            armed={host.pipe && host.engine.armed}
           />
         )}
         {menu ? (

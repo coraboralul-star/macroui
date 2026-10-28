@@ -1,30 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { hasShell, post, subscribe } from "../bridge";
 import { parseTurn, type TurnState } from "../hostMessages";
-import { FieldSelect } from "./FieldSelect";
+import { keyLabel } from "../keyboard";
+import { pressLabel } from "../recording";
+import { vkOf } from "../vk";
+import { Capture, type Captured } from "./Capture";
 import { NumberField } from "./NumberField";
 
-const KEY_STORE = "macroui-turn-key";
+const INPUT_STORE = "macroui-turn-input";
+/** M5. Any key or mouse button but left and right click. */
+export const TURN_INPUT_DEFAULT = "XButton2";
 
-/** Keys a game rarely uses. The shell swallows the one picked while calibrating. */
-export const TURN_KEYS: { value: string; label: string; vk: number }[] = [
-  ...Array.from({ length: 12 }, (_, i) => ({ value: `F${i + 1}`, label: `F${i + 1}`, vk: 0x70 + i })),
-  { value: "Insert", label: "Insert", vk: 0x2d },
-  { value: "Home", label: "Home", vk: 0x24 },
-  { value: "End", label: "End", vk: 0x23 },
-  { value: "PageUp", label: "Page Up", vk: 0x21 },
-  { value: "PageDown", label: "Page Down", vk: 0x22 },
-  { value: "Pause", label: "Pause", vk: 0x13 },
-  { value: "ScrollLock", label: "Scroll Lock", vk: 0x91 },
-];
-
-function readKey(): string {
+function readInput(): string {
   try {
-    const saved = localStorage.getItem(KEY_STORE) ?? "";
-    return TURN_KEYS.some((key) => key.value === saved) ? saved : "F10";
+    const saved = localStorage.getItem(INPUT_STORE) ?? "";
+    return vkOf(saved) ? saved : TURN_INPUT_DEFAULT;
   } catch {
-    return "F10";
+    return TURN_INPUT_DEFAULT;
   }
+}
+
+export function inputLabel(name: string): string {
+  return /Button/.test(name) ? pressLabel(name) : keyLabel(name);
 }
 
 /** counts times 1 + percent / 100, at least 1 count away. */
@@ -37,25 +34,57 @@ export function TurnPanel({
   configName,
   countsPer360,
   onCounts,
+  armed,
 }: {
   configName: string;
   countsPer360: number | undefined;
   onCounts: (counts: number) => void;
+  /** The engine is running macros. Calibration pauses them, so a macro on the same button cannot fire or eat the press. */
+  armed: boolean;
 }) {
-  const [key, setKey] = useState(readKey);
+  const [input, setInput] = useState(readInput);
+  const [picking, setPicking] = useState(false);
+  const [pickNote, setPickNote] = useState("");
   const [state, setState] = useState<TurnState>({ state: "off", counts: 0, detail: "" });
+  const paused = useRef(false);
   const shell = hasShell();
-  const vk = TURN_KEYS.find((item) => item.value === key)?.vk ?? 0x79;
+  const vk = vkOf(input);
   const busy = state.state === "armed" || state.state === "turning" || state.state === "short";
   const testing = state.state === "testing" || state.state === "sent";
+  const active = busy || testing;
 
   useEffect(() => {
     try {
-      localStorage.setItem(KEY_STORE, key);
+      localStorage.setItem(INPUT_STORE, input);
     } catch {
-      /* the key is only remembered for this session */
+      /* the button is only remembered for this session */
     }
-  }, [key]);
+  }, [input]);
+
+  // Macros stop while the shell holds the button, and start again after, if they were running.
+  useEffect(() => {
+    if (active && armed && !paused.current) {
+      paused.current = true;
+      post({ type: "command", action: "stop" });
+    } else if (!active && paused.current) {
+      paused.current = false;
+      post({ type: "command", action: "start" });
+    }
+  }, [active, armed]);
+
+  const pick = (captured: Captured) => {
+    if (captured.button === "LButton" || captured.button === "RButton") {
+      setPickNote("Left and right click can't be used. Press another key or button");
+      return;
+    }
+    if (!vkOf(captured.button)) {
+      setPickNote("That key can't be watched. Press another one");
+      return;
+    }
+    setPickNote("");
+    setInput(captured.button);
+    setPicking(false);
+  };
 
   useEffect(
     () =>
@@ -68,15 +97,21 @@ export function TurnPanel({
     [onCounts],
   );
 
-  // Leaving the pane gives the key back to the game.
-  useEffect(() => () => post({ type: "turn", action: "cancel" }), []);
+  // Leaving the pane gives the button back to the game, and the macros back to the engine.
+  useEffect(
+    () => () => {
+      post({ type: "turn", action: "cancel" });
+      if (paused.current) post({ type: "command", action: "start" });
+    },
+    [],
+  );
 
   // A nudge while testing: the next press uses the new counts.
   useEffect(() => {
     if (testing && countsPer360) post({ type: "turn", action: "test", vk, counts: countsPer360 });
   }, [countsPer360]);
 
-  const label = TURN_KEYS.find((item) => item.value === key)?.label ?? key;
+  const label = inputLabel(input);
   const line =
     state.state === "armed"
       ? `In game, aim at a landmark, then press ${label}.`
@@ -135,17 +170,24 @@ export function TurnPanel({
             <span>
               <span className="settings-row-name">Calibrate</span>
               <span className="settings-row-note">
-                Press the key in game, turn one full circle back to the same spot, and press it again. The game never sees the key while this is on.
+                Press the button in game, turn one full circle back to the same spot, and press it again. The game never sees the button while this is on, and macros pause until you finish. Click the button to use a different key or mouse button.
               </span>
             </span>
           </div>
           <div className="turn-actions">
-            <FieldSelect
-              ariaLabel="Calibration key"
-              value={key}
-              options={TURN_KEYS.map(({ value, label: name }) => ({ value, label: name }))}
-              onChange={(next) => setKey(next)}
-            />
+            <button
+              type="button"
+              className="turn-input"
+              aria-label={`Calibration button ${label}. Click to change`}
+              title="Click to change"
+              disabled={active}
+              onClick={() => {
+                setPickNote("");
+                setPicking(true);
+              }}
+            >
+              {label}
+            </button>
             {busy ? (
               <button type="button" onClick={() => post({ type: "turn", action: "cancel" })}>
                 Cancel
@@ -171,6 +213,16 @@ export function TurnPanel({
           </div>
           {line ? <p className={`turn-line${state.state === "error" || state.state === "short" ? " is-bad" : ""}`}>{line}</p> : null}
           {!shell ? <p className="turn-line">Calibration needs the desktop app.</p> : null}
+          {picking ? (
+            <Capture
+              title={pickNote || "Calibration button"}
+              onCancel={() => {
+                setPickNote("");
+                setPicking(false);
+              }}
+              onPick={pick}
+            />
+          ) : null}
         </div>
         <div className="settings-block">
           <div className="settings-row is-static">

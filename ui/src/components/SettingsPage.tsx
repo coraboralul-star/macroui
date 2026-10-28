@@ -35,6 +35,7 @@ export function SettingsPage({
   configName,
   countsPer360,
   onCountsPer360,
+  armed,
 }: {
   pane: SettingPane;
   onPane: (pane: SettingPane) => void;
@@ -50,6 +51,7 @@ export function SettingsPage({
   configName: string;
   countsPer360: number | undefined;
   onCountsPer360: (counts: number) => void;
+  armed: boolean;
 }) {
   return (
     <div className="settings">
@@ -178,7 +180,7 @@ export function SettingsPage({
             </div>
           </>
         ) : null}
-        {pane === "turn" ? <TurnPanel configName={configName} countsPer360={countsPer360} onCounts={onCountsPer360} /> : null}
+        {pane === "turn" ? <TurnPanel configName={configName} countsPer360={countsPer360} onCounts={onCountsPer360} armed={armed} /> : null}
         {pane === "output" ? (
           <>
             <h2>Output</h2>

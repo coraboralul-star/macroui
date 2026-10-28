@@ -1,7 +1,8 @@
 import { applyDelayMode, expandTaps, isSleep, laneCells, scrollDy, setDelay } from "./eventLane";
 import { activeTurn, blankMacro, blankStep, normalizeProfile, setActiveTurn, turnCounts, type Block, type Macro, type Profile, type Step } from "./profile";
 import { parseTurn } from "./hostMessages";
-import { nudge } from "./components/TurnPanel";
+import { TURN_INPUT_DEFAULT, inputLabel, nudge } from "./components/TurnPanel";
+import { vkOf } from "./vk";
 import { deleteMacro, macroIssues } from "./profileEdits";
 import { readList, segment } from "./tape";
 
@@ -67,6 +68,10 @@ function checkTurn() {
   same(parseTurn({ type: "turn", state: "done", counts: 16500 }), { state: "done", counts: 16500, detail: "" }, "the shell's result is read");
   check(parseTurn({ type: "turn", state: "bogus" }) === null, "an unknown calibration state is ignored");
   check(macroIssues(macro({ id: "t", steps: [{ type: "turn", degrees: 0, dir: "left", ms: 0 }] })).length === 1, "a 0 degree turn cannot be saved");
+  check(TURN_INPUT_DEFAULT === "XButton2" && inputLabel(TURN_INPUT_DEFAULT) === "M5", "calibration defaults to M5");
+  check(vkOf("XButton2") === 0x06 && vkOf("XButton1") === 0x05 && vkOf("MButton") === 0x04, "mouse buttons are their vks");
+  check(vkOf("LButton") === 0 && vkOf("RButton") === 0, "left and right click are not a calibration input");
+  check(vkOf("f10") === 0x79 && vkOf("q") === 0x51 && vkOf("7") === 0x37 && vkOf("LShift") === 0xa0 && vkOf("Numpad3") === 0x63 && vkOf("PgDn") === 0x22 && vkOf("`") === 0xc0, "captured keys map to vks");
 }
 
 function checkDelayMode() {
