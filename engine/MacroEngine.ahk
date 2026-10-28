@@ -5079,6 +5079,7 @@ RunChecks(fails) {
     fails := RunOnceChecks(fails)
     fails := HeldPressChecks(fails)
     fails := SoakChecks(fails)
+    fails := CreatePathChecks(fails)
     fails := TurnChecks(fails)
     return fails
 }
@@ -5843,4 +5844,96 @@ RunOnceChecks(fails) {
     Engine.frontExe := saved["front"]
     Engine.dry := saved["dry"]
     return fails
+}
+
+; engine-native\tests\fixtures\create-paths.json is written by the UI: one
+; macro per way to make a Run Once, and Play > Repeat x3. engine-command-test
+; plays the same file with the same expectations.
+CreatePathChecks(fails) {
+    text := ""
+    try text := FileRead(A_ScriptDir "\..\engine-native\tests\fixtures\create-paths.json", "UTF-8")
+    if (text = "")
+        return Check(false, "create-paths.json readable", fails)
+    macros := JSON.Parse(text)["macros"]
+    hold := [10, 610], tap := [10, 40], twice := [10, 40, 90, 120], heldAgain := [10, 40, 90, 410]
+    for path in [["key path", "g"], ["new path", "h"]] {
+        name := path[1], key := path[2]
+        run := CreatePathPlay(macros, key, hold)
+        fails := Check(run["starts"] = 1 && run["space"] = 1 && run["e"] = 1, name ": held 600 ms plays one pass", fails)
+        run := CreatePathPlay(macros, key, tap)
+        fails := Check(run["starts"] = 1 && run["space"] = 1 && run["e"] = 1, name ": a 30 ms tap plays the whole pass", fails)
+        run := CreatePathPlay(macros, key, twice)
+        fails := Check(run["starts"] = 1 && run["space"] = 1 && run["e"] = 1, name ": a press while it plays is ignored", fails)
+        run := CreatePathPlay(macros, key, heldAgain)
+        fails := Check(run["starts"] = 1 && run["space"] = 1 && run["e"] = 1, name ": a held press while it plays is ignored", fails)
+    }
+    run := CreatePathPlay(macros, "j", tap)
+    fails := Check(run["starts"] = 1 && run["space"] = 3, "repeat x3: a tap plays 3 times, not 9", fails)
+    run := CreatePathPlay(macros, "j", hold)
+    fails := Check(run["starts"] = 1 && run["space"] = 3, "repeat x3: held plays 3 times, not 9", fails)
+    return fails
+}
+
+; One trigger, one tick per ms, publishing like the real loop. edges are
+; down/up times. Counts starts and the space and e downs sent.
+CreatePathPlay(macros, key, edges) {
+    saved := Map("rawOk", Engine.rawOk, "mouse", Engine.hMouseHook, "out", Engine.outputMode,
+        "profile", Engine.profile, "known", Engine.frontKnown, "front", Engine.frontExe, "dry", Engine.dry)
+    Engine.BuildVkMap()
+    Engine.dry := true
+    Engine.rawOk := true
+    Engine.hMouseHook := 1
+    Engine.frontKnown := true
+    Engine.frontExe := "game.exe"
+    Engine.hidEcho := []
+    Engine.outputMode := "software"
+    Engine.profile := Map("macros", macros)
+    Engine.hooks := Map(key, true)
+    Engine.physDown := Map()
+    Engine.lastSwallow := Map()
+    Engine.repeatSeen := Map()
+    Engine.repeatLogged := Map()
+    Engine.rawOn := true
+    Engine.rawUpCount := Map()
+    Engine.rawAtDown := Map()
+    Engine.redo := Map()
+    Engine.sent := []
+    Engine.applied := Map()
+    Engine.SeedTriggers()
+    starts := 0
+    now := 0
+    while (now < 1500) {
+        for i, at in edges
+            if (at = now)
+                TestTrigger(key, Mod(i, 2) = 1)
+        starts += TestTick(now)
+        Engine.Publish(now)
+        now++
+    }
+    space := 0, e := 0
+    for item in Engine.sent {
+        for k in item["down"] {
+            if (k = "space")
+                space++
+            else if (k = "e")
+                e++
+        }
+    }
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.sent := []
+    Engine.applied := Map()
+    Engine.hooks := Map()
+    Engine.physDown := Map()
+    Engine.lastSwallow := Map()
+    Engine.repeatSeen := Map()
+    Engine.repeatLogged := Map()
+    Engine.rawOk := saved["rawOk"]
+    Engine.hMouseHook := saved["mouse"]
+    Engine.outputMode := saved["out"]
+    Engine.profile := saved["profile"]
+    Engine.frontKnown := saved["known"]
+    Engine.frontExe := saved["front"]
+    Engine.dry := saved["dry"]
+    return Map("starts", starts, "space", space, "e", e)
 }
