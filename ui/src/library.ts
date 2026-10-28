@@ -38,6 +38,7 @@ export const LIBRARY: LibraryItem[] = [
   { id: "mouseMove", group: "Mouse", label: "Mouse Move", detail: "Move by X and Y", kind: "step", create: () => [blankStep("move")] },
   { id: "mousePosition", group: "Mouse", label: "Mouse Position", detail: "Move to a point", kind: "step", create: () => [blankStep("goto")] },
   { id: "mouseScroll", group: "Mouse", label: "Mouse Scroll", detail: "Scroll the wheel up or down", kind: "step", create: () => [blankStep("scroll")] },
+  { id: "turnDegrees", group: "Mouse", label: "Turn by Degrees", detail: "Turn the camera left or right. Calibrate it once per game in Settings", kind: "step", create: () => [blankStep("turn")] },
   { id: "wait", group: "Timing", label: "Wait", detail: "Pause in ms", kind: "step", create: () => [blankStep("wait")] },
   { id: "scanWait", group: "Timing", label: "Scan Wait", detail: "Pause in ms. Stops if you let go of the trigger", kind: "step", create: () => [blankStep("scanWait")] },
   { id: "randomWait", group: "Timing", label: "Random Wait", detail: "Pause for a random time in a range", kind: "step", create: () => [blankStep("randomWait")] },

@@ -34,6 +34,30 @@ export function normalizeGotoWhere(value: unknown): GotoWhere {
   return value === "window" || value === "client" ? value : "screen";
 }
 
+export type TurnDir = "left" | "right";
+
+export const TURN_DIRS: { value: TurnDir; label: string }[] = [
+  { value: "left", label: "Left" },
+  { value: "right", label: "Right" },
+];
+
+export const TURN_DEGREES_MAX = 3600;
+export const TURN_MS_DEFAULT = 30;
+
+/** Per config: raw mouse counts for one full turn in that game. Set by calibration. */
+export type TurnCalibration = { countsPer360: number };
+
+export function normalizeTurnCalibration(value: unknown): TurnCalibration | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const counts = Number((value as TurnCalibration).countsPer360);
+  return Number.isFinite(counts) && counts >= 1 ? { countsPer360: Math.round(counts) } : undefined;
+}
+
+/** The engines' rounding: half up on the magnitude. */
+export function turnCounts(degrees: number, countsPer360: number): number {
+  return Math.floor((degrees * countsPer360) / 360 + 0.5);
+}
+
 export type IgnoreLock = "off" | "macro" | "both";
 
 export const IGNORE_LOCKS: { value: IgnoreLock; label: string }[] = [
@@ -67,6 +91,8 @@ export type Step =
   | { type: "scanWait"; ms: number }
   | { type: "randomWait"; minMs: number; maxMs: number }
   | { type: "scroll"; dy: number }
+  /** Turns the camera by degrees: counts = degrees x the config's countsPer360 / 360. 0 ms is one move. */
+  | { type: "turn"; degrees: number; dir: TurnDir; ms: number }
   | { type: "repeat"; count: number; steps: Step[] }
   | { type: "run"; macroId: string };
 
@@ -113,6 +139,8 @@ export type Config = {
   name: string;
   macros: Macro[];
   focusExe?: string;
+  /** Turn by degrees calibration for this game. Missing means not calibrated. */
+  turn?: TurnCalibration;
 };
 
 export type Profile = {
@@ -311,6 +339,22 @@ export function setFocusExe(profile: Profile, focusExe: string): Profile {
   return { ...profile, configs, focusExe };
 }
 
+/** The live config's calibration, or undefined when it is not calibrated. */
+export function activeTurn(profile: Profile): TurnCalibration | undefined {
+  return profile.configs.find((config) => config.id === profile.activeId)?.turn;
+}
+
+/** Below 1 clears it. */
+export function setActiveTurn(profile: Profile, countsPer360: number): Profile {
+  const turn = normalizeTurnCalibration({ countsPer360 });
+  const configs = profile.configs.map((config) => {
+    if (config.id !== profile.activeId) return config;
+    const { turn: _old, ...rest } = config;
+    return turn ? { ...rest, turn } : rest;
+  });
+  return { ...profile, configs };
+}
+
 export function switchConfig(profile: Profile, id: string): Profile {
   const config = profile.configs.find((item) => item.id === id);
   if (!config) return profile;
@@ -342,6 +386,8 @@ export function blankStep(type: Step["type"]): Step {
       return { type: "randomWait", minMs: 40, maxMs: 70 };
     case "scroll":
       return { type: "scroll", dy: -3 };
+    case "turn":
+      return { type: "turn", degrees: 180, dir: "right", ms: TURN_MS_DEFAULT };
     case "repeat":
       return { type: "repeat", count: 2, steps: [] };
     case "run":
@@ -367,14 +413,19 @@ export function normalizeProfile(value: unknown): Profile {
   const macroList = (list: unknown[]) => onePerTrigger(list.filter((item) => item && typeof item === "object").map((item) => normalizeMacro(item as Macro)));
   const macros = macroList(value.macros);
   const saved = Array.isArray(value.configs) ? value.configs : [];
-  const configs = saved.length
-    ? saved.map((item, index) => ({
+  const withTurn = (config: Config, turn: unknown): Config => {
+    const calibration = normalizeTurnCalibration(turn);
+    return calibration ? { ...config, turn: calibration } : config;
+  };
+  const configs: Config[] = saved.length
+    ? saved.map((item, index) => withTurn({
         id: item?.id || newId(),
         name: item?.name || `Profile ${index + 1}`,
         macros: Array.isArray(item?.macros) ? macroList(item.macros) : [],
         focusExe: typeof item?.focusExe === "string" ? item.focusExe : "",
-      }))
-    : [{ id: "default", name: value.name || "Default", macros, focusExe: typeof (value as Profile).focusExe === "string" ? (value as Profile).focusExe : "" }];
+      }, item?.turn))
+    // A profile saved without configs keeps its own turn on the config it becomes.
+    : [withTurn({ id: "default", name: value.name || "Default", macros, focusExe: typeof (value as Profile).focusExe === "string" ? (value as Profile).focusExe : "" }, (value as { turn?: unknown }).turn)];
   const activeId = configs.some((config) => config.id === value.activeId) ? value.activeId : configs[0].id;
   const active = configs.find((config) => config.id === activeId) ?? configs[0];
   const live = saved.length ? active.macros : macros;
@@ -480,6 +531,11 @@ function normalizeSteps(steps: Step[]): Step[] {
       return [{ type: "scroll", dy: Number.isFinite(dy) ? Math.round(dy) : 0 }];
     }
     if (step.type === "move") return [{ ...step, x: roundCoord(step.x), y: roundCoord(step.y) }];
+    if (step.type === "turn") {
+      const raw = Number(step.degrees);
+      const degrees = Number.isFinite(raw) ? Math.min(TURN_DEGREES_MAX, Math.max(0, raw)) : 180;
+      return [{ type: "turn", degrees, dir: step.dir === "left" ? "left" : "right", ms: roundMs(step.ms, TURN_MS_DEFAULT) }];
+    }
     if (step.type === "goto") {
       const next: Extract<Step, { type: "goto" }> = { ...step, x: roundCoord(step.x), y: roundCoord(step.y) };
       if (step.ms != null) next.ms = roundMs(step.ms, 0);

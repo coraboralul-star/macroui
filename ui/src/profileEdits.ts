@@ -163,6 +163,7 @@ function stepIssues(steps: Step[] | undefined, issues: string[]) {
     if (step.type === "key" && !step.key.trim()) note(issues, "A key step has no key.");
     if (step.type === "mouse" && !step.button.trim()) note(issues, "A mouse step has no button.");
     if (step.type === "run" && !step.macroId.trim()) note(issues, "A run step needs a macro.");
+    if (step.type === "turn" && !(step.degrees > 0)) note(issues, "A turn step needs degrees.");
     if (step.type === "repeat") stepIssues(step.steps, issues);
   }
 }
