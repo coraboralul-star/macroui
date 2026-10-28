@@ -70,6 +70,10 @@ target_link_libraries(engine-profile-test PRIVATE engine_core)
 add_executable(engine-command-test tests/command_test.c)
 target_link_libraries(engine-command-test PRIVATE engine_core)
 
+add_executable(engine-soak-test tests/soak_test.c)
+target_link_libraries(engine-soak-test PRIVATE engine_core)
+target_compile_definitions(engine-soak-test PRIVATE SOAK_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+
 if(WIN32)
   add_library(engine_win STATIC src/win/win_entry.c src/win/clock_win.c src/win/hook_win.c src/win/output_win.c
                         src/win/raw_win.c)

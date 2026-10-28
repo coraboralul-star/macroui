@@ -65,7 +65,10 @@
 #define ENGINE_WHY_START 32
 /* A Run Once is still playing. A press is ignored until it is done. */
 #define ENGINE_WHY_PLAYING 33
-#define ENGINE_WHY_COUNT 34
+/* A press came while the last runner was finishing after its release. That
+   runner ended with the key still down, so the press starts it now. */
+#define ENGINE_WHY_HELD_PRESS 34
+#define ENGINE_WHY_COUNT 35
 
 #define ENGINE_NOTE_EDGE 1
 #define ENGINE_NOTE_START 2

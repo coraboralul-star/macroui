@@ -1,0 +1,36 @@
+ow-jump-taps software Jump starts=20 held-press=0 blocked=0 stops-held=0
+ow-jump-taps board Jump starts=20 held-press=0 blocked=0 stops-held=0
+ow-jump-repress software Jump starts=3 held-press=0 blocked=3 stops-held=0
+ow-jump-repress board Jump starts=3 held-press=0 blocked=3 stops-held=0
+ow-long software Reload starts=1 held-press=0 blocked=0 stops-held=0
+ow-long software New macro starts=1 held-press=0 blocked=0 stops-held=0
+ow-long software Jump starts=1 held-press=0 blocked=0 stops-held=0
+ow-long board Reload starts=1 held-press=0 blocked=0 stops-held=0
+ow-long board New macro starts=1 held-press=0 blocked=0 stops-held=0
+ow-long board Jump starts=1 held-press=0 blocked=0 stops-held=0
+ow-push software Reload starts=1 held-press=0 blocked=0 stops-held=0
+ow-push software Jump starts=1 held-press=0 blocked=0 stops-held=0
+ow-push board Reload starts=1 held-press=0 blocked=0 stops-held=0
+ow-push board Jump starts=1 held-press=0 blocked=0 stops-held=0
+ow-focus software Jump starts=2 held-press=0 blocked=0 stops-held=1
+ow-focus board Jump starts=2 held-press=0 blocked=0 stops-held=1
+ow-ability software Ability starts=9 held-press=0 blocked=0 stops-held=7
+ow-ability board Ability starts=9 held-press=0 blocked=0 stops-held=7
+fn-simple-edit software Simple Edit starts=8 held-press=1 blocked=6 stops-held=1
+fn-simple-edit board Simple Edit starts=8 held-press=1 blocked=6 stops-held=1
+fn-build software Wall starts=11 held-press=0 blocked=0 stops-held=0
+fn-build software Ramp starts=1 held-press=0 blocked=0 stops-held=0
+fn-build software Cone starts=1 held-press=0 blocked=0 stops-held=0
+fn-build software Floor starts=1 held-press=0 blocked=0 stops-held=0
+fn-build board Wall starts=11 held-press=0 blocked=0 stops-held=0
+fn-build board Ramp starts=1 held-press=0 blocked=0 stops-held=0
+fn-build board Cone starts=1 held-press=0 blocked=0 stops-held=0
+fn-build board Floor starts=1 held-press=0 blocked=0 stops-held=0
+hd-run-once software Reinforce starts=3 held-press=0 blocked=0 stops-held=0
+hd-run-once software RC-8 Auto Cannon starts=1 held-press=0 blocked=0 stops-held=1
+hd-run-once software Orbital 380mm HE Barrage starts=2 held-press=0 blocked=1 stops-held=1
+hd-run-once board Reinforce starts=3 held-press=0 blocked=0 stops-held=0
+hd-run-once board RC-8 Auto Cannon starts=1 held-press=0 blocked=0 stops-held=1
+hd-run-once board Orbital 380mm HE Barrage starts=2 held-press=0 blocked=1 stops-held=1
+hd-supply software Supply Car starts=2 held-press=1 blocked=1 stops-held=1
+hd-supply board Supply Car starts=2 held-press=1 blocked=1 stops-held=1

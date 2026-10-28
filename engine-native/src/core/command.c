@@ -193,6 +193,22 @@ void engine_trigger_note_profile(struct engine_trigger_mem *mem, uint64_t seq)
     mem->need_seed = 1;
 }
 
+static int trigger_count(const struct engine_live_config *live)
+{
+    if (!live || !live->macros || live->macro_count <= 0)
+        return 0;
+    return live->macro_count > ENGINE_TRIGGER_MEM ? ENGINE_TRIGGER_MEM : live->macro_count;
+}
+
+int engine_trigger_seed_due(struct engine_trigger_mem *mem, const struct engine_live_config *live,
+                            const struct engine_fingers *fingers)
+{
+    if (!mem || (!mem->need_seed && mem->count == trigger_count(live)))
+        return 0;
+    engine_trigger_seed(mem, live, fingers);
+    return 1;
+}
+
 static int same_id(const char *a, const char *b)
 {
     if (!a || !b)
@@ -299,6 +315,14 @@ static int still_playing(struct engine_play *play, const struct engine_macro *ma
         return 0;
     engine_play_note(play, ENGINE_NOTE_BLOCK, macro->id, ENGINE_WHY_PLAYING, mode, 0, 0, 0);
     return 1;
+}
+
+/* Only whileHeld keeps the press: its runner can still be finishing a pass
+   after the release. Run Once drops a press while it plays, never owes it. */
+static void note_owed(struct engine_trigger_mem *mem, int i, int mode, int did)
+{
+    if (did == ENGINE_WHY_RUNNING && mode == ENGINE_MODE_WHILE_HELD)
+        mem->owed[i] = 1;
 }
 
 static const struct engine_macro *find_macro(const struct engine_live_config *live, const char *id)
@@ -438,6 +462,7 @@ void engine_trigger_seed(struct engine_trigger_mem *mem, const struct engine_liv
     if (!mem)
         return;
     memset(mem->prev, 0, sizeof mem->prev);
+    memset(mem->owed, 0, sizeof mem->owed);
     mem->count = 0;
     mem->need_seed = 0;
     if (!live || !live->macros || live->macro_count <= 0)
@@ -462,11 +487,8 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
 
     if (!play || !live || !mem || !live->macros || live->macro_count <= 0)
         return;
-    if (mem->need_seed || mem->count != live->macro_count)
-        engine_trigger_seed(mem, live, fingers);
-    n = live->macro_count;
-    if (n > ENGINE_TRIGGER_MEM)
-        n = ENGINE_TRIGGER_MEM;
+    engine_trigger_seed_due(mem, live, fingers);
+    n = trigger_count(live);
     for (i = 0; i < n; i++) {
         const struct engine_macro *macro = &live->macros[i];
         int spam = 0;
@@ -486,6 +508,8 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
         down = engine_fingers_down(fingers, macro->trigger);
         was = mem->prev[i] ? 1 : 0;
         mem->prev[i] = (uint8_t)(down ? 1 : 0);
+        if (!down)
+            mem->owed[i] = 0;
         if (!engine_can_trigger(macro->trigger))
             continue;
         /* Every edge of a live trigger is one log line, written before the
@@ -494,12 +518,16 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
             note = engine_play_note(play, ENGINE_NOTE_EDGE, macro->id, ENGINE_WHY_NONE, mode,
                                     macro->trigger, down, 0);
         if (engine_play_muted(play, macro->id)) {
+            mem->owed[i] = 0;
             did = ENGINE_WHY_MUTED;
         } else if (!macro_enabled(live, i) ||
                    !engine_focus_swallow(macro_focus(live, i), front, owner)) {
             int why = macro_enabled(live, i) ? ENGINE_WHY_FOCUS : ENGINE_WHY_DISABLED;
 
+            /* A held key does not start it again when focus comes back:
+               prev stays down, so that needs a new press. */
             engine_play_stop_why(play, macro->id, why);
+            mem->owed[i] = 0;
             did = why;
         } else {
             running = runner_live(play, macro->id);
@@ -525,6 +553,7 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
                     else
                         ok = engine_play_start_why(play, macro, -1, 1, ENGINE_WHY_EDGE);
                     did = ok ? ENGINE_WHY_START : play->refused;
+                    note_owed(mem, i, mode, did);
                     if (once == ENGINE_LOCK_OPEN)
                         engine_once_spend(play, macro->id);
                 } else if (!down && running && once != ENGINE_LOCK_OPEN &&
@@ -545,6 +574,7 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
                         ok = engine_play_start_why(play, macro, edge ? ENGINE_MODE_WHILE_HELD : -1, 1,
                                                    ENGINE_WHY_EDGE);
                     did = ok ? ENGINE_WHY_START : play->refused;
+                    note_owed(mem, i, mode, did);
                     if (once == ENGINE_LOCK_OPEN)
                         engine_once_spend(play, macro->id);
                 } else if (action == ENGINE_TRIGGER_STOP) {
@@ -555,6 +585,39 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
         }
         if (note >= 0)
             play->notes[note].why = (uint8_t)did;
+    }
+}
+
+void engine_trigger_owed(struct engine_play *play, const struct engine_live_config *live,
+                         struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
+                         const char *front, const char *owner)
+{
+    int n;
+    int i;
+
+    if (!play || !mem)
+        return;
+    n = trigger_count(live);
+    if (mem->count != n)
+        return;
+    for (i = 0; i < n; i++) {
+        const struct engine_macro *macro = &live->macros[i];
+        int edge;
+
+        if (!mem->owed[i])
+            continue;
+        if (!engine_fingers_down(fingers, macro->trigger) || engine_play_muted(play, macro->id) ||
+            !macro_enabled(live, i) || !engine_focus_swallow(macro_focus(live, i), front, owner) ||
+            engine_once_state(play, macro->id) != ENGINE_LOCK_NONE) {
+            mem->owed[i] = 0;
+            continue;
+        }
+        if (runner_live(play, macro->id))
+            continue;
+        mem->owed[i] = 0;
+        edge = has_edge(macro, NULL, NULL);
+        engine_play_start_why(play, macro, edge ? ENGINE_MODE_WHILE_HELD : -1, 1,
+                              ENGINE_WHY_HELD_PRESS);
     }
 }
 

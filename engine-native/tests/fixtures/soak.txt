@@ -1,0 +1,103 @@
+# Trigger soak. engine-soak-test and the AHK --self-test play every scenario
+# on software and on a board, on the profile in soak-profile.json (a trimmed
+# copy of real configs), one tick per millisecond.
+#
+#   scenario <name> <front exe>    a new run: fingers up, no runners
+#   down <key> <ms> / up <key> <ms>
+#   hold <key> <ms> <length>       down, then up after length
+#   holdr <key> <ms> <length>      hold with Windows key repeat: 500 ms, then every 33 ms
+#   taps <key> <ms> <down> <gap> <count>
+#   push <ms>                      a profile push: the same document again
+#   focus <ms> <exe>               the front window changes
+#   end <ms>
+#
+# soak-expected.txt is the summary both engines must print.
+
+# Jump: whileHeld block, releaseStop finish. Fast taps, 40 ms down, 40 ms up.
+scenario ow-jump-taps Overwatch.exe
+taps LWin 100 40 40 20
+end 2500
+
+# A re-press 3 to 33 ms after the release, while the last pass finishes.
+# Every one plays on while held: the runner loops or starts as held-press.
+scenario ow-jump-repress Overwatch.exe
+down LWin 100
+up LWin 700
+down LWin 703
+up LWin 1300
+down LWin 1308
+up LWin 1900
+down LWin 1915
+up LWin 2500
+down LWin 2525
+up LWin 3100
+down LWin 3133
+up LWin 3700
+end 4200
+
+# Long holds, and two triggers overlapping. Reload 10 s, New macro 5 s, Jump 3 s.
+scenario ow-long Overwatch.exe
+holdr a 100 10000
+holdr v 200 5000
+holdr LWin 3000 3000
+end 10600
+
+# A profile push mid-hold keeps Jump playing. A press that lands with the
+# push still starts Reload.
+scenario ow-push Overwatch.exe
+holdr LWin 100 3000
+push 1500
+down a 1500
+up a 2000
+push 2600
+end 3600
+
+# A focus switch mid-hold stops Jump. Focus comes back with LWin still
+# held: no restart. The next press plays.
+scenario ow-focus Overwatch.exe
+hold LWin 100 3000
+focus 1000 explorer.exe
+focus 1500 Overwatch.exe
+hold LWin 3300 500
+end 4300
+
+# Ability: Run Once with a onceHeld block. Taps during the run.
+scenario ow-ability Overwatch.exe
+taps r 100 30 60 8
+hold r 1200 2000
+end 3800
+
+# Simple Edit: whileHeld with a onceHeld block. A re-press 25 ms after the
+# release lands in its 85 ms gap and plays as held-press.
+scenario fn-simple-edit FortniteClient-Win64-Shipping.exe
+hold b 100 300
+hold b 425 1000
+taps b 1700 30 30 10
+hold b 2500 2000
+end 5000
+
+# Wall on mouse 5 (whileHeld block, finish), Cone and Ramp (steps, nextUp),
+# Floor (whileHeld block, nextUp) overlapping.
+scenario fn-build FortniteClient-Win64-Shipping.exe
+hold XButton2 100 3000
+holdr LShift 500 4000
+holdr CapsLock 1000 2000
+taps XButton2 3500 40 40 10
+holdr t 4000 3000
+end 7500
+
+# Run Once stratagems on side buttons and keys: a tap, a tap during the pass
+# (ignored), a hold with repeats (one pass).
+scenario hd-run-once helldivers2.exe
+hold XButton1 100 50
+hold XButton1 300 50
+hold XButton1 1500 3000
+taps 4 5000 30 300 3
+holdr LWin 6500 3000
+end 10000
+
+# Supply Car: whileHeld steps, finish. A re-press inside its 450 ms pass.
+scenario hd-supply helldivers2.exe
+holdr 3 100 1000
+holdr 3 1150 2000
+end 3800

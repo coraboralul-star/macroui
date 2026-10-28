@@ -11,6 +11,7 @@
 #include "raw_win.h"
 
 #define ENGINE_RAW_WANT (WM_APP + 1)
+#define ENGINE_RAW_KEYS (WM_APP + 2)
 
 static struct engine_win_raw *g_raw;
 
@@ -58,6 +59,15 @@ static void on_input(struct engine_win_raw *raw, HRAWINPUT handle)
 
     if (GetRawInputData(handle, RID_INPUT, &input, &size, sizeof(RAWINPUTHEADER)) == (UINT)-1)
         return;
+    if (input.header.dwType == RIM_TYPEKEYBOARD) {
+        LARGE_INTEGER now;
+
+        if (!input.header.hDevice || from_board(input.header.hDevice))
+            return;
+        QueryPerformanceCounter(&now);
+        engine_raw_key_seen(raw->tally, (int64_t)now.QuadPart);
+        return;
+    }
     if (input.header.dwType != RIM_TYPEMOUSE)
         return;
     flags = input.data.mouse.usButtonFlags;
@@ -110,6 +120,28 @@ static void set_want(struct engine_win_raw *raw, int on)
     }
 }
 
+/* The keyboard is its own registration, so the mouse one keeps its rule. */
+static void set_keys(struct engine_win_raw *raw, int on)
+{
+    RAWINPUTDEVICE dev;
+    int was = atomic_load_explicit(&raw->tally->keys_ok, memory_order_acquire);
+
+    memset(&dev, 0, sizeof dev);
+    dev.usUsagePage = 1;
+    dev.usUsage = 6;
+    if (!on) {
+        engine_raw_keys_set_ok(raw->tally, 0);
+        if (was) {
+            dev.dwFlags = RIDEV_REMOVE;
+            RegisterRawInputDevices(&dev, 1, sizeof dev);
+        }
+        return;
+    }
+    dev.dwFlags = RIDEV_INPUTSINK;
+    dev.hwndTarget = raw->window;
+    engine_raw_keys_set_ok(raw->tally, raw->window && RegisterRawInputDevices(&dev, 1, sizeof dev));
+}
+
 void engine_win_raw_run(struct engine_win_raw *raw)
 {
     WNDCLASSW wc;
@@ -136,9 +168,14 @@ void engine_win_raw_run(struct engine_win_raw *raw)
             set_want(raw, msg.wParam != 0);
             continue;
         }
+        if (msg.hwnd == NULL && msg.message == ENGINE_RAW_KEYS) {
+            set_keys(raw, msg.wParam != 0);
+            continue;
+        }
         DispatchMessageW(&msg);
     }
     set_want(raw, 0);
+    set_keys(raw, 0);
     if (raw->window)
         DestroyWindow(raw->window);
     raw->window = NULL;
@@ -156,6 +193,18 @@ int engine_win_raw_want(struct engine_win_raw *raw, int on)
     if (id == 0)
         return 1;
     return PostThreadMessageW(id, ENGINE_RAW_WANT, on ? 1 : 0, 0) ? 0 : 1;
+}
+
+int engine_win_raw_want_keys(struct engine_win_raw *raw, int on)
+{
+    DWORD id;
+
+    if (!raw)
+        return 1;
+    id = atomic_load_explicit(&raw->thread_id, memory_order_acquire);
+    if (id == 0)
+        return 1;
+    return PostThreadMessageW(id, ENGINE_RAW_KEYS, on ? 1 : 0, 0) ? 0 : 1;
 }
 
 int engine_win_raw_stop(struct engine_win_raw *raw)

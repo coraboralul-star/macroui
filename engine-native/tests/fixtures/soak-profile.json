@@ -1,0 +1,2334 @@
+{
+ "version": 1,
+ "name": "Soak",
+ "variables": {},
+ "activeId": "default",
+ "swapClicks": false,
+ "inputMode": "software",
+ "focusExe": "",
+ "macros": [],
+ "configs": [
+  {
+   "id": "default",
+   "name": "Fortnite Test",
+   "focusExe": "FortniteClient-Win64-Shipping.exe",
+   "macros": [
+    {
+     "id": "378b0382-bd66-41c1-b233-cfe3d91f0b29",
+     "name": "Edit Shoot",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "n"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "a3a61b2b-f10a-4cc1-9852-204df72f7a52",
+       "type": "onceHeld",
+       "gapMs": 65,
+       "steps": [
+        {
+         "action": "down",
+         "key": "o",
+         "type": "key"
+        },
+        {
+         "action": "down",
+         "key": "n",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "key": "n",
+         "type": "key"
+        },
+        {
+         "action": "up",
+         "key": "o",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        }
+       ]
+      },
+      {
+       "id": "bc0f2845-1911-428f-bde6-fc4e91d65495",
+       "type": "then",
+       "forMs": 150,
+       "steps": [
+        {
+         "action": "down",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        }
+       ]
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "94eac954-48ba-4af2-a166-2317712273ee",
+     "name": "Edit Piece",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "once",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "4"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "94eac954-48ba-4af2-a166-2317712273ee-steps",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "key": "n",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "n",
+         "type": "key"
+        },
+        {
+         "action": "down",
+         "key": "LShift",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 165
+        },
+        {
+         "action": "up",
+         "key": "LShift",
+         "type": "key"
+        },
+        {
+         "action": "down",
+         "key": "t",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 80
+        },
+        {
+         "action": "up",
+         "key": "t",
+         "type": "key"
+        }
+       ]
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "6ff281c2-d59c-459f-8711-b80b5e4615e2",
+     "name": "Wall",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "side",
+      "button": "XButton2"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "58939742-7d47-4250-ab13-3a56caa002f0",
+       "type": "whileHeld",
+       "steps": [
+        {
+         "action": "down",
+         "button": "XButton2",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "button": "XButton2",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ],
+       "mute": []
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "953267d0-d2be-4c4c-940a-6a32170c8ffd",
+     "name": "Sprint",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "side",
+      "button": "XButton1"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "22f07659-fd33-4a35-b7f7-86e0975856e6",
+       "key": "z",
+       "watch": [
+        "LShift",
+        "CapsLock",
+        "t",
+        "XButton2",
+        "p"
+       ],
+       "armMs": 5,
+       "gapMs": 80,
+       "ignore": "off",
+       "ignoreMs": 150,
+       "pauseWatch": "off",
+       "type": "tapHold"
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "esc-menu-pipe",
+     "name": "Menu",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "once",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "\\"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "esc-menu-pipe-steps",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "key": "escape",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 15
+        },
+        {
+         "action": "up",
+         "key": "escape",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 175
+        },
+        {
+         "ms": 15,
+         "type": "goto",
+         "where": "screen",
+         "x": 1690,
+         "y": 75
+        },
+        {
+         "ms": 15,
+         "type": "goto",
+         "where": "screen",
+         "x": 1691,
+         "y": 76
+        },
+        {
+         "type": "wait",
+         "ms": 15
+        }
+       ]
+      },
+      {
+       "id": "b05e6503-7655-4e8e-a426-e2074cb74d6e",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "down",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "down",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "down",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "button": "LButton",
+         "type": "mouse"
+        }
+       ]
+      },
+      {
+       "id": "a593b2fa-8860-4cd0-a477-c261c019ff01",
+       "type": "steps",
+       "steps": [
+        {
+         "ms": 15,
+         "type": "goto",
+         "where": "screen",
+         "x": 1565,
+         "y": 170
+        },
+        {
+         "ms": 15,
+         "type": "goto",
+         "where": "screen",
+         "x": 1566,
+         "y": 171
+        }
+       ]
+      },
+      {
+       "id": "f152180f-732b-40dc-b434-5b3f4c4ac0bb",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "down",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "down",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "down",
+         "button": "LButton",
+         "type": "mouse"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "button": "LButton",
+         "type": "mouse"
+        }
+       ]
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "2e69b000-832b-434d-94ce-773ce2a30b08",
+     "name": "SMG Slot",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "5"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 10,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "b38a92ee-807e-4422-9560-eb7ce7348bdb",
+       "type": "whileHeld",
+       "steps": [
+        {
+         "action": "down",
+         "key": "5",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "5",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ],
+       "mute": []
+      },
+      {
+       "id": "f4b01c44-1b1f-40d6-a8b3-1574c31add1b",
+       "type": "swapAfter",
+       "afterMs": 150,
+       "steps": [
+        {
+         "action": "down",
+         "key": "5",
+         "type": "key"
+        },
+        {
+         "action": "down",
+         "key": "a",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "5",
+         "type": "key"
+        },
+        {
+         "action": "up",
+         "key": "a",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ],
+       "mute": []
+      }
+     ],
+     "releaseStop": "nextUp"
+    },
+    {
+     "id": "9a397083-1e20-4a47-ad0b-85691b464804",
+     "name": "Ramp",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "CapsLock"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "9a397083-1e20-4a47-ad0b-85691b464804-steps",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "key": "CapsLock",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "CapsLock",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ]
+      }
+     ],
+     "releaseStop": "nextUp"
+    },
+    {
+     "id": "a57d0db8-f928-4fa6-beab-967a598aa01b",
+     "name": "Cone",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "LShift"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "a57d0db8-f928-4fa6-beab-967a598aa01b-steps",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "key": "LShift",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "LShift",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ]
+      }
+     ],
+     "releaseStop": "nextUp"
+    },
+    {
+     "id": "61aa22ca-5f53-4289-9391-9312999f79e0",
+     "name": "Floor",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "t"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "0075eca0-a153-4636-95a7-80c55d9564e4",
+       "type": "whileHeld",
+       "steps": [
+        {
+         "action": "down",
+         "key": "t",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "t",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ],
+       "mute": []
+      }
+     ],
+     "releaseStop": "nextUp"
+    },
+    {
+     "id": "ef6720b0-97b0-49e4-9ecf-ee97aec4f509",
+     "name": "Pickaxe",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "2"
+     },
+     "steps": [
+      {
+       "type": "key",
+       "action": "down",
+       "key": "2"
+      },
+      {
+       "type": "wait",
+       "ms": 18
+      },
+      {
+       "type": "key",
+       "action": "up",
+       "key": "2"
+      },
+      {
+       "type": "wait",
+       "ms": 18
+      }
+     ],
+     "basic": true,
+     "gapMs": 18,
+     "advanced": false,
+     "busy": false,
+     "blocks": [],
+     "releaseStop": "nextUp"
+    },
+    {
+     "id": "77558766-a38f-405c-a04f-f8c381b87923",
+     "name": "Interact",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "once",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "r"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "df55401e-59f1-489e-959c-54a691c34915",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "key": "r",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 50
+        },
+        {
+         "action": "up",
+         "key": "r",
+         "type": "key"
+        },
+        {
+         "type": "scanWait",
+         "ms": 80
+        }
+       ]
+      },
+      {
+       "id": "acd74ccd-2b35-4680-ab5c-b44fdb50aa6b",
+       "type": "whileHeld",
+       "steps": [
+        {
+         "action": "down",
+         "key": "r",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "key": "r",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        }
+       ],
+       "mute": []
+      }
+     ],
+     "releaseStop": "nextUp"
+    },
+    {
+     "id": "e1baf936-2cfe-4ca9-ba5f-36df14e456cf",
+     "name": "Shotgun Slot",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "LWin"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "cbe2fd64-7d20-49fe-bf77-84a29422fa27",
+       "type": "whileHeld",
+       "steps": [
+        {
+         "action": "down",
+         "key": "[",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "[",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ],
+       "mute": []
+      },
+      {
+       "id": "5faf8697-97fb-4da7-8d92-4acc2f6454ea",
+       "type": "swapAfter",
+       "afterMs": 150,
+       "steps": [
+        {
+         "action": "down",
+         "key": "[",
+         "type": "key"
+        },
+        {
+         "action": "down",
+         "key": "a",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "[",
+         "type": "key"
+        },
+        {
+         "action": "up",
+         "key": "a",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ],
+       "mute": []
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "599f5384-17ad-4737-ab31-281cd04774ec",
+     "name": "Heal Slot",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "w"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "599f5384-17ad-4737-ab31-281cd04774ec-steps",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "key": "w",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "w",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ]
+      }
+     ],
+     "releaseStop": "nextUp"
+    },
+    {
+     "id": "5120e40f-bf90-4b50-9305-83b48602871c",
+     "name": "Mobility Slot",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "q"
+     },
+     "steps": [
+      {
+       "type": "key",
+       "action": "down",
+       "key": "q"
+      },
+      {
+       "type": "wait",
+       "ms": 18
+      },
+      {
+       "type": "key",
+       "action": "up",
+       "key": "q"
+      },
+      {
+       "type": "wait",
+       "ms": 18
+      }
+     ],
+     "basic": true,
+     "gapMs": 18,
+     "advanced": false,
+     "busy": false,
+     "blocks": [],
+     "releaseStop": "nextUp"
+    },
+    {
+     "id": "4856c20e-3e6d-47d0-a644-4daace41ff3a",
+     "name": "Simple Edit",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "b"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "091ce0ad-7460-4fe5-b1de-c7683aaa7b00",
+       "type": "onceHeld",
+       "gapMs": 85,
+       "steps": [
+        {
+         "action": "down",
+         "key": "o",
+         "type": "key"
+        },
+        {
+         "action": "down",
+         "key": "b",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "key": "b",
+         "type": "key"
+        },
+        {
+         "action": "up",
+         "key": "o",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        }
+       ]
+      }
+     ],
+     "releaseStop": "finish"
+    }
+   ]
+  },
+  {
+   "id": "f6566ff0-5efd-49df-9197-b6278d4ac6cf",
+   "name": "Overwatch Test",
+   "focusExe": "Overwatch.exe",
+   "macros": [
+    {
+     "id": "5a99f5dc-ea82-479d-93e7-990a05af38f3",
+     "name": "Ability",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "once",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "r"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "24523bdc-7e74-45fb-9b4d-2c09a33ea16b",
+       "type": "onceHeld",
+       "gapMs": 150,
+       "steps": [
+        {
+         "action": "down",
+         "key": "r",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "r",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ]
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "b3104458-6856-4375-960e-0bbe55407617",
+     "name": "Reload",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "a"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "abca770d-0653-4967-b1f5-b8b171f90e1d",
+       "type": "whileHeld",
+       "steps": [
+        {
+         "action": "down",
+         "key": "a",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "a",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ],
+       "mute": []
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "f6b6edb1-a8ff-454d-b659-0046b6945ada",
+     "name": "New macro",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "v"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "029e3ebb-bcb1-422e-a308-541888867315",
+       "type": "whileHeld",
+       "steps": [
+        {
+         "action": "down",
+         "key": "v",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "v",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ],
+       "mute": []
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "bfdadcb4-b42e-4e85-bd8a-998408cd600d",
+     "name": "Jump",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "LWin"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "880325d5-5b06-4cff-be1c-5ce0c21092ff",
+       "type": "whileHeld",
+       "steps": [
+        {
+         "type": "key",
+         "action": "down",
+         "key": "space"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "type": "key",
+         "action": "up",
+         "key": "space"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ],
+       "mute": []
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "1afe741a-293d-43b8-87a6-b7acf36a9b50",
+     "name": "Menu",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "once",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "\\"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "4ad9cbd3-52b9-4e53-b9c2-6e1160f598e8",
+       "type": "steps",
+       "steps": []
+      }
+     ],
+     "releaseStop": "nextUp"
+    }
+   ]
+  },
+  {
+   "id": "614953b2-e953-47af-a26c-9e94db9c7315",
+   "name": "HellDivers Test",
+   "focusExe": "helldivers2.exe",
+   "macros": [
+    {
+     "id": "9fae21fd-5827-4673-bb8c-96a23adbaf38",
+     "name": "R",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "once",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "r"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "d7da2b17-fe19-4b25-b552-adfeb37482e5",
+       "type": "whileHeld",
+       "steps": [
+        {
+         "action": "down",
+         "key": "r",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "r",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ],
+       "mute": []
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "6159c4a4-8cb5-48a5-a36e-ffe58f2f953e",
+     "name": "A",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "once",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "a"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "fe09cb5f-6dee-4e69-bad5-f2bccd8b8d13",
+       "type": "whileHeld",
+       "steps": [
+        {
+         "action": "down",
+         "key": "a",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        },
+        {
+         "action": "up",
+         "key": "a",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 18
+        }
+       ],
+       "mute": []
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "bd63dac9-ec6e-4f41-a1c3-6b7d2b71de0b",
+     "name": "Reinforce",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "once",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "4"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "544d0566-7427-4771-85cb-b82830eb6024",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "key": "c",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "down",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "down",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "down",
+         "key": "f",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "key": "f",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "down",
+         "key": "s",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "key": "s",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "down",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 10
+        },
+        {
+         "action": "up",
+         "key": "c",
+         "type": "key"
+        }
+       ]
+      }
+     ],
+     "releaseStop": "nextUp"
+    },
+    {
+     "id": "bccaeff6-cc89-43e3-931b-aa343ceb12a0",
+     "name": "RC-8 Auto Cannon",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "once",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "LWin"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "30b92bf8-b468-4d20-ae2b-58363b06a6fa",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "key": "c",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "s",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "s",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "f",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "f",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "c",
+         "type": "key"
+        }
+       ]
+      }
+     ],
+     "releaseStop": "nextUp"
+    },
+    {
+     "id": "0ac82602-c6e3-492c-b8e3-933c62e838de",
+     "name": "Orbital Laser",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "once",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "side",
+      "button": "XButton2"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "35d8d35a-ad49-49a3-b2bd-1cdbab52ee9a",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "key": "c",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "f",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "f",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "f",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "f",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "c",
+         "type": "key"
+        }
+       ]
+      }
+     ],
+     "releaseStop": "nextUp"
+    },
+    {
+     "id": "17a64074-bb32-45be-a8d1-67a30b9d3d5c",
+     "name": "Orbital 380mm HE Barrage",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "once",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "side",
+      "button": "XButton1"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "38df88ab-24bb-4c75-8d2c-38a062d3bb89",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "key": "c",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "f",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "f",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "s",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "s",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "c",
+         "type": "key"
+        }
+       ]
+      }
+     ],
+     "releaseStop": "nextUp"
+    },
+    {
+     "id": "ff35d241-0d71-4819-9b77-dcc534a8b042",
+     "name": "Supply Car",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "whileHeld",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "3"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "advanced": true,
+     "busy": false,
+     "blocks": [
+      {
+       "id": "93d37995-699b-4ca5-95d5-4decbe620c17",
+       "type": "steps",
+       "steps": [
+        {
+         "action": "down",
+         "key": "c",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "s",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "s",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "s",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "s",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "s",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "s",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "d",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "e",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "down",
+         "key": "f",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "f",
+         "type": "key"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "action": "up",
+         "key": "c",
+         "type": "key"
+        }
+       ]
+      }
+     ],
+     "releaseStop": "finish"
+    },
+    {
+     "id": "189a3664-21d9-45fd-b36b-8c9f62097ed2",
+     "name": "Call In Super Destroyer",
+     "enabled": true,
+     "priority": 0,
+     "speed": 1,
+     "playMode": "once",
+     "repeatCount": 1,
+     "exclusive": false,
+     "focusExe": "",
+     "trigger": {
+      "kind": "key",
+      "button": "n"
+     },
+     "steps": [],
+     "basic": false,
+     "gapMs": 18,
+     "releaseStop": "nextUp",
+     "advanced": true,
+     "blocks": [
+      {
+       "id": "96ce2f5c-f3ac-43b4-9118-9bfc3fae1d3e",
+       "type": "steps",
+       "steps": [
+        {
+         "type": "key",
+         "action": "down",
+         "key": "c"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "down",
+         "key": "e"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "up",
+         "key": "e"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "down",
+         "key": "e"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "up",
+         "key": "e"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "down",
+         "key": "d"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "up",
+         "key": "d"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "down",
+         "key": "d"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "up",
+         "key": "d"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "down",
+         "key": "s"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "up",
+         "key": "s"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "down",
+         "key": "f"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "up",
+         "key": "f"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "down",
+         "key": "s"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "up",
+         "key": "s"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "down",
+         "key": "f"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "up",
+         "key": "f"
+        },
+        {
+         "type": "wait",
+         "ms": 30
+        },
+        {
+         "type": "key",
+         "action": "up",
+         "key": "c"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

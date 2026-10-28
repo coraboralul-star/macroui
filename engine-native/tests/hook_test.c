@@ -587,8 +587,37 @@ static void check_win_key(void)
     }
 }
 
+/* The silent keyboard hook line. Raw Input sees keys that a hook Windows
+   removed misses, so a raw key well after the hook's last one is a drop. */
+static void check_silence_verdict(void)
+{
+    struct engine_raw_mouse raw;
+    const int64_t f = 10000000;
+
+    expect(engine_silence_verdict(0, 5 * f, 9 * f, f) == ENGINE_SILENCE_UNKNOWN,
+           "no raw keyboard is unknown");
+    expect(engine_silence_verdict(1, 5 * f, 0, f) == ENGINE_SILENCE_IDLE,
+           "no raw key at all is idle");
+    expect(engine_silence_verdict(1, 5 * f, 5 * f + f / 10, f) == ENGINE_SILENCE_IDLE,
+           "a raw key 100 ms after the hook's is the same key");
+    expect(engine_silence_verdict(1, 5 * f, 4 * f, f) == ENGINE_SILENCE_IDLE,
+           "a raw key before the hook's last key is idle");
+    expect(engine_silence_verdict(1, 5 * f, 8 * f, f) == ENGINE_SILENCE_DROPPED,
+           "a raw key 3 s after the hook went quiet is a dropped hook");
+    expect(strcmp(engine_silence_name(ENGINE_SILENCE_DROPPED), "dropped") == 0 &&
+               strcmp(engine_silence_name(ENGINE_SILENCE_IDLE), "idle") == 0 &&
+               strcmp(engine_silence_name(ENGINE_SILENCE_UNKNOWN), "unknown") == 0,
+           "silence verdict names");
+    engine_raw_mouse_init(&raw);
+    expect(atomic_load(&raw.keys_ok) == 0 && atomic_load(&raw.key_at) == 0, "raw keys start off");
+    engine_raw_keys_set_ok(&raw, 1);
+    engine_raw_key_seen(&raw, 42);
+    expect(atomic_load(&raw.keys_ok) == 1 && atomic_load(&raw.key_at) == 42, "a raw key is stamped");
+}
+
 int main(void)
 {
+    check_silence_verdict();
     check_names();
     check_resolve();
     check_trigger_rules();

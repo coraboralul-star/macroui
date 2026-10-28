@@ -1,4 +1,5 @@
-/* Raw Input for middle, mouse 4 and mouse 5. Windows only.
+/* Raw Input for middle, mouse 4 and mouse 5, and the keyboard's last key
+   time. Windows only.
    A low-level hook that swallows a mouse button does not stop Raw Input, so
    this sees the real up even when the hook lost it. It has its own thread:
    a fast mouse sends thousands of WM_INPUT a second, and the hook thread must
@@ -35,6 +36,10 @@ void engine_win_raw_run(struct engine_win_raw *raw);
 /* Register while a config has a middle or side trigger, so no mouse traffic
    reaches this thread otherwise. 0 when the request was posted. */
 int engine_win_raw_want(struct engine_win_raw *raw, int on);
+
+/* Register the keyboard while armed. Only the time of the last real key is
+   kept, for the silent-hook log line. 0 when the request was posted. */
+int engine_win_raw_want_keys(struct engine_win_raw *raw, int on);
 
 /* 0 when the quit was posted. */
 int engine_win_raw_stop(struct engine_win_raw *raw);
