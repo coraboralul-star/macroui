@@ -123,6 +123,8 @@ The core keeps a note ring on `struct engine_play` (`engine_play_note`), 128 ent
 | `start blocked macro=... id=... mode=... reason=<why>` | A start was refused: `already-running`, `busy`, `playing`, `runner-cap`, `arena-full`, `no-id`. A `run` step whose target is still live is not logged |
 | `profile push seq=<n> config="<name>" macros=<n>` | Playback adopted a new profile image |
 | `reload`, `armed on`, `armed off` | The shell's reload, start and stop commands |
+| `turn skipped macro=... id=... reason=uncalibrated` | A turn step ran in a config with no `turn.countsPer360`. It sent nothing and still took its time |
+| `turn stopped macro=... id=... sent=<x>/<n> reason=<why>` | A stop cut a turn short. The rest is dropped. Counts are signed, right positive |
 | `hook key reinstall reason=silent ... age=<ms> raw=on\|off raw_key_age=<ms> mouse_age=<ms> verdict=<v>` | The keyboard hook heard nothing for 8 s. Raw Input is registered for the keyboard while armed and keeps the time of the last key from a real keyboard. `verdict=dropped` means Raw Input saw a key more than 250 ms after the hook's last one: Windows removed the hook. `idle` means no key reached either. `unknown` means Raw Input is off |
 
 The 2 s state line also carries `arena=<used>/<cap> mutes=<used>/<cap> muted=<id>:<count>,...`. When nothing is running, `arena` and `mutes` are 0.
@@ -189,6 +191,8 @@ These are not divided by `speed`: `ifShort` `underMs`, `swapLoop` `afterMs`, `mo
 `scanWait` `ms` is divided by speed at the wait, through the same arm path as `wait`. `0` still waits 1 ms.
 
 `pressHold` does not divide. It stores a wait of 18 and `holdMs` on the steps it writes. Those waits use the arm path. `holdMs` defaults to 200 when the file omitted it. That default is not the editor's 80.
+
+`turn` (#80) works out its counts as `floor(degrees * countsPer360 / 360 + 0.5)`, negative for left. `countsPer360` is the live config's `turn.countsPer360`, or the profile's own when it has no configs. Native does this when the profile is built, AHK when the step runs. Missing, 0 and negative are not calibrated. `degrees` is clamped to 0..3600 and `ms` defaults to 30. `ms` is divided by speed, with the wait arm path. Each tick sends `trunc(total * elapsed / span) - sent`, at most 16000, so the total is exact and the last tick sends the rest. `0` ms sends it all at once, 16000 a tick. The next step waits until all of it is sent. A stop drops the rest. A paused runner keeps the share it did not send. The counts stay apart from `move` all the way to the report: a board scales pixel moves by dpi, never counts. With a turn in a board tick, the engine scales that tick's pixel moves itself, adds the counts, and sets report flag bit 2. The board then sends 127 counts a USB report, so a big turn on a board takes a few more ms than the step says.
 
 `randomWait` is inside the inclusive min and max after the bounds are swapped and clamped at 0. The test injects the roll. It is not an exact-interval check.
 
