@@ -42,7 +42,7 @@ export const TURN_DIRS: { value: TurnDir; label: string }[] = [
 ];
 
 export const TURN_DEGREES_MAX = 3600;
-export const TURN_MS_DEFAULT = 30;
+export const TURN_MS_DEFAULT = 0;
 
 /** Per config: raw mouse counts for one full turn in that game. Set by calibration. */
 export type TurnCalibration = { countsPer360: number };

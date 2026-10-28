@@ -629,7 +629,7 @@ static void check_turn(void)
     expect(step && step->type == ENGINE_STEP_TURN && step->a == -8182 && step->b == 120 && step->action == 0,
            "turn left 180 is half the config's counts, negative");
     expect(step && step[1].a == 4114 && step[1].b == ENGINE_TURN_MS_DEFAULT,
-           "turn rounds the counts and defaults to 30 ms");
+           "turn rounds the counts and defaults to 0 ms");
     expect(step && step[2].a == 8182 && step[2].action == 0, "turn defaults to 180 right");
     engine_profile_pick(image, "B.exe", "a", &live);
     step = turn_step(&live);

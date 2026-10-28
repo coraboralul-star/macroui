@@ -32,7 +32,7 @@ export function runBugChecks(): string[] {
 }
 
 function checkTurn() {
-  same(blankStep("turn"), { type: "turn", degrees: 180, dir: "right", ms: 30 }, "a new turn is 180 right in 30 ms");
+  same(blankStep("turn"), { type: "turn", degrees: 180, dir: "right", ms: 0 }, "a new turn is 180 right, one instant move");
   const saved = {
     version: 1,
     name: "Games",
@@ -53,8 +53,8 @@ function checkTurn() {
   same(profile.configs[0].turn, { countsPer360: 16364 }, "a config keeps its calibration, rounded");
   check(profile.configs[1].turn === undefined, "a 0 calibration is not calibrated");
   same(profile.macros[0].steps, [
-    { type: "turn", degrees: 3600, dir: "right", ms: 30 },
-    { type: "turn", degrees: 180, dir: "right", ms: 30 },
+    { type: "turn", degrees: 3600, dir: "right", ms: 0 },
+    { type: "turn", degrees: 180, dir: "right", ms: 0 },
   ], "turn steps clamp degrees and default the rest");
   const flat = normalizeProfile({ version: 1, name: "Old", variables: {}, macros: [], turn: { countsPer360: 3600 } });
   same(activeTurn(flat), { countsPer360: 3600 }, "a profile with no configs moves its turn onto its config");

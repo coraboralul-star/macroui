@@ -178,7 +178,7 @@
    rest. */
 
 #define ENGINE_TURN_UNCALIBRATED 0x01u
-#define ENGINE_TURN_MS_DEFAULT 30
+#define ENGINE_TURN_MS_DEFAULT 0
 #define ENGINE_TURN_DEGREES_MAX 3600
 /* A turn's counts and a countsPer360 are capped here. */
 #define ENGINE_TURN_COUNTS_MAX 1000000000

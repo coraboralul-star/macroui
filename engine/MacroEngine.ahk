@@ -1097,7 +1097,7 @@ class Runner {
             degrees := 0
         if (degrees > 3600)
             degrees := 3600
-        ms := Round(AsNum(Field(step, "ms", 30), 30))
+        ms := Round(AsNum(Field(step, "ms", 0), 0))
         if (ms < 0)
             ms := 0
         per360 := Engine.TurnPer360()
