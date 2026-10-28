@@ -225,6 +225,7 @@ export function glance(steps: Step[], limit = 16): string[] {
       } else if (step.type === "wait" || step.type === "scanWait") out.push(`${step.ms}ms`);
       else if (step.type === "randomWait") out.push(`${step.minMs}-${step.maxMs}ms`);
       else if (step.type === "move") out.push("move");
+      else if (step.type === "turn") out.push(`turn ${step.dir} ${step.degrees}°`);
       else if (step.type === "scroll") out.push(step.dy < 0 ? `scroll up ${Math.abs(step.dy)}` : `scroll down ${step.dy}`);
       else if (step.type === "goto") out.push("go to");
       else if (step.type === "run") out.push("run");

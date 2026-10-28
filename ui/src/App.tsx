@@ -12,7 +12,8 @@ import { FieldSelect } from "./components/FieldSelect";
 import { SettingsPage, type CloseMode, type SettingPane } from "./components/SettingsPage";
 import { keyLabel } from "./keyboard";
 import { pressLabel } from "./recording";
-import { inputModeLabel, normalizeInputMode } from "./profile";
+import { activeTurn, inputModeLabel, normalizeInputMode, setActiveTurn } from "./profile";
+import { TurnCalibrated } from "./turnContext";
 import { outputChipMode, outputConnected, outputFallenBack, type EngineKind } from "./hostMessages";
 import { useHostStatus } from "./useHostStatus";
 import { useMacroActions, type TriggerMenu } from "./useMacroActions";
@@ -61,6 +62,9 @@ export function App() {
     setMenu(null);
   };
 
+  const turn = activeTurn(profile);
+  const setTurnCounts = (counts: number) => update(setActiveTurn(profile, counts));
+
   const actions = useMacroActions({
     profile,
     selected,
@@ -107,7 +111,7 @@ export function App() {
   };
 
   return (
-    <>
+    <TurnCalibrated.Provider value={Boolean(turn)}>
       <Backdrop />
       <div className="app">
         <header
@@ -330,6 +334,9 @@ export function App() {
               post({ type: "shell", engine: kind });
             }}
             engineWire={host.engineWire}
+            configName={profile.name}
+            countsPer360={turn?.countsPer360}
+            onCountsPer360={setTurnCounts}
           />
         )}
         {menu ? (
@@ -368,6 +375,6 @@ export function App() {
           </button>
         </div>
       ) : null}
-    </>
+    </TurnCalibrated.Provider>
   );
 }

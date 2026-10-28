@@ -1,11 +1,22 @@
 import { useEffect, useState, type DragEvent as ReactDragEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { LIBRARY, LANE_GROUPS, LIBRARY_MIME, libraryItem, librarySteps, matchInput } from "../library";
-import type { Macro, Step } from "../profile";
+import { TURN_DEGREES_MAX, type Macro, type Step } from "../profile";
 import { Capture, type Captured } from "./Capture";
 import { FieldSelect } from "./FieldSelect";
 import { NumberField } from "./NumberField";
+import { TURN_UNCALIBRATED, useTurnCalibrated } from "../turnContext";
 import { canPlace, deleteAct, dropHold, expandTaps, insertSteps, laneCells, moveStep, replaceAct, scrollDy, setDelay, type LaneCell } from "../eventLane";
+
+function TurnWarning() {
+  const calibrated = useTurnCalibrated();
+  if (calibrated) return null;
+  return (
+    <em className="ev-warn" title={TURN_UNCALIBRATED}>
+      Not calibrated
+    </em>
+  );
+}
 
 type MenuLine = { kind: "label"; text: string } | { kind: "item"; label: string; run: () => void };
 
@@ -397,6 +408,43 @@ function CellView({
           </button>
           <NumberField ariaLabel="Notches" min={1} value={notches} onChange={setNotches} />
         </small>
+      </span>
+    );
+  }
+  if (cell.type === "turn") {
+    const set = (patch: Partial<Extract<Step, { type: "turn" }>>) =>
+      onChange(steps.map((step, index) => (index === cell.index && step.type === "turn" ? { ...step, ...patch } : step)));
+    return (
+      <span
+        className={`ev${dragFrom === cell.index ? " is-dragging" : ""}${targeted ? " is-target" : ""}`}
+        draggable={!readOnly}
+        onDragStart={(event) => {
+          event.dataTransfer.setData("text/plain", String(cell.index));
+          event.dataTransfer.effectAllowed = "move";
+          onDragIndex(cell.index);
+        }}
+        onDragEnd={onDragEnd}
+        onDragOver={onAllowDrop(cell.index)}
+        onDrop={onDropAt(cell.index)}
+        onContextMenu={(event) => onMenu(event, [{ kind: "item", label: "Delete", run: () => onChange(deleteAct(steps, cell.index)) }])}
+      >
+        <b>Turn</b>
+        <small>
+          <button
+            type="button"
+            className="ev-dir"
+            aria-label="Turn direction"
+            disabled={readOnly}
+            onClick={() => set({ dir: cell.dir === "left" ? "right" : "left" })}
+          >
+            {cell.dir === "left" ? "Left" : "Right"}
+          </button>
+          <NumberField ariaLabel="Degrees" min={1} value={cell.degrees} onChange={(degrees) => set({ degrees: Math.min(TURN_DEGREES_MAX, degrees) })} />
+          °
+          <NumberField ariaLabel="Turn ms" min={0} value={cell.ms} onChange={(ms) => set({ ms })} />
+          ms
+        </small>
+        <TurnWarning />
       </span>
     );
   }

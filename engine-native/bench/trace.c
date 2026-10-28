@@ -10,6 +10,7 @@
 
 #include "runner.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -101,6 +102,8 @@ static struct engine_play g_play;
 static struct built g_built[MACRO_CAP];
 static struct engine_macro g_macros[MACRO_CAP];
 static int g_macro_n;
+/* The profile's turn.countsPer360. 0 is not calibrated. */
+static double g_turn_per360;
 static int64_t g_roll;
 
 static void set_err(const char *msg)
@@ -778,6 +781,29 @@ static int fill_one(struct built *b, const struct js *item, int as_blocks, const
         out->b = field_i(item, "y", 0);
         return 1;
     }
+    if (strcmp(type, "turn") == 0) {
+        const struct js *deg = jget(item, "degrees");
+        const char *dir = "right";
+        double degrees = deg && deg->kind == JS_NUM ? deg->num : 180;
+
+        jstr(jget(item, "dir"), &dir);
+        out->type = ENGINE_STEP_TURN;
+        out->b = field_i(item, "ms", ENGINE_TURN_MS_DEFAULT);
+        if (out->b < 0)
+            out->b = 0;
+        if (!(degrees > 0))
+            degrees = 0;
+        if (degrees > ENGINE_TURN_DEGREES_MAX)
+            degrees = ENGINE_TURN_DEGREES_MAX;
+        if (!(g_turn_per360 > 0)) {
+            out->action = ENGINE_TURN_UNCALIBRATED;
+        } else {
+            out->a = (int32_t)floor(degrees * g_turn_per360 / 360.0 + 0.5);
+            if (strcmp(dir, "left") == 0)
+                out->a = -out->a;
+        }
+        return 1;
+    }
     if (strcmp(type, "scroll") == 0) {
         out->type = ENGINE_STEP_SCROLL;
         out->a = field_i(item, "dy", 0);
@@ -935,6 +961,11 @@ static int compile_profile(const struct js *root)
 
     memset(&cat, 0, sizeof cat);
     g_macro_n = 0;
+    {
+        const struct js *per = jget(jget(root, "turn"), "countsPer360");
+
+        g_turn_per360 = per && per->kind == JS_NUM && per->num > 0 ? per->num : 0;
+    }
     macros = jget(root, "macros");
     if (!macros || macros->kind != JS_ARR) {
         set_err("profile has no macros array");

@@ -440,6 +440,13 @@ class Runner {
         this.gotoX := 0
         this.gotoY := 0
         this.didGoto := false
+        ; The turn step being sent. turnOn is cleared when all of it is sent.
+        this.turnOn := false
+        this.turnX := 0
+        this.turnTotal := 0
+        this.turnSent := 0
+        this.turnFrom := 0
+        this.turnTo := 0
         this.releaseStop := String(Field(macro, "releaseStop", "nextUp"))
         if (this.releaseStop != "finish")
             this.releaseStop := "nextUp"
@@ -526,6 +533,11 @@ class Runner {
         this.done := true
         this.endWhy := why
         this.paused := false
+        ; Stop means stop: the rest of a turn is dropped.
+        if this.turnOn {
+            this.turnOn := false
+            Engine.Log(Format('turn stopped macro="{}" id={} sent={}/{} reason={}', this.name, this.id, this.turnSent, this.turnTotal, why))
+        }
         frames := []
         if (this.stack is Array) {
             for frame in this.stack
@@ -582,6 +594,9 @@ class Runner {
         this.echoDown := Map()
         this.moveX := 0
         this.moveY := 0
+        ; This tick's turn share is not sent, so it is still owed.
+        this.turnSent -= this.turnX
+        this.turnX := 0
         this.wheel := 0
         this.hasGoto := false
     }
@@ -589,6 +604,7 @@ class Runner {
     Advance(now) {
         this.moveX := 0
         this.moveY := 0
+        this.turnX := 0
         this.wheel := 0
         this.hasGoto := false
         this.pressedNow := Map()
@@ -599,6 +615,7 @@ class Runner {
         for k, releaseAt in this.pulses.Clone()
             if (releaseAt <= now && this.pulses.Has(k))
                 this.pulses.Delete(k)
+        this.TurnTick(now)
         if (this.waitUntil != 0 && now < this.waitUntil) {
             if this.HoldShouldStop() {
                 top := this.stack.Length ? this.stack[-1] : ""
@@ -618,6 +635,9 @@ class Runner {
             this.MarkDone()
             return
         }
+        ; A turn over the per-report limit goes out over the next ticks.
+        if this.turnOn
+            return
         if (this.startedAt < 0)
             this.startedAt := now
         this.heldMs := now - this.startedAt
@@ -802,6 +822,8 @@ class Runner {
             this.wheel += Round(AsNum(Field(step, "dy", 0), 0))
             return ""
         }
+        if (kind = "turn")
+            return this.StartTurn(step, now)
         if (kind = "goto") {
             tx := Round(AsNum(Field(step, "x", 0), 0))
             ty := Round(AsNum(Field(step, "y", 0), 0))
@@ -1059,6 +1081,60 @@ class Runner {
     ArmWait(now, ms) {
         this.waitUntil := now + Max(1, Round(ms))
         return "wait"
+    }
+
+    ; Counts are degrees times the live config's countsPer360 over 360, right
+    ; positive. Uncalibrated sends nothing and still waits ms. 0 ms sends it
+    ; all at once. The next step waits until all of it is sent.
+    StartTurn(step, now) {
+        ; A turn cut off by a skipped wait gets its rest now.
+        if this.turnOn {
+            this.turnX += this.turnTotal - this.turnSent
+            this.turnOn := false
+        }
+        degrees := AsNum(Field(step, "degrees", 180), 180)
+        if !(degrees > 0)
+            degrees := 0
+        if (degrees > 3600)
+            degrees := 3600
+        ms := Round(AsNum(Field(step, "ms", 0), 0))
+        if (ms < 0)
+            ms := 0
+        per360 := Engine.TurnPer360()
+        if (per360 <= 0) {
+            Engine.Log(Format('turn skipped macro="{}" id={} reason=uncalibrated', this.name, this.id))
+        } else {
+            counts := Min(Floor(degrees * per360 / 360 + 0.5), 1000000000)
+            if (String(Field(step, "dir", "right")) = "left")
+                counts := -counts
+            if (counts != 0) {
+                this.turnOn := true
+                this.turnTotal := counts
+                this.turnSent := 0
+                this.turnFrom := now
+                this.turnTo := ms > 0 ? now + Max(1, Round(ms / this.speed)) : now
+                this.TurnTick(now)
+            }
+        }
+        if (ms > 0)
+            return this.ArmWait(now, ms / this.speed)
+        return this.turnOn ? "wait" : ""
+    }
+
+    ; Sends the share of the turn due by now. Truncation keeps it short of the
+    ; end until the last tick, which sends the rest.
+    TurnTick(now) {
+        if !this.turnOn
+            return
+        if (now >= this.turnTo || this.turnTo <= this.turnFrom)
+            want := this.turnTotal
+        else
+            want := Integer(this.turnTotal * (now - this.turnFrom) / (this.turnTo - this.turnFrom))
+        delta := this.Clamp(want - this.turnSent)
+        this.turnX += delta
+        this.turnSent += delta
+        if (this.turnSent = this.turnTotal)
+            this.turnOn := false
     }
 
     DropHold(key) {
@@ -1927,6 +2003,26 @@ class Engine {
 
     ; Pick the config whose focusExe matches the foreground app.
     ; An empty focusExe is the fallback. No configs means keep the flat macro list.
+    ; turn.countsPer360 of the live config, or of the profile when it has no
+    ; configs. 0 is not calibrated.
+    static TurnPer360() {
+        owner := this.profile
+        configs := Field(this.profile, "configs", "")
+        if (configs is Array) && (configs.Length > 0) {
+            owner := ""
+            for config in configs
+                if (config is Map && String(Field(config, "id", "")) = this.liveId)
+                    owner := config
+        }
+        turn := (owner is Map) ? Field(owner, "turn", "") : ""
+        if !(turn is Map)
+            return 0
+        per360 := AsNum(Field(turn, "countsPer360", 0), 0)
+        if !(per360 > 0)
+            return 0
+        return Min(per360, 1000000000)
+    }
+
     static ApplyLiveConfig() {
         configs := Field(this.profile, "configs", "")
         if !(configs is Array) || (configs.Length = 0) {
@@ -3041,6 +3137,7 @@ class Engine {
     static Publish(now) {
         dx := 0
         dy := 0
+        turn := 0
         wheel := 0
         hasAbs := false
         absX := 0
@@ -3050,6 +3147,8 @@ class Engine {
                 continue
             dx += r.moveX
             dy += r.moveY
+            turn += r.turnX
+            r.turnX := 0
             wheel += r.wheel
             if r.hasGoto {
                 hasAbs := true
@@ -3061,6 +3160,16 @@ class Engine {
             r.moveY := 0
             r.wheel := 0
         }
+        ; A board gets counts. With a turn in this tick, the pixel moves are
+        ; scaled here and the turn is added after, so Emit does not scale.
+        counts := false
+        if (turn != 0 && this.outputMode != "software" && !hasAbs) {
+            dx := Runner.Prototype.Clamp(dx)
+            dy := Runner.Prototype.Clamp(dy)
+            this.HidScale(&dx, &dy)
+            counts := true
+        }
+        dx += turn
         if (dx > 16000)
             dx := 16000
         if (dx < -16000)
@@ -3103,7 +3212,7 @@ class Engine {
             if this.applied.Has(k)
                 this.applied.Delete(k)
         if this.dry {
-            this.sent.Push(Map("down", downs, "up", ups, "x", dx, "y", dy, "wheel", wheel))
+            this.sent.Push(Map("down", downs, "up", ups, "x", dx, "y", dy, "wheel", wheel, "counts", counts))
             return
         }
         if (hasAbs && !this.PassBoard()) {
@@ -3112,10 +3221,11 @@ class Engine {
         } else if (hasAbs && this.PassBoard())
             this.Emit(downs, ups, 0, 0, true, absX, absY, wheel)
         else
-            this.Emit(downs, ups, dx, dy, false, 0, 0, wheel)
+            this.Emit(downs, ups, dx, dy, false, 0, 0, wheel, counts)
     }
 
-    static Emit(downs, ups, dx, dy, abs := false, ax := 0, ay := 0, wheel := 0) {
+    ; counts: dx and dy are device counts already, so the board does not scale.
+    static Emit(downs, ups, dx, dy, abs := false, ax := 0, ay := 0, wheel := 0, counts := false) {
         if (this.outputMode != "software") {
             hidWheel := this.HidWheel(wheel)
             if (!downs.Length && !ups.Length && dx = 0 && dy = 0 && hidWheel = 0 && !abs)
@@ -3123,7 +3233,8 @@ class Engine {
             if (abs)
                 this.SendRaw(this.HidJson(downs, ups, 0, 0, true, ax, ay, hidWheel))
             else {
-                this.HidScale(&dx, &dy)
+                if !counts
+                    this.HidScale(&dx, &dy)
                 this.SendRaw(this.HidJson(downs, ups, dx, dy, false, 0, 0, hidWheel))
             }
             for k in downs
@@ -4968,6 +5079,7 @@ RunChecks(fails) {
     fails := RunOnceChecks(fails)
     fails := HeldPressChecks(fails)
     fails := SoakChecks(fails)
+    fails := TurnChecks(fails)
     return fails
 }
 
@@ -5101,6 +5213,120 @@ HeldPressChecks(fails) {
     Engine.frontExe := saved["front"]
     Engine.dry := saved["dry"]
     return fails
+}
+
+; The turn step: the live config's countsPer360, exact totals over ms, a
+; stop drops the rest, uncalibrated sends nothing, and a board gets counts
+; that are not scaled by dpi. Same numbers as runner_test check_turn.
+TurnChecks(fails) {
+    saved := Map("out", Engine.outputMode, "profile", Engine.profile, "dry", Engine.dry, "live", Engine.liveId)
+    Engine.dry := true
+    Engine.outputMode := "software"
+    Engine.profile := J("{'configs':[{'id':'a','turn':{'countsPer360':2000},'macros':[]},{'id':'b','macros':[]}],'macros':[]}")
+    Engine.liveId := "a"
+    fails := Check(Engine.TurnPer360() = 2000, "turn uses the live config's countsPer360", fails)
+    Engine.liveId := "b"
+    fails := Check(Engine.TurnPer360() = 0, "a config with no turn is uncalibrated", fails)
+    Engine.profile := J("{'turn':{'countsPer360':-4},'macros':[]}")
+    fails := Check(Engine.TurnPer360() = 0, "a negative countsPer360 is uncalibrated", fails)
+
+    Engine.profile := J("{'turn':{'countsPer360':2000},'macros':[]}")
+    smooth := J("{'id':'turn','name':'Turn','playMode':'once','speed':1,'steps':[{'type':'turn','degrees':180,'dir':'right','ms':100},{'type':'move','x':0,'y':1}]}")
+    got := TurnPlay(smooth, 120, -1)
+    fails := Check(got.sum = 1000, "a smooth turn sends exactly its counts", fails)
+    fails := Check(got.half = 500, "a smooth turn is half sent at half time", fails)
+    fails := Check(got.marker = 100, "the next step waits for the turn to end", fails)
+    fails := Check(got.big = 0, "a smooth turn sends small even steps", fails)
+
+    Engine.profile := J("{'turn':{'countsPer360':80000},'macros':[]}")
+    flick := J("{'id':'flick','name':'Flick','playMode':'once','speed':1,'steps':[{'type':'turn','degrees':180,'dir':'left','ms':0},{'type':'move','x':0,'y':1}]}")
+    got := TurnPlay(flick, 4, -1)
+    fails := Check(got.xs[1] = -16000 && got.xs[2] = -16000 && got.xs[3] = -8000 && got.marker = 2, "an instant turn over the limit goes out over three reports", fails)
+
+    Engine.profile := J("{'turn':{'countsPer360':2000},'macros':[]}")
+    fast := J("{'id':'fast','name':'Fast','playMode':'once','speed':2,'steps':[{'type':'turn','degrees':180,'ms':100},{'type':'move','x':0,'y':1}]}")
+    got := TurnPlay(fast, 60, -1)
+    fails := Check(got.sum = 1000 && got.marker = 50, "a turn's time divides by speed", fails)
+
+    Engine.capture := []
+    smooth["id"] := "cut"
+    got := TurnPlay(smooth, 120, 41)
+    lines := Engine.capture
+    Engine.capture := ""
+    stopped := 0
+    for line in lines
+        if InStr(line, "turn stopped") && InStr(line, "sent=400/1000") && InStr(line, "reason=stop")
+            stopped++
+    fails := Check(got.sum = 400 && stopped = 1, "a stop drops the rest and logs sent=400/1000", fails)
+
+    Engine.profile := J("{'macros':[]}")
+    Engine.capture := []
+    raw := J("{'id':'raw','name':'Raw','playMode':'once','speed':1,'steps':[{'type':'turn','ms':30},{'type':'move','x':0,'y':1}]}")
+    got := TurnPlay(raw, 40, -1)
+    lines := Engine.capture
+    Engine.capture := ""
+    skipped := 0
+    for line in lines
+        if InStr(line, "turn skipped") && InStr(line, "reason=uncalibrated")
+            skipped++
+    fails := Check(got.sum = 0 && got.marker = 30 && skipped = 1, "an uncalibrated turn sends nothing, keeps its time, and logs once", fails)
+
+    Engine.profile := J("{'turn':{'countsPer360':600},'macros':[]}")
+    flat := J("{'id':'flat','name':'Flat','playMode':'once','speed':1,'steps':[{'type':'turn','degrees':180,'ms':0}]}")
+    for mode in ["software", "rp2350"] {
+        Engine.outputMode := mode
+        got := TurnPlay(flat, 1, -1)
+        fails := Check(got.xs[1] = 300 && got.counts = (mode != "software"), mode ": a turn reaches the output as counts", fails)
+    }
+
+    Engine.runners := []
+    Engine.pending := []
+    Engine.sent := []
+    Engine.outputMode := saved["out"]
+    Engine.profile := saved["profile"]
+    Engine.dry := saved["dry"]
+    Engine.liveId := saved["live"]
+    return fails
+}
+
+; Plays one macro on a 1 ms clock in dry mode. stopAt -1 never stops.
+TurnPlay(macro, lastMs, stopAt) {
+    Engine.runners := []
+    Engine.pending := []
+    Engine.applied := Map()
+    Engine.sent := []
+    Engine.StartRunner(macro)
+    out := {sum: 0, half: 0, marker: -1, big: 0, xs: [], counts: false}
+    t := 0
+    while (t <= lastMs) {
+        if (t = stopAt)
+            Engine.StopRunner(String(macro["id"]))
+        Engine.sent := []
+        Engine.RemoveDone()
+        Engine.FlushPending()
+        for r in Engine.runners
+            r.Advance(t)
+        Engine.FlushPending()
+        Engine.Publish(t)
+        Engine.RemoveDone()
+        x := 0, y := 0
+        if Engine.sent.Length {
+            item := Engine.sent[-1]
+            x := item["x"], y := item["y"]
+            if item["counts"]
+                out.counts := true
+        }
+        out.xs.Push(x)
+        out.sum += x
+        if (Abs(x) > 11 && Abs(x) < 8000)
+            out.big++
+        if (t = 50)
+            out.half := out.sum
+        if (out.marker < 0 && y = 1)
+            out.marker := t
+        t++
+    }
+    return out
 }
 
 ; The trigger soak: engine-native\tests\fixtures\soak.txt on soak-profile.json,

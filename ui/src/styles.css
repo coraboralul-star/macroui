@@ -6537,3 +6537,35 @@ input.ev-delay {
 
 .output-chip.is-warn span { color: #e7a090; }
 
+
+.ev-warn {
+  display: block;
+  margin-top: 1px;
+  color: var(--danger);
+  font-size: 0.58rem;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.turn-counts,
+.turn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.turn-counts input {
+  width: 7rem;
+}
+
+.turn-line {
+  margin: 12px 0 0;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.turn-line.is-bad {
+  color: #e7a090;
+}

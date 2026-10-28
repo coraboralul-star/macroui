@@ -79,6 +79,10 @@ function stepCues(steps: Step[]): Cue[] {
       else cues.push({ type: "pair", input, ...span(tapMs(step.holdMs ?? 18), realMs((step.holdMs ?? 18) + 16, 56)) });
       continue;
     }
+    if (step.type === "turn") {
+      cues.push({ type: "wait", ...span(480, Math.max(36, step.ms)) });
+      continue;
+    }
     if (step.type === "move" || step.type === "goto" || step.type === "run") {
       cues.push({ type: "wait", ...span(480, 220) });
       continue;

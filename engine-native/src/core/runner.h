@@ -68,12 +68,17 @@
 /* A press came while the last runner was finishing after its release. That
    runner ended with the key still down, so the press starts it now. */
 #define ENGINE_WHY_HELD_PRESS 34
-#define ENGINE_WHY_COUNT 35
+/* A turn step in a config with no countsPer360. It sends nothing. */
+#define ENGINE_WHY_UNCALIBRATED 35
+#define ENGINE_WHY_COUNT 36
 
 #define ENGINE_NOTE_EDGE 1
 #define ENGINE_NOTE_START 2
 #define ENGINE_NOTE_STOP 3
 #define ENGINE_NOTE_BLOCK 4
+/* A turn that sent nothing (why uncalibrated), or one a stop cut short
+   (why is the stop). sent and total are counts. */
+#define ENGINE_NOTE_TURN 5
 #define ENGINE_NOTE_CAP 128
 
 #define ENGINE_STOP_NONE 0
@@ -104,6 +109,7 @@
 #define ENGINE_STEP_SCAN_WAIT 14
 #define ENGINE_STEP_GOTO 15
 #define ENGINE_STEP_RUN 16
+#define ENGINE_STEP_TURN 17
 
 /* goto where. Anything else, including an empty name, is screen. */
 #define ENGINE_WHERE_SCREEN 0
@@ -162,7 +168,20 @@
    A non-empty key with no children writes key down, wait 18, key up.
    scanWait is always appended. holdMs defaults to 200 when it was omitted.
    That default is not the editor's 80. 0 and a negative holdMs are stored.
-   The wait of 18 and holdMs are divided later, on the wait arm path. */
+   The wait of 18 and holdMs are divided later, on the wait arm path.
+   turn stores the signed counts in a (right is positive) and ms in b. The
+   step builder works out the counts from degrees and the config's
+   countsPer360. action bit 0 is uncalibrated: the step sends nothing and
+   still waits ms. ms is divided by speed. Each tick sends the share of a
+   that is due by then, at most ENGINE_REPORT_MOVE_LIMIT. 0 ms sends it all
+   at once. The next step waits until all of a is sent. A stop drops the
+   rest. */
+
+#define ENGINE_TURN_UNCALIBRATED 0x01u
+#define ENGINE_TURN_MS_DEFAULT 0
+#define ENGINE_TURN_DEGREES_MAX 3600
+/* A turn's counts and a countsPer360 are capped here. */
+#define ENGINE_TURN_COUNTS_MAX 1000000000
 
 #define ENGINE_EDGE_WATCH_CAP 8
 #define ENGINE_EDGE_MUTE_CAP 8
@@ -271,6 +290,9 @@ struct engine_runner {
     int pressed_count;
     int32_t move_x;
     int32_t move_y;
+    /* This tick's turn counts. Kept apart from move_x: a board scales moves
+       by dpi, never counts. */
+    int32_t turn_x;
     int32_t wheel;
     int has_goto;
     int did_goto;
@@ -293,6 +315,12 @@ struct engine_runner {
     uint32_t mute_len;
     /* ENGINE_WHY_*, set by the first stop. */
     uint8_t end_reason;
+    /* The turn step being sent. turn_on is cleared when all of it is sent. */
+    int turn_on;
+    int32_t turn_total;
+    int32_t turn_sent;
+    int64_t turn_from;
+    int64_t turn_to;
 };
 
 /* One log event. age is in the runner's ticks. key and down are for EDGE. */
@@ -304,6 +332,9 @@ struct engine_note {
     uint16_t key;
     int64_t age;
     char id[ENGINE_ID_CAP];
+    /* TURN only. */
+    int32_t sent;
+    int32_t total;
 };
 
 /* top_count 0 means the whole pool is the top frame.

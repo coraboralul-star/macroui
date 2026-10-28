@@ -299,6 +299,7 @@ int engine_step_kind(const char *name)
     if (strcmp(name, "scanWait") == 0) return ENGINE_STEP_SCAN_WAIT;
     if (strcmp(name, "goto") == 0) return ENGINE_STEP_GOTO;
     if (strcmp(name, "run") == 0) return ENGINE_STEP_RUN;
+    if (strcmp(name, "turn") == 0) return ENGINE_STEP_TURN;
     return 0;
 }
 
@@ -522,6 +523,17 @@ static int push_hold(struct engine_runner *runner, struct engine_play *play,
 static void note_hold_release(struct engine_runner *runner, const struct engine_play *play);
 static int finish_hold(struct engine_runner *runner, struct engine_play *play, int64_t now);
 
+static void note_turn(struct engine_play *play, const struct engine_runner *runner, int why,
+                      int32_t sent, int32_t total)
+{
+    int at = engine_play_note(play, ENGINE_NOTE_TURN, runner->id, why, runner->mode, 0, 0, 0);
+
+    if (at < 0)
+        return;
+    play->notes[at].sent = sent;
+    play->notes[at].total = total;
+}
+
 static void mark_done(struct engine_runner *runner, struct engine_play *play, int why)
 {
     int i;
@@ -530,6 +542,12 @@ static void mark_done(struct engine_runner *runner, struct engine_play *play, in
         return;
     runner->done = 1;
     runner->end_reason = (uint8_t)why;
+    /* Stop means stop: the rest of a turn is dropped. */
+    if (runner->turn_on) {
+        if (play)
+            note_turn(play, runner, why, runner->turn_sent, runner->turn_total);
+        runner->turn_on = 0;
+    }
     runner->paused = 0;
     for (i = 0; i < runner->stack_count; i++) {
         release_frame_mute(play, runner, &runner->stack[i]);
@@ -705,6 +723,33 @@ static int64_t burst_ticks(double ms, int64_t freq)
     if (!isfinite(ticks) || ticks >= 9223372036854775808.0)
         return INT64_MAX;
     return (int64_t)ticks;
+}
+
+static int32_t sat_add(int32_t a, int32_t b);
+
+/* Sends the share of the turn due by now. Truncation keeps it short of the
+   end until the last tick, which sends the rest. */
+static void turn_tick(struct engine_runner *runner, int64_t now)
+{
+    int32_t want;
+    int32_t delta;
+
+    if (!runner->turn_on)
+        return;
+    if (now >= runner->turn_to || runner->turn_to <= runner->turn_from)
+        want = runner->turn_total;
+    else
+        want = (int32_t)((double)runner->turn_total * (double)(now - runner->turn_from) /
+                         (double)(runner->turn_to - runner->turn_from));
+    delta = want - runner->turn_sent;
+    if (delta > ENGINE_REPORT_MOVE_LIMIT)
+        delta = ENGINE_REPORT_MOVE_LIMIT;
+    if (delta < -ENGINE_REPORT_MOVE_LIMIT)
+        delta = -ENGINE_REPORT_MOVE_LIMIT;
+    runner->turn_x = sat_add(runner->turn_x, delta);
+    runner->turn_sent += delta;
+    if (runner->turn_sent == runner->turn_total)
+        runner->turn_on = 0;
 }
 
 static int32_t clamp_move(int32_t value)
@@ -933,6 +978,27 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
     if (step->type == ENGINE_STEP_SCROLL) {
         runner->wheel = sat_add(runner->wheel, step->a);
         return ENGINE_ADV_CONT;
+    }
+    if (step->type == ENGINE_STEP_TURN) {
+        /* A turn cut off by a skipped wait gets its rest now. */
+        if (runner->turn_on) {
+            runner->turn_x = sat_add(runner->turn_x, runner->turn_total - runner->turn_sent);
+            runner->turn_on = 0;
+        }
+        if (step->action & ENGINE_TURN_UNCALIBRATED) {
+            if (play)
+                note_turn(play, runner, ENGINE_WHY_UNCALIBRATED, 0, 0);
+        } else if (step->a != 0) {
+            runner->turn_on = 1;
+            runner->turn_total = step->a;
+            runner->turn_sent = 0;
+            runner->turn_from = now;
+            runner->turn_to = step->b > 0 ? wait_deadline(runner, now, (double)step->b, runner->speed) : now;
+            turn_tick(runner, now);
+        }
+        if (step->b > 0)
+            return arm_ms(runner, now, (double)step->b, runner->speed);
+        return runner->turn_on ? ENGINE_ADV_WAIT : ENGINE_ADV_CONT;
     }
     if (step->type == ENGINE_STEP_REPEAT) {
         count = step->a;
@@ -1581,6 +1647,7 @@ static void advance_runner(struct engine_runner *runner, struct engine_play *pla
         return;
     runner->move_x = 0;
     runner->move_y = 0;
+    runner->turn_x = 0;
     runner->wheel = 0;
     runner->has_goto = 0;
     runner->goto_x = 0;
@@ -1591,6 +1658,7 @@ static void advance_runner(struct engine_runner *runner, struct engine_play *pla
         return;
     note_hold_release(runner, play);
     pulse_drop_due(runner, now);
+    turn_tick(runner, now);
     if (runner->wait_until != 0 && now < runner->wait_until) {
         /* scanWait is checked before an edge frame. Spam still yields. */
         if (scan_should_stop(runner, play) || edge_should_stop(runner, play)) {
@@ -1610,6 +1678,9 @@ static void advance_runner(struct engine_runner *runner, struct engine_play *pla
         mark_done(runner, play, ENGINE_WHY_NEXT_UP);
         return;
     }
+    /* A turn over the per-report limit goes out over the next ticks. */
+    if (runner->turn_on)
+        return;
     if (runner->started_at < 0)
         runner->started_at = now;
 
@@ -1738,6 +1809,9 @@ static void pause_runner(struct engine_runner *runner)
     runner->echo_count = 0;
     runner->move_x = 0;
     runner->move_y = 0;
+    /* This tick's turn share is not sent, so it is still owed. */
+    runner->turn_sent -= runner->turn_x;
+    runner->turn_x = 0;
     runner->wheel = 0;
     runner->has_goto = 0;
     runner->goto_x = 0;
@@ -2574,7 +2648,8 @@ static const char *const k_why[ENGINE_WHY_COUNT] = {
     "busy", "runner-cap", "arena-full", "no-id", "muted", "once-done", "focus", "disabled",
     "finished", "release", "next-up", "scan-release", "edge-release", "toggle", "stop",
     "stop-all", "exclusive", "restart", "orphan", "frame-cap", "hold-cap", "ask-stop",
-    "panic", "overflow", "command", "start", "playing", "held-press"
+    "panic", "overflow", "command", "start", "playing", "held-press",
+    "uncalibrated"
 };
 
 const char *engine_why_name(int why)
@@ -2793,6 +2868,7 @@ int engine_play_publish(struct engine_play *play, int64_t now)
     int extra_count;
     int64_t dx = 0;
     int64_t dy = 0;
+    int64_t turn = 0;
     int64_t wheel = 0;
     int has_abs = 0;
     int32_t ax = 0;
@@ -2807,6 +2883,7 @@ int engine_play_publish(struct engine_play *play, int64_t now)
             continue;
         dx += runner->move_x;
         dy += runner->move_y;
+        turn += runner->turn_x;
         wheel += runner->wheel;
         if (runner->has_goto) {
             has_abs = 1;
@@ -2816,7 +2893,16 @@ int engine_play_publish(struct engine_play *play, int64_t now)
         }
         runner->move_x = 0;
         runner->move_y = 0;
+        runner->turn_x = 0;
         runner->wheel = 0;
+    }
+    /* A board gets counts. With a turn in this tick, the engine scales the
+       pixel moves itself and flags the report so the board leaves it. */
+    if (turn != 0 && play->output.mode != ENGINE_OUTPUT_SOFTWARE) {
+        dx = (int64_t)engine_board_scale(clamp_sum(dx), play->dpi) + turn;
+        dy = (int64_t)engine_board_scale(clamp_sum(dy), play->dpi);
+    } else {
+        dx += turn;
     }
     desired_count = engine_play_desired(play, now, desired, ENGINE_HOLD_CAP);
     extra_count = collect_echo(play, extra, ENGINE_HOLD_CAP);
@@ -2827,6 +2913,8 @@ int engine_play_publish(struct engine_play *play, int64_t now)
         engine_output_publish(&play->output, desired, desired_count, extra, extra_count,
                               clamp_sum(dx), clamp_sum(dy), sat_i32(wheel),
                               0, 0, 0, play->dpi, &play->last);
+    if (!has_abs && turn != 0 && play->output.mode != ENGINE_OUTPUT_SOFTWARE)
+        engine_report_set_counts(&play->last);
     note_report_sent(play, now);
     return engine_report_active(&play->last);
 }

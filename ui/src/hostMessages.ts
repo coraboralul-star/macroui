@@ -41,6 +41,27 @@ export function parseWindows(message: HostMessage): WindowRow[] | null {
   });
 }
 
+export type TurnState = {
+  state: "off" | "armed" | "turning" | "short" | "done" | "testing" | "sent" | "error";
+  counts: number;
+  detail: string;
+};
+
+const TURN_STATES: TurnState["state"][] = ["off", "armed", "turning", "short", "done", "testing", "sent", "error"];
+
+/** The shell's calibration progress. */
+export function parseTurn(message: HostMessage): TurnState | null {
+  if (message.type !== "turn") return null;
+  const state = TURN_STATES.find((item) => item === message.state);
+  if (!state) return null;
+  const counts = Number(message.counts);
+  return {
+    state,
+    counts: Number.isFinite(counts) && counts > 0 ? Math.round(counts) : 0,
+    detail: typeof message.detail === "string" ? message.detail : "",
+  };
+}
+
 export function parseFault(message: HostMessage): string | null {
   if (message.type !== "error") return null;
   const detail = typeof message.detail === "string" ? message.detail : "";

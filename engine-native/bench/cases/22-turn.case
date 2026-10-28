@@ -1,0 +1,5 @@
+profile profiles/22-turn.json
+until 40
+0 start spin
+20 start cut
+30 stop cut

@@ -1,5 +1,7 @@
 import { applyDelayMode, expandTaps, isSleep, laneCells, scrollDy, setDelay } from "./eventLane";
-import { blankMacro, normalizeProfile, type Block, type Macro, type Profile, type Step } from "./profile";
+import { activeTurn, blankMacro, blankStep, normalizeProfile, setActiveTurn, turnCounts, type Block, type Macro, type Profile, type Step } from "./profile";
+import { parseTurn } from "./hostMessages";
+import { nudge } from "./components/TurnPanel";
 import { deleteMacro, macroIssues } from "./profileEdits";
 import { readList, segment } from "./tape";
 
@@ -25,7 +27,46 @@ export function runBugChecks(): string[] {
   checkScroll();
   checkDeleteMacro();
   checkBrokenRepeat();
+  checkTurn();
   return failures.slice();
+}
+
+function checkTurn() {
+  same(blankStep("turn"), { type: "turn", degrees: 180, dir: "right", ms: 0 }, "a new turn is 180 right, one instant move");
+  const saved = {
+    version: 1,
+    name: "Games",
+    variables: {},
+    activeId: "ow",
+    macros: [],
+    configs: [
+      {
+        id: "ow",
+        name: "Overwatch",
+        turn: { countsPer360: 16364.4 },
+        macros: [macro({ id: "spin", steps: [{ type: "turn", degrees: 9999, dir: "up", ms: -4 } as unknown as Step, { type: "turn" } as unknown as Step] })],
+      },
+      { id: "fn", name: "Fortnite", turn: { countsPer360: 0 }, macros: [] },
+    ],
+  };
+  const profile = normalizeProfile(saved);
+  same(profile.configs[0].turn, { countsPer360: 16364 }, "a config keeps its calibration, rounded");
+  check(profile.configs[1].turn === undefined, "a 0 calibration is not calibrated");
+  same(profile.macros[0].steps, [
+    { type: "turn", degrees: 3600, dir: "right", ms: 0 },
+    { type: "turn", degrees: 180, dir: "right", ms: 0 },
+  ], "turn steps clamp degrees and default the rest");
+  const flat = normalizeProfile({ version: 1, name: "Old", variables: {}, macros: [], turn: { countsPer360: 3600 } });
+  same(activeTurn(flat), { countsPer360: 3600 }, "a profile with no configs moves its turn onto its config");
+  const set = setActiveTurn(profile, 20000);
+  same(activeTurn(set), { countsPer360: 20000 }, "setting the calibration changes only the live config");
+  check(set.configs[1].turn === undefined, "the other config is untouched");
+  check(activeTurn(setActiveTurn(set, 0)) === undefined, "0 clears the calibration");
+  check(turnCounts(180, 16364) === 8182 && turnCounts(90.5, 16364) === 4114, "counts round like the engines");
+  check(nudge(16364, 0.1) === 16380 && nudge(16364, -1) === 16200 && nudge(500, -0.1) === 499, "a nudge moves at least one count");
+  same(parseTurn({ type: "turn", state: "done", counts: 16500 }), { state: "done", counts: 16500, detail: "" }, "the shell's result is read");
+  check(parseTurn({ type: "turn", state: "bogus" }) === null, "an unknown calibration state is ignored");
+  check(macroIssues(macro({ id: "t", steps: [{ type: "turn", degrees: 0, dir: "left", ms: 0 }] })).length === 1, "a 0 degree turn cannot be saved");
 }
 
 function checkDelayMode() {

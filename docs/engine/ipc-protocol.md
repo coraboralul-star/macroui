@@ -212,7 +212,7 @@ The image is the publish result before the board transforms. Logical key ids, un
 | 148 | 4 | `ay`, i32 |
 | 152 | 4 | `dpi`, u32. Foreground dpi from the tick snapshot, else the system dpi, else 96. 0 means the shell uses 96 |
 
-`flags` bit 0 is absolute. Bit 1 is report overflow. The decoder ignores other bits. The encoder writes them 0.
+`flags` bit 0 is absolute. Bit 1 is report overflow. Bit 2 is counts: `dx` and `dy` are mouse counts already, so the board does not scale them by dpi. A turn step sets it, and the engine has scaled that tick's pixel moves itself. The decoder ignores other bits. The encoder writes them 0.
 
 Key ids: 0 is empty and is skipped. 1..255 are the virtual key after side resolution. 256 is Numpad Enter. 257..261 are `LButton`, `RButton`, `MButton`, `XButton1`, `XButton2`. They are not virtual keys. Any other id is skipped by the shell.
 

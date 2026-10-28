@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { KeyAction, Macro, Step } from "../profile";
-import { GOTO_WHERE, KEY_OPTIONS, MOUSE_OPTIONS, SIDE_OPTIONS, blankStep, normalizeGotoWhere } from "../profile";
+import { GOTO_WHERE, KEY_OPTIONS, MOUSE_OPTIONS, SIDE_OPTIONS, TURN_DEGREES_MAX, TURN_DIRS, blankStep, normalizeGotoWhere } from "../profile";
 import { Chips } from "./Chips";
 import { FieldSelect } from "./FieldSelect";
 import { NumberField } from "./NumberField";
@@ -20,6 +20,7 @@ const STEP_TYPES: { value: Step["type"]; label: string }[] = [
   { value: "scanWait", label: "Scan Wait" },
   { value: "randomWait", label: "Random Wait" },
   { value: "scroll", label: "Scroll" },
+  { value: "turn", label: "Turn" },
   { value: "repeat", label: "Repeat" },
   { value: "run", label: "Run" },
 ];
@@ -181,6 +182,20 @@ function StepFields({
   if (step.type === "scroll") {
     return <NumberBox label="Notches" signed value={step.dy} onChange={(dy) => onChange({ ...step, dy })} />;
   }
+  if (step.type === "turn") {
+    return (
+      <>
+        <Chips
+          ariaLabel="Turn direction"
+          value={step.dir}
+          options={TURN_DIRS}
+          onChange={(dir) => onChange({ ...step, dir: dir === "left" ? "left" : "right" })}
+        />
+        <NumberBox label="Degrees" value={step.degrees} min={1} onChange={(degrees) => onChange({ ...step, degrees: Math.min(TURN_DEGREES_MAX, degrees) })} />
+        <NumberBox label="ms" value={step.ms} min={0} onChange={(ms) => onChange({ ...step, ms })} />
+      </>
+    );
+  }
   if (step.type === "repeat") {
     return <NumberBox label="Times, 0 = until stop" value={step.count} min={0} onChange={(count) => onChange({ ...step, count })} />;
   }
@@ -255,6 +270,7 @@ function label(step: Step) {
   if (step.type === "wait" || step.type === "scanWait") return "Wait";
   if (step.type === "randomWait") return "Random";
   if (step.type === "scroll") return "Scroll";
+  if (step.type === "turn") return "Turn";
   if (step.type === "repeat") return "Repeat";
   return "Run";
 }

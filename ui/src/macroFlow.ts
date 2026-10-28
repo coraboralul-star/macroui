@@ -87,6 +87,7 @@ export function stepPhrase(step: Step): string {
     return "scroll 0";
   }
   if (step.type === "goto") return `go to ${step.x}, ${step.y} (${step.where || "screen"})`;
+  if (step.type === "turn") return `turn ${step.dir} ${step.degrees}°${step.ms > 0 ? ` over ${step.ms} ms` : ""}`;
   if (step.type === "repeat") return `repeat ${step.count}`;
   if (step.type === "run") return "run a macro";
   return "";

@@ -1,15 +1,17 @@
 import type { EngineKind } from "../hostMessages";
 import { INPUT_MODES, type InputMode } from "../profile";
+import { TurnPanel } from "./TurnPanel";
 
 export type CloseMode = "tray" | "quit";
 
-export type SettingPane = "general" | "updates" | "interface" | "output";
+export type SettingPane = "general" | "updates" | "interface" | "output" | "turn";
 
 const PANES: { id: SettingPane; label: string }[] = [
   { id: "general", label: "General" },
   { id: "updates", label: "Updates" },
   { id: "interface", label: "Interface" },
   { id: "output", label: "Output" },
+  { id: "turn", label: "Turn" },
 ];
 
 const METHOD_NOTE: Record<InputMode, string> = {
@@ -30,6 +32,9 @@ export function SettingsPage({
   engineChoice,
   onEngine,
   engineWire,
+  configName,
+  countsPer360,
+  onCountsPer360,
 }: {
   pane: SettingPane;
   onPane: (pane: SettingPane) => void;
@@ -42,6 +47,9 @@ export function SettingsPage({
   engineChoice: EngineKind;
   onEngine: (kind: EngineKind) => void;
   engineWire: EngineKind | "";
+  configName: string;
+  countsPer360: number | undefined;
+  onCountsPer360: (counts: number) => void;
 }) {
   return (
     <div className="settings">
@@ -170,6 +178,7 @@ export function SettingsPage({
             </div>
           </>
         ) : null}
+        {pane === "turn" ? <TurnPanel configName={configName} countsPer360={countsPer360} onCounts={onCountsPer360} /> : null}
         {pane === "output" ? (
           <>
             <h2>Output</h2>

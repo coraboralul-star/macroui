@@ -9,5 +9,6 @@
   <ItemGroup>
     <Compile Include="..\ReportBoard.cs" Link="ReportBoard.cs" />
     <Compile Include="..\HidMap.cs" Link="HidMap.cs" />
+    <Compile Include="..\TurnCalibrator.cs" Link="TurnCalibrator.cs" />
   </ItemGroup>
 </Project>

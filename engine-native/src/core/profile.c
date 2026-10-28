@@ -47,6 +47,8 @@ struct build {
     int id_count;
     const char *self_id;
     int oom;
+    /* countsPer360 of the catalog being built. 0 is not calibrated. */
+    double turn_per360;
     struct built_catalog flat;
     struct built_catalog *configs;
     uint32_t config_count;
@@ -548,6 +550,31 @@ static int compile_leaf(struct build *b, const struct json_value *step, const ch
             out.b = ENGINE_REPORT_MOVE_LIMIT;
         if (out.b < -ENGINE_REPORT_MOVE_LIMIT)
             out.b = -ENGINE_REPORT_MOVE_LIMIT;
+    } else if (same_text(type, "turn")) {
+        char dir[16];
+        double degrees = 180;
+        double counts;
+
+        out.type = ENGINE_STEP_TURN;
+        if (engine_as_num(json_object_get(step, "degrees"), 180, &degrees))
+            add_note(b, ENGINE_PROFILE_NOTE_BAD_NUMBER, where);
+        if (!(degrees > 0))
+            degrees = 0;
+        if (degrees > ENGINE_TURN_DEGREES_MAX)
+            degrees = ENGINE_TURN_DEGREES_MAX;
+        out.b = field_i(b, step, "ms", ENGINE_TURN_MS_DEFAULT, 0, where);
+        if (out.b < 0)
+            out.b = 0;
+        if (!(b->turn_per360 > 0)) {
+            out.action = ENGINE_TURN_UNCALIBRATED;
+        } else {
+            counts = floor(degrees * b->turn_per360 / 360.0 + 0.5);
+            if (counts > (double)ENGINE_TURN_COUNTS_MAX)
+                counts = (double)ENGINE_TURN_COUNTS_MAX;
+            out.a = (int32_t)counts;
+            if (value_text(json_object_get(step, "dir"), dir, sizeof dir) && same_text(dir, "left"))
+                out.a = -out.a;
+        }
     } else if (same_text(type, "scroll")) {
         out.type = ENGINE_STEP_SCROLL;
         out.a = field_i(b, step, "dy", 0, 0, where);
@@ -1152,6 +1179,22 @@ static struct engine_profile_image *make_empty(void)
     return image;
 }
 
+/* turn.countsPer360 of a config, or of the profile when it has no configs.
+   Missing, 0, negative, and not a number are 0: not calibrated. */
+static double turn_per360(const struct json_value *owner)
+{
+    const struct json_value *turn = json_object_get(owner, "turn");
+    double per360 = 0;
+
+    if (!turn || turn->kind != JSON_OBJECT)
+        return 0;
+    if (engine_as_num(json_object_get(turn, "countsPer360"), 0, &per360) || !(per360 > 0))
+        return 0;
+    if (per360 > (double)ENGINE_TURN_COUNTS_MAX)
+        return (double)ENGINE_TURN_COUNTS_MAX;
+    return per360;
+}
+
 int engine_profile_compile(const char *text, size_t length, struct engine_profile_image **out)
 {
     struct json_value root;
@@ -1202,6 +1245,7 @@ int engine_profile_compile(const char *text, size_t length, struct engine_profil
             value_text(json_object_get(&configs->items[i], "focusExe"),
                        b.configs[b.config_count].focus_exe,
                        sizeof b.configs[b.config_count].focus_exe);
+            b.turn_per360 = turn_per360(&configs->items[i]);
             if (compile_catalog(&b, array_field(&configs->items[i], "macros"), &b.configs[b.config_count],
                                 spot) != 0) {
                 free_built_catalog(&b.configs[b.config_count]);
@@ -1210,8 +1254,10 @@ int engine_profile_compile(const char *text, size_t length, struct engine_profil
             }
             b.config_count++;
         }
-    } else if (compile_catalog(&b, array_field(&root, "macros"), &b.flat, "profile") != 0) {
-        b.oom = 1;
+    } else {
+        b.turn_per360 = turn_per360(&root);
+        if (compile_catalog(&b, array_field(&root, "macros"), &b.flat, "profile") != 0)
+            b.oom = 1;
     }
     if (b.oom) {
         json_free(&root);
