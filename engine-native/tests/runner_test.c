@@ -510,6 +510,194 @@ static void check_move_and_scroll(void)
            "publish clamps the summed move");
 }
 
+static int turn_notes(const struct engine_play *state, int why, int32_t *sent, int32_t *total)
+{
+    int i;
+    int n = 0;
+
+    for (i = 0; i < state->note_count; i++) {
+        if (state->notes[i].kind != ENGINE_NOTE_TURN || state->notes[i].why != why)
+            continue;
+        if (sent)
+            *sent = state->notes[i].sent;
+        if (total)
+            *total = state->notes[i].total;
+        n++;
+    }
+    return n;
+}
+
+/* A board scales pixel moves by dpi. Turn counts are never scaled. */
+static void check_turn_board(void)
+{
+    struct engine_step steps[2];
+    struct engine_macro macro;
+    struct engine_board_op ops[ENGINE_BOARD_CAP];
+    int count = 0;
+    int i;
+    int32_t board_x = 0;
+    int mode;
+
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_MOVE;
+    steps[0].a = 10;
+    steps[0].b = 2;
+    steps[1].type = ENGINE_STEP_TURN;
+    steps[1].a = 300;
+    engine_macro_init(&macro);
+    set_id(&macro, "mix");
+    macro.steps = steps;
+    macro.step_count = 2;
+    for (mode = ENGINE_OUTPUT_SOFTWARE; mode <= ENGINE_OUTPUT_RP2350; mode += 2) {
+        fresh();
+        play.output.mode = mode;
+        play.dpi = 144;
+        engine_play_start(&play, &macro, -1, 1);
+        engine_play_tick(&play, 0);
+        if (mode == ENGINE_OUTPUT_SOFTWARE) {
+            expect(engine_report_dx(&play.last) == 310 && engine_report_dy(&play.last) == 2 &&
+                       !(engine_report_flags(&play.last) & ENGINE_REPORT_COUNTS),
+                   "software sends the move and the turn as they are");
+            continue;
+        }
+        expect(engine_report_dx(&play.last) == 315 && engine_report_dy(&play.last) == 3 &&
+                   (engine_report_flags(&play.last) & ENGINE_REPORT_COUNTS),
+               "a board tick with a turn scales only the pixel move and flags counts");
+        engine_report_board(&play.last, 0, 0, ops, ENGINE_BOARD_CAP, &count);
+        for (i = 0; i < count; i++)
+            if (ops[i].kind == ENGINE_BOARD_MOVE)
+                board_x += ops[i].x;
+        expect(board_x == 315, "the board leaves a counts report unscaled");
+    }
+
+    fresh();
+    play.output.mode = ENGINE_OUTPUT_RP2350;
+    play.dpi = 144;
+    macro.step_count = 1;
+    set_id(&macro, "pixel");
+    engine_play_start(&play, &macro, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(engine_report_dx(&play.last) == 10 && !(engine_report_flags(&play.last) & ENGINE_REPORT_COUNTS),
+           "a plain move still reaches the board unscaled, for the board to scale");
+}
+
+static void check_turn(void)
+{
+    struct engine_play *state = fresh();
+    struct engine_step steps[2];
+    struct engine_macro macro;
+    int64_t t;
+    int32_t sum = 0;
+    int32_t at_half = 0;
+    int64_t marker_at = -1;
+    int32_t sent = 0;
+    int32_t total = 0;
+    int ok = 1;
+
+    /* Smooth: 1000 counts over 100 ms, then a 1 count move as a marker. */
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_TURN;
+    steps[0].a = 1000;
+    steps[0].b = 100;
+    steps[1].type = ENGINE_STEP_MOVE;
+    steps[1].a = 0;
+    steps[1].b = 1;
+    engine_macro_init(&macro);
+    set_id(&macro, "turn");
+    macro.steps = steps;
+    macro.step_count = 2;
+    engine_play_start(state, &macro, -1, 1);
+    for (t = 0; t <= 120; t++) {
+        int32_t dx;
+
+        engine_play_tick(state, t);
+        dx = engine_report_dx(&state->last);
+        if (dx < 0 || dx > 11)
+            ok = 0;
+        sum += dx;
+        if (t == 50)
+            at_half = sum;
+        if (marker_at < 0 && engine_report_dy(&state->last) == 1)
+            marker_at = t;
+    }
+    expect(sum == 1000, "a smooth turn sends exactly its counts");
+    expect(at_half == 500, "a smooth turn is half sent at half time");
+    expect(ok, "a smooth turn sends small even steps");
+    expect(marker_at == 100, "the next step waits for the turn to end");
+
+    /* Instant and over the per-report limit: left 40000 goes out as 16000,
+       16000, 8000, and the next step waits for the last of it. */
+    fresh();
+    steps[0].a = -40000;
+    steps[0].b = 0;
+    set_id(&macro, "flick");
+    engine_play_start(&play, &macro, -1, 1);
+    engine_play_tick(&play, 0);
+    expect(engine_report_dx(&play.last) == -16000 && engine_report_dy(&play.last) == 0, "instant turn first report");
+    engine_play_tick(&play, 1);
+    expect(engine_report_dx(&play.last) == -16000, "instant turn second report");
+    engine_play_tick(&play, 2);
+    expect(engine_report_dx(&play.last) == -8000 && engine_report_dy(&play.last) == 1,
+           "instant turn sends the rest, then the next step");
+
+    /* Speed 2 halves the time. */
+    fresh();
+    steps[0].a = 1000;
+    steps[0].b = 100;
+    macro.speed = 2.0;
+    set_id(&macro, "fast");
+    engine_play_start(&play, &macro, -1, 1);
+    sum = 0;
+    marker_at = -1;
+    for (t = 0; t <= 60; t++) {
+        engine_play_tick(&play, t);
+        sum += engine_report_dx(&play.last);
+        if (marker_at < 0 && engine_report_dy(&play.last) == 1)
+            marker_at = t;
+    }
+    expect(sum == 1000 && marker_at == 50, "a turn's time divides by speed");
+    macro.speed = 1.0;
+
+    /* A stop drops the rest and notes how much went out. */
+    fresh();
+    set_id(&macro, "cut");
+    engine_play_start(&play, &macro, -1, 1);
+    sum = 0;
+    for (t = 0; t <= 40; t++) {
+        engine_play_tick(&play, t);
+        sum += engine_report_dx(&play.last);
+    }
+    play.note_count = 0;
+    engine_play_stop(&play, "cut");
+    for (t = 41; t <= 120; t++) {
+        engine_play_tick(&play, t);
+        sum += engine_report_dx(&play.last);
+    }
+    expect(sum == 400, "a stopped turn sends nothing more");
+    expect(turn_notes(&play, ENGINE_WHY_STOP, &sent, &total) == 1 && sent == 400 && total == 1000,
+           "a stopped turn notes sent and total");
+
+    /* Uncalibrated: nothing is sent, the time still passes, one note. */
+    fresh();
+    steps[0].a = 0;
+    steps[0].b = 30;
+    steps[0].action = ENGINE_TURN_UNCALIBRATED;
+    set_id(&macro, "raw");
+    engine_play_start(&play, &macro, -1, 1);
+    sum = 0;
+    marker_at = -1;
+    for (t = 0; t <= 40; t++) {
+        engine_play_tick(&play, t);
+        sum += engine_report_dx(&play.last);
+        if (marker_at < 0 && engine_report_dy(&play.last) == 1)
+            marker_at = t;
+    }
+    expect(sum == 0 && marker_at == 30, "an uncalibrated turn sends nothing and keeps its time");
+    expect(turn_notes(&play, ENGINE_WHY_UNCALIBRATED, NULL, NULL) == 1, "an uncalibrated turn is noted once");
+    expect(engine_step_kind("turn") == ENGINE_STEP_TURN, "turn is a step kind");
+    check_turn_board();
+}
+
 static void check_scroll_sum(void)
 {
     struct engine_play *state = fresh();
@@ -3774,6 +3962,7 @@ int main(void)
     check_waits();
     check_random();
     check_move_and_scroll();
+    check_turn();
     check_scroll_sum();
     check_yield_and_skip();
     check_repeat_step();

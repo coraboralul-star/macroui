@@ -46,6 +46,11 @@ static int32_t scale_axis(int32_t value, uint32_t dpi)
     return sat_i32(engine_round_half_away((double)value * (double)dpi / 96.0));
 }
 
+int32_t engine_board_scale(int32_t value, uint32_t dpi)
+{
+    return scale_axis(value, dpi);
+}
+
 static int32_t negate_wheel(int32_t wheel)
 {
     if (wheel == INT32_MIN)
@@ -476,7 +481,7 @@ int engine_report_board(const struct engine_report *report, int swap_clicks, int
     wheel = engine_report_wheel(report);
     absolute = (engine_report_flags(report) & ENGINE_REPORT_ABSOLUTE) != 0;
     dpi = engine_report_dpi(report);
-    if (!absolute) {
+    if (!absolute && !(engine_report_flags(report) & ENGINE_REPORT_COUNTS)) {
         if (dpi == 0)
             dpi = 96;
         dx = scale_axis(dx, dpi);

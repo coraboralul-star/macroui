@@ -132,6 +132,9 @@ int engine_report_send(const struct engine_report *report, int swap_clicks,
 /* Board order from docs/engine/ipc-protocol.md. Wheel is already negated.
    Relative dx and dy are scaled from the image dpi. Absolute points are not.
    Returns the mouse bits after the plan. *count is the number written. */
+/* A board move in pixels times dpi / 96, rounded half away. 0 and 96 keep it. */
+int32_t engine_board_scale(int32_t value, uint32_t dpi);
+
 int engine_report_board(const struct engine_report *report, int swap_clicks, int bits,
                         struct engine_board_op *ops, int cap, int *count);
 

@@ -217,6 +217,16 @@ void engine_report_set_overflow(struct engine_report *report)
     store_u16(report->bytes + 2, flags);
 }
 
+void engine_report_set_counts(struct engine_report *report)
+{
+    uint16_t flags;
+
+    if (!report)
+        return;
+    flags = (uint16_t)(engine_report_flags(report) | ENGINE_REPORT_COUNTS);
+    store_u16(report->bytes + 2, flags);
+}
+
 int engine_report_active(const struct engine_report *report)
 {
     if (!report)

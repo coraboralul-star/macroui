@@ -600,6 +600,54 @@ static void check_named_keys(void)
     engine_profile_image_free(image);
 }
 
+static const struct engine_step *turn_step(const struct engine_live_config *live)
+{
+    if (live->macro_count < 1 || live->macros[0].step_count < 1)
+        return NULL;
+    return &live->macros[0].steps[0];
+}
+
+static void check_turn(void)
+{
+    struct engine_profile_image *image;
+    struct engine_live_config live;
+    const struct engine_step *step;
+    const char *text =
+        "{\"activeId\":\"a\",\"configs\":["
+        "{\"id\":\"a\",\"focusExe\":\"A.exe\",\"turn\":{\"countsPer360\":16364},\"macros\":[{\"id\":\"m\","
+        "\"steps\":[{\"type\":\"turn\",\"degrees\":180,\"dir\":\"left\",\"ms\":120},"
+        "{\"type\":\"turn\",\"degrees\":90.5,\"dir\":\"right\"},{\"type\":\"turn\"}]}]},"
+        "{\"id\":\"b\",\"focusExe\":\"B.exe\",\"macros\":[{\"id\":\"n\",\"steps\":[{\"type\":\"turn\",\"degrees\":180}]}]},"
+        "{\"id\":\"c\",\"focusExe\":\"C.exe\",\"turn\":{\"countsPer360\":-5},\"macros\":[{\"id\":\"o\",\"steps\":[{\"type\":\"turn\"}]}]}"
+        "]}";
+
+    image = compile(text);
+    if (!image)
+        return;
+    engine_profile_pick(image, "A.exe", "a", &live);
+    step = turn_step(&live);
+    expect(step && step->type == ENGINE_STEP_TURN && step->a == -8182 && step->b == 120 && step->action == 0,
+           "turn left 180 is half the config's counts, negative");
+    expect(step && step[1].a == 4114 && step[1].b == ENGINE_TURN_MS_DEFAULT,
+           "turn rounds the counts and defaults to 30 ms");
+    expect(step && step[2].a == 8182 && step[2].action == 0, "turn defaults to 180 right");
+    engine_profile_pick(image, "B.exe", "a", &live);
+    step = turn_step(&live);
+    expect(step && step->a == 0 && (step->action & ENGINE_TURN_UNCALIBRATED), "a config with no turn is uncalibrated");
+    engine_profile_pick(image, "C.exe", "a", &live);
+    step = turn_step(&live);
+    expect(step && (step->action & ENGINE_TURN_UNCALIBRATED), "a negative countsPer360 is uncalibrated");
+    engine_profile_image_free(image);
+
+    image = compile("{\"turn\":{\"countsPer360\":3600},\"macros\":[{\"id\":\"f\",\"steps\":[{\"type\":\"turn\",\"degrees\":360,\"ms\":0}]}]}");
+    if (image) {
+        engine_profile_pick(image, "x.exe", "", &live);
+        step = turn_step(&live);
+        expect(step && step->a == 3600 && step->b == 0 && step->action == 0, "a profile with no configs uses its own turn");
+        engine_profile_image_free(image);
+    }
+}
+
 int main(void)
 {
     check_values();
@@ -611,6 +659,7 @@ int main(void)
     check_run_and_ignored();
     check_live();
     check_swap_and_file();
+    check_turn();
     if (fails) {
         fprintf(stderr, "%d profile checks failed\n", fails);
         return 1;

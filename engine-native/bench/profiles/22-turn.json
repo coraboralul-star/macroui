@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "name": "turn",
+  "variables": {},
+  "turn": { "countsPer360": 40000 },
+  "macros": [
+    {
+      "id": "spin",
+      "name": "Spin",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "trigger": { "kind": "key", "button": "q" },
+      "steps": [
+        { "type": "turn", "degrees": 180, "dir": "left", "ms": 0 },
+        { "type": "turn", "degrees": 45, "dir": "right", "ms": 7 },
+        { "type": "move", "x": 0, "y": 1 }
+      ]
+    },
+    {
+      "id": "cut",
+      "name": "Cut",
+      "enabled": true,
+      "priority": 0,
+      "speed": 2,
+      "playMode": "once",
+      "trigger": { "kind": "key", "button": "e" },
+      "steps": [
+        { "type": "turn", "degrees": 360, "dir": "right", "ms": 40 },
+        { "type": "move", "x": 0, "y": 1 }
+      ]
+    }
+  ]
+}

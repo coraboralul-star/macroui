@@ -1332,6 +1332,12 @@ static void log_notes(const struct engine_live_config *live)
         } else if (note->kind == ENGINE_NOTE_BLOCK) {
             snprintf(line, sizeof line, "start blocked macro=\"%s\" id=%s mode=%s reason=%s",
                      name, note->id, mode_name(note->mode), why);
+        } else if (note->kind == ENGINE_NOTE_TURN && note->why == ENGINE_WHY_UNCALIBRATED) {
+            snprintf(line, sizeof line, "turn skipped macro=\"%s\" id=%s reason=uncalibrated", name,
+                     note->id);
+        } else if (note->kind == ENGINE_NOTE_TURN) {
+            snprintf(line, sizeof line, "turn stopped macro=\"%s\" id=%s sent=%ld/%ld reason=%s", name,
+                     note->id, (long)note->sent, (long)note->total, why);
         } else {
             continue;
         }

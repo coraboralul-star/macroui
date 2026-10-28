@@ -11,6 +11,9 @@
 
 #define ENGINE_REPORT_ABSOLUTE 0x0001u
 #define ENGINE_REPORT_OVERFLOW 0x0002u
+/* dx and dy are device counts already. A board does not scale them by dpi.
+   A turn step sets it, and the engine scales the rest of that tick's move. */
+#define ENGINE_REPORT_COUNTS 0x0004u
 
 #define ENGINE_REPORT_MOVE_LIMIT 16000
 
@@ -49,6 +52,7 @@ void engine_report_set_absolute(struct engine_report *report, int32_t ax, int32_
 void engine_report_set_wheel(struct engine_report *report, int32_t wheel);
 void engine_report_set_dpi(struct engine_report *report, uint32_t dpi);
 void engine_report_set_overflow(struct engine_report *report);
+void engine_report_set_counts(struct engine_report *report);
 
 /* A down, an up, a move, a wheel, or the absolute flag.
    Dpi alone is not a send. The overflow bit alone is not a send. */
