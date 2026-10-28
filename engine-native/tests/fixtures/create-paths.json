@@ -1,0 +1,366 @@
+{
+  "version": 1,
+  "name": "Create paths",
+  "variables": {},
+  "activeId": "paths",
+  "configs": [
+    {
+      "id": "paths",
+      "name": "Create paths",
+      "macros": [
+        {
+          "id": "key-path",
+          "name": "Key path",
+          "enabled": true,
+          "priority": 0,
+          "speed": 1,
+          "playMode": "once",
+          "repeatCount": 1,
+          "exclusive": false,
+          "focusExe": "",
+          "trigger": {
+            "kind": "key",
+            "button": "g"
+          },
+          "steps": [],
+          "recording": null,
+          "basic": false,
+          "gapMs": 18,
+          "advanced": true,
+          "busy": false,
+          "blocks": [
+            {
+              "id": "key-path-b1",
+              "type": "steps",
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 150
+                },
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "e"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "e"
+                }
+              ]
+            }
+          ],
+          "releaseStop": "nextUp"
+        },
+        {
+          "id": "new-path",
+          "name": "New path",
+          "enabled": true,
+          "priority": 0,
+          "speed": 1,
+          "playMode": "once",
+          "repeatCount": 1,
+          "exclusive": false,
+          "focusExe": "",
+          "trigger": {
+            "kind": "key",
+            "button": "h"
+          },
+          "steps": [],
+          "recording": null,
+          "basic": false,
+          "gapMs": 18,
+          "advanced": true,
+          "busy": false,
+          "blocks": [
+            {
+              "id": "new-path-b1",
+              "type": "steps",
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 150
+                },
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "e"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "e"
+                }
+              ]
+            }
+          ],
+          "releaseStop": "nextUp"
+        },
+        {
+          "id": "repeat-3",
+          "name": "Repeat 3",
+          "enabled": true,
+          "priority": 0,
+          "speed": 1,
+          "playMode": "once",
+          "repeatCount": 3,
+          "exclusive": false,
+          "focusExe": "",
+          "trigger": {
+            "kind": "key",
+            "button": "j"
+          },
+          "steps": [],
+          "recording": null,
+          "basic": false,
+          "gapMs": 18,
+          "advanced": true,
+          "busy": false,
+          "blocks": [
+            {
+              "id": "repeat-3-b1",
+              "type": "repeat",
+              "count": 3,
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 150
+                }
+              ]
+            }
+          ],
+          "releaseStop": "nextUp"
+        }
+      ],
+      "focusExe": ""
+    }
+  ],
+  "macros": [
+    {
+      "id": "key-path",
+      "name": "Key path",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "repeatCount": 1,
+      "exclusive": false,
+      "focusExe": "",
+      "trigger": {
+        "kind": "key",
+        "button": "g"
+      },
+      "steps": [],
+      "recording": null,
+      "basic": false,
+      "gapMs": 18,
+      "advanced": true,
+      "busy": false,
+      "blocks": [
+        {
+          "id": "key-path-b1",
+          "type": "steps",
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 150
+            },
+            {
+              "type": "key",
+              "action": "down",
+              "key": "e"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "e"
+            }
+          ]
+        }
+      ],
+      "releaseStop": "nextUp"
+    },
+    {
+      "id": "new-path",
+      "name": "New path",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "repeatCount": 1,
+      "exclusive": false,
+      "focusExe": "",
+      "trigger": {
+        "kind": "key",
+        "button": "h"
+      },
+      "steps": [],
+      "recording": null,
+      "basic": false,
+      "gapMs": 18,
+      "advanced": true,
+      "busy": false,
+      "blocks": [
+        {
+          "id": "new-path-b1",
+          "type": "steps",
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 150
+            },
+            {
+              "type": "key",
+              "action": "down",
+              "key": "e"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "e"
+            }
+          ]
+        }
+      ],
+      "releaseStop": "nextUp"
+    },
+    {
+      "id": "repeat-3",
+      "name": "Repeat 3",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "repeatCount": 3,
+      "exclusive": false,
+      "focusExe": "",
+      "trigger": {
+        "kind": "key",
+        "button": "j"
+      },
+      "steps": [],
+      "recording": null,
+      "basic": false,
+      "gapMs": 18,
+      "advanced": true,
+      "busy": false,
+      "blocks": [
+        {
+          "id": "repeat-3-b1",
+          "type": "repeat",
+          "count": 3,
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 150
+            }
+          ]
+        }
+      ],
+      "releaseStop": "nextUp"
+    }
+  ],
+  "swapClicks": false,
+  "inputMode": "software",
+  "focusExe": ""
+}
