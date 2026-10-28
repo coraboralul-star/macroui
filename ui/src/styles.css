@@ -3433,6 +3433,31 @@ button.ghost.is-danger:hover:not(:disabled) {
   border-bottom-color: var(--accent);
 }
 
+/* The saved playMode, read straight from the macro. */
+.play-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.play-chip i {
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 500;
+}
+
+.play-chip:not([data-mode="once"]) {
+  border-color: var(--accent-dim);
+}
+
 .graph-canvas {
   position: relative;
   overflow: hidden;

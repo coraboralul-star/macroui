@@ -273,14 +273,15 @@ export function newId(): string {
   return crypto.randomUUID();
 }
 
-export function blankMacro(): Macro {
-  return {
+/** The one constructor. Every new macro starts as Run Once; extra is the caller's choices. */
+export function blankMacro(extra: Partial<Macro> = {}): Macro {
+  return canonicalMacro({
     id: newId(),
     name: "New macro",
     enabled: true,
     priority: 0,
     speed: 1,
-    playMode: "whileHeld",
+    playMode: "once",
     repeatCount: 1,
     exclusive: false,
     focusExe: "",
@@ -290,7 +291,30 @@ export function blankMacro(): Macro {
     basic: false,
     gapMs: MIN_REPEAT_MS,
     releaseStop: "nextUp",
-  };
+    ...extra,
+  });
+}
+
+/** Blocks that keep playing while the trigger is down. */
+const HOLD_BLOCKS = new Set<string>(["whileHeld", "swapAfter", "onceHeld", "tapHold", "tapSpam"]);
+
+/**
+ * What an advanced macro's playMode must be, given its blocks. The Advanced editor has no
+ * play-mode picker, so the blocks decide:
+ * - Tap Hold or Tap Spam needs whileHeld for the edge.
+ * - whileHeld with no hold block looped the whole pass while held. That is Run Once.
+ * - repeat with a repeat block counted twice (3 x 3 = 9). The block holds the count.
+ * Every save (writeActive) and every load runs this. Simple macros are left alone.
+ */
+export function canonicalMacro(macro: Macro): Macro {
+  if (!macro.advanced) return macro;
+  const types = (macro.blocks ?? []).map((block) => block.type as string);
+  let playMode = macro.playMode;
+  if (types.includes("tapHold") || types.includes("tapSpam")) playMode = "whileHeld";
+  else if (playMode === "whileHeld" && !types.some((type) => HOLD_BLOCKS.has(type))) playMode = "once";
+  else if (playMode === "repeat" && types.includes("repeat")) playMode = "once";
+  if (playMode === macro.playMode && macro.basic === false) return macro;
+  return { ...macro, playMode, basic: false };
 }
 
 export function basicTiming(repeatMs: number): { hold: number; gap: number } {
@@ -325,7 +349,8 @@ export function applyGap(macro: Macro, gapMs: number): Macro {
   return { ...macro, gapMs: ms, steps: basicSteps(button || "space", ms) };
 }
 
-export function writeActive(profile: Profile, macros: Macro[]): Profile {
+export function writeActive(profile: Profile, saved: Macro[]): Profile {
+  const macros = saved.map(canonicalMacro);
   const configs = profile.configs.map((config) =>
     config.id === profile.activeId ? { ...config, macros, focusExe: profile.focusExe ?? "" } : config,
   );
@@ -442,6 +467,27 @@ export function normalizeProfile(value: unknown): Profile {
   };
 }
 
+/** Macros whose saved playMode the load repaired, by config. The page saves at once when any were. */
+export function repairedModes(raw: unknown, next: Profile): string[] {
+  const saved = new Map<string, string>();
+  const lists = (value: unknown): unknown[] => {
+    if (!value || typeof value !== "object") return [];
+    const { macros, configs } = value as { macros?: unknown; configs?: unknown };
+    const own = Array.isArray(macros) ? macros : [];
+    const nested = Array.isArray(configs) ? configs.flatMap((config) => lists({ macros: (config as Config | null)?.macros })) : [];
+    return [...own, ...nested];
+  };
+  for (const item of lists(raw))
+    if (item && typeof item === "object" && typeof (item as Macro).playMode === "string")
+      saved.set(String((item as Macro).id), (item as Macro).playMode);
+  const changed = new Map<string, string>();
+  for (const config of next.configs)
+    for (const macro of config.macros)
+      if (saved.has(macro.id) && saved.get(macro.id) !== macro.playMode)
+        changed.set(`${config.id}:${macro.id}`, `${config.name} / ${macro.name}: ${saved.get(macro.id)} -> ${macro.playMode}`);
+  return [...changed.values()];
+}
+
 function onePerTrigger(macros: Macro[]): Macro[] {
   const seen = new Set<string>();
   return macros.map((macro) => {
@@ -472,7 +518,8 @@ function normalizeMacro(raw: Macro): Macro {
       ? basicSteps(button, gapMs)
       : mouseSteps(button, gapMs)
     : Array.isArray(value.steps) ? normalizeSteps(value.steps) : [];
-  return {
+  // canonicalMacro repairs macros saved before it existed, such as Macro Editor > New ones.
+  return canonicalMacro({
     id: typeof value.id === "string" && value.id ? value.id : newId(),
     // name and focusExe are used with .trim() / .toLowerCase() in render.
     name: typeof value.name === "string" && value.name ? value.name : "Macro",
@@ -492,7 +539,7 @@ function normalizeMacro(raw: Macro): Macro {
     busy: Boolean(value.busy),
     blocks: normalizeBlocks(value.blocks),
     releaseStop: normalizeReleaseStop(value.releaseStop),
-  };
+  });
 }
 
 function muteIds(value: unknown): string[] {

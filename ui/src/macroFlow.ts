@@ -2,11 +2,16 @@ import { keyLabel } from "./keyboard";
 import type { Block, Macro, PlayMode, Step } from "./profile";
 import { pressLabel } from "./recording";
 
-export function effectivePlayMode(macro: Macro): PlayMode {
-  const tapHold = (macro.blocks ?? []).some((block) => block.type === "tapHold" || block.type === "tapSpam");
-  if (tapHold) return "whileHeld";
-  if (macro.advanced && macro.playMode === "whileHeld") return "once";
-  return macro.playMode;
+/** The Advanced editor's play-mode chip. It reads the saved playMode, never a display guess. */
+export function playModeChip(macro: Macro): { label: string; detail: string } {
+  const mode = macro.playMode;
+  if (mode === "whileHeld")
+    return { label: "While held", detail: "Plays while the trigger is down. A hold block decides what repeats." };
+  if (mode === "repeat")
+    return { label: `Repeat ×${macro.repeatCount}`, detail: `One press plays the blocks ${macro.repeatCount} times.` };
+  if (mode === "toggle") return { label: "Toggle", detail: "One press starts it. The next press stops it." };
+  if (mode === "onRelease") return { label: "On release", detail: "Starts when the trigger comes up." };
+  return { label: "Run once", detail: "One press plays the blocks once. Holding never repeats it. A press while it plays is ignored." };
 }
 
 export function playModeLabel(mode: PlayMode): string {
@@ -44,8 +49,13 @@ export function triggerInspect(trigger: string, mode: PlayMode, coerced: boolean
 
 export function shownBlocks(macro: Macro): Block[] {
   if (macro.blocks && macro.blocks.length) return macro.blocks;
-  if (macro.steps.length) return [{ id: `${macro.id}-steps`, type: "steps", steps: macro.steps }];
-  return [];
+  if (!macro.steps.length) return [];
+  const id = `${macro.id}-steps`;
+  // A Simple macro's playback is the block that performs it, so Advanced shows and plays the same.
+  if (!macro.advanced && macro.playMode === "whileHeld") return [{ id, type: "whileHeld", steps: macro.steps, mute: [] }];
+  if (!macro.advanced && macro.playMode === "repeat")
+    return [{ id, type: "repeat", count: Math.max(1, macro.repeatCount || 1), steps: macro.steps }];
+  return [{ id, type: "steps", steps: macro.steps }];
 }
 
 export function place(item: Macro): string {
