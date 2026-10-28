@@ -191,6 +191,41 @@ void engine_raw_mouse_init(struct engine_raw_mouse *raw)
     atomic_init(&raw->ok, 0);
     for (i = 0; i < ENGINE_RAW_BUTTONS; i++)
         atomic_init(&raw->ups[i], 0u);
+    atomic_init(&raw->keys_ok, 0);
+    atomic_init(&raw->key_at, 0);
+}
+
+void engine_raw_keys_set_ok(struct engine_raw_mouse *raw, int ok)
+{
+    if (raw)
+        atomic_store_explicit(&raw->keys_ok, ok ? 1 : 0, memory_order_release);
+}
+
+void engine_raw_key_seen(struct engine_raw_mouse *raw, int64_t qpc)
+{
+    if (raw)
+        atomic_store_explicit(&raw->key_at, (long long)qpc, memory_order_release);
+}
+
+int engine_silence_verdict(int raw_ok, int64_t hook_key_at, int64_t raw_key_at, int64_t freq)
+{
+    int64_t margin;
+
+    if (!raw_ok || freq <= 0)
+        return ENGINE_SILENCE_UNKNOWN;
+    margin = freq * ENGINE_SILENCE_MARGIN_MS / 1000;
+    if (raw_key_at > 0 && raw_key_at > hook_key_at + margin)
+        return ENGINE_SILENCE_DROPPED;
+    return ENGINE_SILENCE_IDLE;
+}
+
+const char *engine_silence_name(int verdict)
+{
+    if (verdict == ENGINE_SILENCE_IDLE)
+        return "idle";
+    if (verdict == ENGINE_SILENCE_DROPPED)
+        return "dropped";
+    return "unknown";
 }
 
 void engine_raw_mouse_set_ok(struct engine_raw_mouse *raw, int ok)

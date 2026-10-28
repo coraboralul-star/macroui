@@ -169,7 +169,21 @@ struct engine_hook_watch_out {
 struct engine_raw_mouse {
     atomic_int ok;
     atomic_uint ups[ENGINE_RAW_BUTTONS];
+    /* The keyboard, registered while armed. key_at is the QPC of the last
+       key from a real keyboard. It tells a dropped keyboard hook from a
+       quiet one: Raw Input still sees keys that a dead hook misses. */
+    atomic_int keys_ok;
+    atomic_llong key_at;
 };
+
+/* What a silent keyboard hook was, for the reinstall log line. */
+#define ENGINE_SILENCE_UNKNOWN 0
+#define ENGINE_SILENCE_IDLE 1
+#define ENGINE_SILENCE_DROPPED 2
+
+/* A key Raw Input saw more than this after the hook's last key means the
+   hook missed it. The margin covers one key reaching both a little apart. */
+#define ENGINE_SILENCE_MARGIN_MS 250
 
 #define ENGINE_REDO_CAP 8
 
@@ -199,6 +213,19 @@ void engine_raw_mouse_up(struct engine_raw_mouse *raw, uint16_t id);
 
 /* 0, 1 or 2 for middle, mouse 4 and mouse 5. -1 for any other id. */
 int engine_raw_slot(uint16_t id);
+
+void engine_raw_keys_set_ok(struct engine_raw_mouse *raw, int ok);
+
+/* One key event from a real keyboard at qpc. */
+void engine_raw_key_seen(struct engine_raw_mouse *raw, int64_t qpc);
+
+/* UNKNOWN without Raw Input for the keyboard. DROPPED when Raw Input saw a
+   key more than the margin after the hook's last one. IDLE otherwise: no
+   key reached either, the user was not typing. */
+int engine_silence_verdict(int raw_ok, int64_t hook_key_at, int64_t raw_key_at, int64_t freq);
+
+/* "unknown", "idle" or "dropped". */
+const char *engine_silence_name(int verdict);
 
 /* Virtual key after side resolution, or 256 for numpad enter.
    0 is not a key. Right shift is scan 0x36. */

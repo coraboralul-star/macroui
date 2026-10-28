@@ -446,6 +446,8 @@ class Runner {
         this.stopping := false
         this.sawUp := false
         this.releasedNow := false
+        ; Why it ended, for the runner stop line. The first reason wins.
+        this.endWhy := ""
         mode := modeOverride != "" ? String(modeOverride) : String(Field(macro, "playMode", "once"))
         this.mode := mode
         this.trigger := ""
@@ -518,10 +520,11 @@ class Runner {
         return this.releaseStop
     }
 
-    MarkDone() {
+    MarkDone(why := "finished") {
         if this.done
             return
         this.done := true
+        this.endWhy := why
         this.paused := false
         frames := []
         if (this.stack is Array) {
@@ -944,7 +947,7 @@ class Runner {
         if (kind = "run") {
             target := Engine.FindMacro(String(Field(step, "macroId", "")))
             if (target is Map)
-                Engine.StartRunner(target, "once", false)
+                Engine.StartRunner(target, "once", false, "run")
             return ""
         }
         return ""
@@ -1252,6 +1255,13 @@ class Engine {
     static pending := []
     static applied := Map()
     static prevDown := Map()
+    ; The trigger each prevDown entry was seeded for. A reload keeps prev for
+    ; an unchanged trigger, so a press that lands with it is still an edge.
+    static prevButton := Map()
+    ; A whileHeld press refused while the last runner was finishing. Starts
+    ; as held-press once that runner is gone, if the key is still down.
+    static owed := Map()
+    static liveName := ""
     static profile := Map()
     static liveId := ""
     static outputMode := "software"
@@ -1287,6 +1297,10 @@ class Engine {
     ; one poll. lostSeen is for the log.
     static rawGui := 0
     static rawOn := false
+    ; Raw Input for the keyboard, while armed. rawKeyTick is the last key a
+    ; real keyboard sent, for the silent hook line.
+    static rawKeysOn := false
+    static rawKeyTick := 0
     static rawState := "off"
     static rawUpCount := Map()
     static rawAtDown := Map()
@@ -1405,13 +1419,24 @@ class Engine {
         if (needMouse && !this.hMouseHook)
             this.RaiseMouseHook()
         if this.NeedsKeyRaise(this.hookTick, this.mouseHookTick, needMouse, true, now) {
-            this.Log("physical hook silent")
+            this.Log(this.SilenceLine(now))
             this.RaisePhysicalHook()
         }
         if this.NeedsMouseRaise(this.mouseHookTick, needMouse, true, now) {
             this.Log("mouse hook silent")
             this.RaiseMouseHook()
         }
+    }
+
+    ; The native line. Raw Input still sees keys that a hook Windows removed
+    ; misses, so a recent raw key means the hook was dropped.
+    static SilenceLine(now) {
+        rawAge := (this.rawKeysOn && this.rawKeyTick > 0) ? (now - this.rawKeyTick) "ms" : "-"
+        mouseAge := this.mouseHookTick > 0 ? (now - this.mouseHookTick) "ms" : "-"
+        return Format('hook key reinstall reason=silent config="{}" id={} age={}ms raw={} raw_key_age={} mouse_age={} verdict={}',
+            this.liveName != "" ? this.liveName : "-", (this.liveId != "" && this.liveId != Chr(1)) ? this.liveId : "-",
+            now - this.hookTick, this.rawKeysOn ? "on" : "off", rawAge, mouseAge,
+            SilenceVerdict(this.rawKeysOn, this.hookTick, this.rawKeyTick))
     }
 
     ; Mouse clicks keep this thread alive. An idle keyboard hook is still installed.
@@ -1482,6 +1507,35 @@ class Engine {
         this.SetRawState(ok ? "on" : "unavailable")
     }
 
+    ; The keyboard is its own registration, while armed. Only the time of the
+    ; last real key is kept.
+    static SyncRawKeys(want) {
+        if (want = this.rawKeysOn)
+            return
+        dev := Buffer(8 + A_PtrSize, 0)
+        NumPut("UShort", 1, dev, 0)
+        NumPut("UShort", 6, dev, 2)
+        if !want {
+            NumPut("UInt", 0x1, dev, 4)
+            DllCall("RegisterRawInputDevices", "Ptr", dev, "UInt", 1, "UInt", dev.Size)
+            this.rawKeysOn := false
+            return
+        }
+        if !this.rawGui {
+            try {
+                this.rawGui := Gui()
+                OnMessage(0x00FF, RawMouseMsg)
+            }
+        }
+        ok := false
+        if this.rawGui {
+            NumPut("UInt", 0x100, dev, 4)
+            NumPut("Ptr", this.rawGui.Hwnd, dev, 8)
+            ok := DllCall("RegisterRawInputDevices", "Ptr", dev, "UInt", 1, "UInt", dev.Size)
+        }
+        this.rawKeysOn := !!ok
+    }
+
     static SetRawState(state) {
         if (state = this.rawState)
             return
@@ -1503,7 +1557,12 @@ class Engine {
         buf := Buffer(size, 0)
         if (DllCall("GetRawInputData", "Ptr", lParam, "UInt", 0x10000003, "Ptr", buf, "UInt*", &size, "UInt", head) = 0xFFFFFFFF)
             return
-        if (NumGet(buf, 0, "UInt") != 0)
+        kind := NumGet(buf, 0, "UInt")
+        if (kind = 1) {
+            this.NoteRawKey(NumGet(buf, 8, "Ptr"), A_TickCount)
+            return
+        }
+        if (kind != 0)
             return
         flags := NumGet(buf, head + 4, "UShort")
         this.NoteRaw(NumGet(buf, 8, "Ptr"), flags)
@@ -1520,6 +1579,14 @@ class Engine {
             this.rawUpCount["XButton1"] := this.RawUps("XButton1") + 1
         if (flags & 0x200)
             this.rawUpCount["XButton2"] := this.RawUps("XButton2") + 1
+    }
+
+    ; A key from a real keyboard. SendInput has no device, and the board's
+    ; keys are the engine's own output.
+    static NoteRawKey(device, tick) {
+        if (!device || this.RawIsBoard(device))
+            return
+        this.rawKeyTick := tick
     }
 
     static RawUps(name) {
@@ -1827,6 +1894,9 @@ class Engine {
         ; step is a one-shot, and RemoveDone would throw it away with the runner.
         this.Publish(now)
         this.RemoveDone()
+        if this.armed
+            this.PollOwed()
+        this.SyncRawKeys(this.armed)
         this.Broadcast(false)
     }
 
@@ -1862,7 +1932,8 @@ class Engine {
         if !(configs is Array) || (configs.Length = 0) {
             if (this.liveId != "-") {
                 this.liveId := "-"
-                this.SeedTriggers()
+                this.liveName := ""
+                this.SeedTriggers(true)
                 this.ReapOrphans()
                 this.hooksDirty := true
             }
@@ -1875,6 +1946,7 @@ class Engine {
         if (id = this.liveId)
             return
         this.liveId := id
+        this.liveName := (pick is Map) ? String(Field(pick, "name", "")) : ""
         if (pick is Map) {
             macros := Field(pick, "macros", [])
             if !(macros is Array)
@@ -1886,7 +1958,7 @@ class Engine {
             this.profile["macros"] := []
             this.profile["focusExe"] := ""
         }
-        this.SeedTriggers()
+        this.SeedTriggers(true)
         this.ReapOrphans()
         this.hooksDirty := true
     }
@@ -1925,6 +1997,8 @@ class Engine {
     }
 
     static SetArmed(on) {
+        if (on != this.armed)
+            this.Log(on ? "armed on" : "armed off")
         this.armed := on
         if !on
             this.StopAll()
@@ -1988,32 +2062,45 @@ class Engine {
         return macro
     }
 
-    static StartRunner(macro, modeOverride := "", restart := true) {
+    ; true when queued. Otherwise refused says why, like native:
+    ; already-running is a whileHeld or toggle runner that is still playing.
+    static refused := ""
+    static StartRunner(macro, modeOverride := "", restart := true, why := "edge") {
+        this.refused := ""
         if !(macro is Map)
-            return
+            return false
         macro := this.PrepareBasic(macro)
         id := String(Field(macro, "id", ""))
         if (id = "")
-            return
+            return false
         mode := modeOverride != "" ? String(modeOverride) : String(Field(macro, "playMode", "once"))
         exists := this.HasRunner(id)
-        if (exists && !restart)
-            return
-        if (exists && (mode = "whileHeld" || mode = "toggle"))
-            return
-        if (Field(macro, "busy", false) && exists)
-            return
+        if (exists && !restart) {
+            this.refused := "run-target-live"
+            return false
+        }
+        if (exists && (mode = "whileHeld" || mode = "toggle")) {
+            this.refused := "already-running"
+            return false
+        }
+        if (Field(macro, "busy", false) && exists) {
+            this.refused := "busy"
+            return false
+        }
         if exists
-            this.StopRunner(id)
+            this.StopRunner(id, "restart")
         if Field(macro, "exclusive", false)
-            this.StopAll()
-        this.pending.Push(Runner(macro, mode))
+            this.StopAll("exclusive")
+        r := Runner(macro, mode)
+        this.pending.Push(r)
+        this.Log(Format('runner start macro="{}" id={} mode={} reason={}', r.name, id, mode, why))
+        return true
     }
 
-    static StopRunner(id) {
+    static StopRunner(id, why := "stop") {
         for r in this.runners
             if (r.id = id)
-                r.MarkDone()
+                r.MarkDone(why)
         kept := []
         for r in this.pending
             if (r.id != id)
@@ -2052,9 +2139,9 @@ class Engine {
                 r.AskStop()
     }
 
-    static StopAll() {
+    static StopAll(why := "stop-all") {
         for r in this.runners
-            r.MarkDone()
+            r.MarkDone(why)
         this.pending := []
     }
 
@@ -2104,14 +2191,14 @@ class Engine {
                 if (macro is Map && !Field(macro, "advanced", false) && key != "" && !this.KeyDown(key)) {
                     for r in this.runners
                         if (r.id = id && !r.done && r.mode = "whileHeld")
-                            r.MarkDone()
+                            r.MarkDone("unmute")
                 }
                 continue
             }
             if (resume || this.HoldReplay(id)) {
                 macro := this.FindMacro(id)
                 if (macro is Map)
-                    this.StartRunner(macro)
+                    this.StartRunner(macro, "", true, "unmute")
             }
         }
     }
@@ -2321,9 +2408,17 @@ class Engine {
 
     static RemoveDone() {
         kept := []
-        for r in this.runners
-            if !r.done
+        for r in this.runners {
+            if !r.done {
                 kept.Push(r)
+                continue
+            }
+            age := Max(0, Round(r.heldMs))
+            ; A stop with the trigger still down is the one to look at.
+            held := r.trigger = "" ? "-" : (this.KeyDown(r.trigger) ? "down" : "up")
+            this.Log(Format('runner stop macro="{}" id={} mode={} reason={} age={}ms trigger={}',
+                r.name, r.id, r.mode, r.endWhy = "" ? "finished" : r.endWhy, age, held))
+        }
         this.runners := kept
         for id, state in this.onceLock
             if (state = "done" && !this.HasRunner(id))
@@ -2340,7 +2435,7 @@ class Engine {
         }
         for r in this.runners
             if !live.Has(r.id)
-                r.MarkDone()
+                r.MarkDone("orphan")
     }
 
     static FocusOk(macro) {
@@ -2533,8 +2628,16 @@ class Engine {
         return down
     }
 
-    static SeedTriggers() {
+    ; keep: a reload or a config switch. An id whose trigger is unchanged
+    ; keeps prev, so a press or release since the last poll is still an edge.
+    ; A new or changed trigger, and a start, read the finger now: a key held
+    ; before that does not start.
+    static SeedTriggers(keep := false) {
+        old := this.prevDown
+        oldButton := this.prevButton
         this.prevDown := Map()
+        this.prevButton := Map()
+        this.owed := Map()
         this.macroTapHold := Map()
         this.macroHoldRel := Map()
         macros := Field(this.profile, "macros", [])
@@ -2546,7 +2649,11 @@ class Engine {
             id := String(Field(macro, "id", ""))
             trig := Field(macro, "trigger", Map())
             button := (trig is Map) ? String(Field(trig, "button", "")) : ""
-            this.prevDown[id] := this.KeyDown(button)
+            if (keep && old.Has(id) && oldButton.Has(id) && oldButton[id] = button)
+                this.prevDown[id] := old[id]
+            else
+                this.prevDown[id] := this.KeyDown(button)
+            this.prevButton[id] := button
             if (id != "") {
                 this.macroTapHold[id] := this.ScanTapHold(macro)
                 this.macroHoldRel[id] := this.ScanHoldsOnRelease(macro)
@@ -2582,6 +2689,8 @@ class Engine {
             down := this.KeyDown(button)
             was := this.prevDown.Has(id) ? this.prevDown[id] : false
             this.prevDown[id] := down
+            if (!down && this.owed.Has(id))
+                this.owed.Delete(id)
             key := NormKey(button)
             ; A repeat left physDown true, so it is not an edge. One line per hold.
             if (key != "" && down && this.repeatSeen.Has(key) && !this.repeatLogged.Has(key)) {
@@ -2598,6 +2707,8 @@ class Engine {
                     Field(macro, "name", ""), id, did, this.TriggerSwallowed(key) ? "yes" : "no"))
             if (did = "playing")
                 this.Log(Format('start blocked macro="{}" id={} mode=once reason=playing', Field(macro, "name", ""), id))
+            else if (did = "already-running" || did = "busy")
+                this.Log(Format('start blocked macro="{}" id={} mode={} reason={}', Field(macro, "name", ""), id, this.TriggerMode(macro), did))
         }
         this.repeatSeen := Map()
         this.FlushRedo(redo)
@@ -2628,11 +2739,17 @@ class Engine {
 
     ; One macro's trigger. Returns what it did, for the log.
     static PollOne(macro, id, down, was) {
-        if this.IsMuted(id)
+        if this.IsMuted(id) {
+            this.DropOwed(id)
             return "muted"
+        }
+        ; A held key does not start it again when focus comes back: prev
+        ; stays down, so that needs a new press.
         if !Field(macro, "enabled", true) || !this.FocusOk(macro) {
-            this.StopRunner(id)
-            return Field(macro, "enabled", true) ? "focus" : "disabled"
+            why := Field(macro, "enabled", true) ? "focus" : "disabled"
+            this.StopRunner(id, why)
+            this.DropOwed(id)
+            return why
         }
         if this.OnceDone(id) {
             if this.HasRunner(id) {
@@ -2660,8 +2777,8 @@ class Engine {
                     return "playing"
                 if once
                     this.StartOncePlay(macro)
-                else
-                    this.StartRunner(macro)
+                else if !this.StartRunner(macro)
+                    return this.NoteOwed(id, mode)
                 if once
                     this.SpendOnce(id)
                 return "start"
@@ -2679,16 +2796,70 @@ class Engine {
                 return "playing"
             if once
                 this.StartOncePlay(macro)
-            else
-                this.StartRunner(macro)
+            else if !this.StartRunner(macro)
+                return this.NoteOwed(id, mode)
             if once
                 this.SpendOnce(id)
             return "start"
         } else if (action = "stop") {
-            this.StopRunner(id)
+            this.StopRunner(id, mode = "toggle" ? "toggle" : "release")
             return "release"
         }
         return "none"
+    }
+
+    ; Only whileHeld keeps the press: its runner can still be finishing a pass
+    ; after the release. Run Once drops a press while it plays, never owes it.
+    static NoteOwed(id, mode) {
+        why := this.refused != "" ? this.refused : "none"
+        if (why = "already-running" && mode = "whileHeld")
+            this.owed[id] := true
+        return why
+    }
+
+    static DropOwed(id) {
+        if this.owed.Has(id)
+            this.owed.Delete(id)
+    }
+
+    static TriggerMode(macro) {
+        return this.HasTapHold(macro) ? "whileHeld" : String(Field(macro, "playMode", "once"))
+    }
+
+    ; After the runners advance. An owed press starts once its last runner is
+    ; gone and the key is still down. An up, a focus switch, a disabled macro
+    ; or a mute drops it.
+    static PollOwed() {
+        if (this.owed.Count = 0)
+            return
+        macros := Field(this.profile, "macros", [])
+        if !(macros is Array) {
+            this.owed := Map()
+            return
+        }
+        live := Map()
+        for macro in macros {
+            if !(macro is Map)
+                continue
+            id := String(Field(macro, "id", ""))
+            live[id] := true
+            if !this.owed.Has(id)
+                continue
+            trig := Field(macro, "trigger", Map())
+            button := (trig is Map) ? String(Field(trig, "button", "")) : ""
+            if (!this.KeyDown(button) || this.IsMuted(id) || !Field(macro, "enabled", true)
+                || !this.FocusOk(macro) || this.OnceDone(id) || this.OnceOpen(id)) {
+                this.owed.Delete(id)
+                continue
+            }
+            if this.HasRunner(id)
+                continue
+            this.owed.Delete(id)
+            this.StartRunner(macro, "", true, "held-press")
+        }
+        for id, _ in this.owed.Clone()
+            if !live.Has(id)
+                this.owed.Delete(id)
     }
 
     static HasTapHold(macro) {
@@ -3451,8 +3622,10 @@ class Engine {
                 this.SetArmed(true)
             else if (action = "stop")
                 this.SetArmed(false)
-            else if (action = "reload")
+            else if (action = "reload") {
+                this.Log("reload")
                 this.LoadDisk()
+            }
             else if (action = "quit") {
                 this.SendRaw('{"v":1,"type":"ack","for":"command","ok":true}')
                 ExitApp()
@@ -3465,8 +3638,14 @@ class Engine {
     ; Only one engine runs at a time, so both write the same file.
     ; The self-test points logPath at a temp file so it never writes the real log.
     static logPath := A_ScriptDir "\..\profiles\engine.log"
+    ; The soak reads the lines instead of the file when this is an Array.
+    static capture := ""
     static Log(message) {
-        try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " " message "`n", this.logPath, "UTF-8")
+        if (this.capture is Array) {
+            this.capture.Push(message)
+            return
+        }
+        try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") "." Format("{:03}", A_MSec) " " message "`n", this.logPath, "UTF-8")
     }
 }
 
@@ -3477,6 +3656,16 @@ Check(cond, label, fails) {
         return fails + 1
     }
     return fails
+}
+
+; "unknown" without Raw Input for the keyboard. "dropped" when Raw Input saw a
+; key more than 250 ms after the hook's last one. "idle" otherwise.
+SilenceVerdict(rawOk, hookAt, rawAt) {
+    if !rawOk
+        return "unknown"
+    if (rawAt > 0 && rawAt > hookAt + 250)
+        return "dropped"
+    return "idle"
 }
 
 HasVal(list, key) {
@@ -4777,7 +4966,409 @@ RunChecks(fails) {
     Engine.RemoveDone()
     DllCall("Winmm.dll\timeEndPeriod", "UInt", 1)
     fails := RunOnceChecks(fails)
+    fails := HeldPressChecks(fails)
+    fails := SoakChecks(fails)
     return fails
+}
+
+; Simple Edit: whileHeld with a onceHeld block, 85 ms gap after a release.
+; A re-press inside the gap was refused while the runner finished, and the
+; key then stayed held with nothing playing. It is kept and starts as
+; held-press once the gap ends. A tap that is up before then is dropped.
+; A press that lands with a reload is still an edge. Focus coming back with
+; the key held does not restart it.
+HeldPressChecks(fails) {
+    saved := Map("rawOk", Engine.rawOk, "out", Engine.outputMode, "profile", Engine.profile,
+        "known", Engine.frontKnown, "front", Engine.frontExe, "dry", Engine.dry)
+    Engine.BuildVkMap()
+    Engine.dry := true
+    Engine.rawOk := true
+    Engine.frontKnown := true
+    Engine.frontExe := "game.exe"
+    Engine.hidEcho := []
+    edit := J("{'id':'edit','name':'Simple Edit','enabled':true,'advanced':true,'playMode':'whileHeld','releaseStop':'finish','trigger':{'kind':'key','button':'b'},'steps':[],'blocks':[{'type':'onceHeld','gapMs':85,'steps':[{'type':'key','action':'down','key':'o'},{'type':'wait','ms':10},{'type':'key','action':'up','key':'o'}]}]}")
+    for mode in ["software", "rp2350"] {
+        for kind in ["re-press", "tap", "focus"] {
+            Engine.outputMode := mode
+            Engine.profile := Map("macros", [edit])
+            if (kind = "focus")
+                Engine.profile["focusExe"] := "game.exe"
+            Engine.hooks := Map("b", true)
+            Engine.physDown := Map()
+            Engine.repeatSeen := Map()
+            Engine.SeedTriggers()
+            Engine.capture := []
+            starts := 0, dead := 0, refocused := true
+            now := 0
+            while (now < 2000) {
+                if (kind = "re-press") {
+                    if (now = 100 || now = 425)
+                        TestKey("b", true)
+                    else if (now = 400 || now = 1425)
+                        TestKey("b", false)
+                } else if (kind = "tap") {
+                    if (now = 100 || now = 420)
+                        TestKey("b", true)
+                    else if (now = 400 || now = 440)
+                        TestKey("b", false)
+                } else {
+                    if (now = 100 || now = 1500)
+                        TestKey("b", true)
+                    else if (now = 1200 || now = 1800)
+                        TestKey("b", false)
+                    Engine.frontExe := (now >= 500 && now < 700) ? "explorer.exe" : "game.exe"
+                    Engine.focusCache := Map()
+                }
+                starts += TestTick(now)
+                if (kind = "re-press" && now >= 520 && now < 1425 && !Engine.HasRunner("edit"))
+                    dead++
+                if (kind = "focus" && now = 1000 && Engine.HasRunner("edit"))
+                    refocused := false
+                now++
+            }
+            lines := Engine.capture
+            Engine.capture := ""
+            held := 0, blocked := 0
+            for line in lines {
+                if InStr(line, "runner start") && InStr(line, "reason=held-press")
+                    held++
+                if InStr(line, "start blocked") && InStr(line, "reason=already-running")
+                    blocked++
+            }
+            label := mode " " kind
+            if (kind = "re-press") {
+                fails := Check(blocked = 1, label ": a re-press in the gap is refused while the runner finishes", fails)
+                fails := Check(held = 1 && starts = 2, label ": the refused press starts as held-press", fails)
+                fails := Check(dead = 0, label ": the held key plays the whole hold after the gap", fails)
+            } else if (kind = "tap") {
+                fails := Check(blocked = 1 && held = 0 && starts = 1, label ": a tap that is up before the gap ends is not owed", fails)
+            } else {
+                fails := Check(refocused, label ": focus back with the key held does not restart it", fails)
+                fails := Check(starts = 2, label ": after a focus switch the next press plays", fails)
+            }
+            Engine.StopAll()
+            Engine.RemoveDone()
+        }
+    }
+
+    ; A reload keeps prev for an unchanged trigger: a press since the last
+    ; poll is still an edge. A start reads the finger: held before, no start.
+    reload := J("{'id':'reload','name':'Reload','enabled':true,'advanced':true,'playMode':'whileHeld','releaseStop':'finish','trigger':{'kind':'key','button':'a'},'steps':[],'blocks':[{'type':'whileHeld','steps':[{'type':'key','action':'down','key':'a'},{'type':'wait','ms':18},{'type':'key','action':'up','key':'a'},{'type':'wait','ms':18}]}]}")
+    Engine.profile := Map("macros", [reload])
+    Engine.hooks := Map("a", true)
+    Engine.physDown := Map()
+    Engine.SeedTriggers()
+    TestTick(1)
+    TestKey("a", true)
+    Engine.SeedTriggers(true)
+    fails := Check(TestTick(2) = 1, "a press that lands with a reload starts", fails)
+    TestKey("a", false)
+    Engine.SeedTriggers(true)
+    now := 3
+    while (now < 100) {
+        TestTick(now)
+        now++
+    }
+    fails := Check(!Engine.HasRunner("reload"), "a release that lands with a reload stops it", fails)
+    TestKey("a", true)
+    Engine.SeedTriggers()
+    fails := Check(TestTick(200) = 0, "a key held before a start does not start", fails)
+    TestKey("a", false)
+    Engine.StopAll()
+    Engine.RemoveDone()
+
+    fails := Check(SilenceVerdict(false, 5000, 9000) = "unknown", "no raw keyboard is unknown", fails)
+    fails := Check(SilenceVerdict(true, 5000, 0) = "idle", "no raw key at all is idle", fails)
+    fails := Check(SilenceVerdict(true, 5000, 5100) = "idle", "a raw key 100 ms after the hook's is the same key", fails)
+    fails := Check(SilenceVerdict(true, 5000, 8000) = "dropped", "a raw key 3 s after the hook went quiet is a dropped hook", fails)
+    Engine.rawBoard := Map(7, false, 8, true)
+    Engine.rawKeyTick := 0
+    Engine.NoteRawKey(0, 100)
+    Engine.NoteRawKey(8, 200)
+    fails := Check(Engine.rawKeyTick = 0, "injected and board keys are not a real key", fails)
+    Engine.NoteRawKey(7, 300)
+    fails := Check(Engine.rawKeyTick = 300, "a real keyboard key is stamped", fails)
+    Engine.rawKeyTick := 0
+    Engine.rawBoard := Map()
+
+    Engine.hooks := Map()
+    Engine.physDown := Map()
+    Engine.repeatSeen := Map()
+    Engine.rawOk := saved["rawOk"]
+    Engine.outputMode := saved["out"]
+    Engine.profile := saved["profile"]
+    Engine.frontKnown := saved["known"]
+    Engine.frontExe := saved["front"]
+    Engine.dry := saved["dry"]
+    return fails
+}
+
+; The trigger soak: engine-native\tests\fixtures\soak.txt on soak-profile.json,
+; the same script and checks as engine-soak-test. The summary must equal
+; soak-expected.txt, so both engines give the same results.
+SoakChecks(fails) {
+    dir := A_ScriptDir "\..\engine-native\tests\fixtures"
+    text := "", script := "", expected := ""
+    try text := FileRead(dir "\soak-profile.json", "UTF-8")
+    try script := FileRead(dir "\soak.txt", "UTF-8")
+    try expected := FileRead(dir "\soak-expected.txt", "UTF-8")
+    if (text = "" || script = "" || expected = "")
+        return Check(false, "soak fixtures readable", fails)
+    scens := SoakParse(script)
+    if (scens.Length = 0)
+        return Check(false, "soak script parses", fails)
+    saved := Map("rawOk", Engine.rawOk, "out", Engine.outputMode, "profile", Engine.profile,
+        "known", Engine.frontKnown, "front", Engine.frontExe, "dry", Engine.dry, "live", Engine.liveId)
+    Engine.BuildVkMap()
+    Engine.dry := true
+    Engine.rawOk := true
+    Engine.hidEcho := []
+    summary := ""
+    errs := []
+    for sc in scens
+        for out in ["software", "rp2350"]
+            summary .= SoakRun(text, sc, out, errs)
+    for e in errs
+        fails := Check(false, e, fails)
+    expected := StrReplace(expected, "`r")
+    if (summary != expected) {
+        FileAppend("soak summary:`n" summary, "*")
+        fails := Check(false, "soak summary equals soak-expected.txt", fails)
+    }
+    Engine.capture := ""
+    Engine.hooks := Map()
+    Engine.physDown := Map()
+    Engine.repeatSeen := Map()
+    Engine.repeatLogged := Map()
+    Engine.owed := Map()
+    Engine.rawOk := saved["rawOk"]
+    Engine.outputMode := saved["out"]
+    Engine.profile := saved["profile"]
+    Engine.frontKnown := saved["known"]
+    Engine.frontExe := saved["front"]
+    Engine.dry := saved["dry"]
+    Engine.liveId := saved["live"]
+    return fails
+}
+
+SoakParse(script) {
+    scens := []
+    sc := ""
+    for raw in StrSplit(script, "`n", "`r") {
+        line := Trim(raw)
+        if (line = "" || SubStr(line, 1, 1) = "#")
+            continue
+        w := StrSplit(RegExReplace(line, "\s+", " "), " ")
+        cmd := w[1]
+        if (cmd = "scenario") {
+            sc := {name: w[2], front: w[3], end: 0, ev: []}
+            scens.Push(sc)
+        } else if (cmd = "end") {
+            sc.end := Integer(w[2])
+            SoakSort(sc.ev)
+        } else if (cmd = "push")
+            sc.ev.Push({at: Integer(w[2]), kind: "push", key: "", exe: ""})
+        else if (cmd = "focus")
+            sc.ev.Push({at: Integer(w[2]), kind: "focus", key: "", exe: w[3]})
+        else if (cmd = "down" || cmd = "up")
+            sc.ev.Push({at: Integer(w[3]), kind: cmd, key: w[2], exe: ""})
+        else if (cmd = "hold" || cmd = "holdr")
+            SoakHold(sc, w[2], Integer(w[3]), Integer(w[4]), cmd = "holdr")
+        else if (cmd = "taps") {
+            loop Integer(w[6])
+                SoakHold(sc, w[2], Integer(w[3]) + (A_Index - 1) * (Integer(w[4]) + Integer(w[5])), Integer(w[4]), false)
+        }
+    }
+    return scens
+}
+
+SoakHold(sc, key, at, len, repeat) {
+    sc.ev.Push({at: at, kind: "down", key: key, exe: ""})
+    if repeat {
+        t := at + 500
+        while (t < at + len) {
+            sc.ev.Push({at: t, kind: "repeat", key: key, exe: ""})
+            t += 33
+        }
+    }
+    sc.ev.Push({at: at + len, kind: "up", key: key, exe: ""})
+}
+
+; Stable by time: events at one ms keep file order.
+SoakSort(list) {
+    i := 2
+    while (i <= list.Length) {
+        e := list[i]
+        j := i - 1
+        while (j >= 1 && list[j].at > e.at) {
+            list[j + 1] := list[j]
+            j--
+        }
+        list[j + 1] := e
+        i++
+    }
+}
+
+SoakInput(key, down) {
+    if IsMouseButton(key)
+        return TestMouse(key, down)
+    vk := GetKeyVK(key)
+    info := Buffer(24, 0)
+    NumPut("UInt", vk, info, 0)
+    NumPut("UInt", GetKeySC(key), info, 4)
+    NumPut("UInt", (down ? 0 : 0x80) | (key = "LWin" ? 1 : 0), info, 8)
+    return Engine.ReadKey(down ? 0x100 : 0x101, info)
+}
+
+SoakKind(macro) {
+    mode := String(Field(macro, "playMode", "once"))
+    if (mode = "once")
+        return Engine.IsRunOnce(macro) ? "run-once" : "once-hold"
+    return mode = "whileHeld" ? "held" : "other"
+}
+
+; One scenario on one output. Each ms runs in the native playback order:
+; pick the config, seed, the fingers, poll, advance, the owed presses.
+SoakRun(text, sc, out, errs) {
+    outName := out = "rp2350" ? "board" : out
+    Engine.outputMode := out
+    Engine.profile := JSON.Parse(text)
+    Engine.liveId := Chr(1)
+    Engine.hooks := Map()
+    Engine.physDown := Map()
+    Engine.repeatSeen := Map()
+    Engine.repeatLogged := Map()
+    Engine.lastSwallow := Map()
+    Engine.redo := Map()
+    Engine.lostSeen := Map()
+    Engine.owed := Map()
+    Engine.prevDown := Map()
+    Engine.prevButton := Map()
+    Engine.runners := []
+    Engine.pending := []
+    Engine.frontKnown := true
+    front := sc.front
+    tracks := Map()
+    order := []
+    i := 1
+    now := 0
+    while (now <= sc.end) {
+        moved := false
+        pushed := false
+        while (i <= sc.ev.Length && sc.ev[i].at = now && (sc.ev[i].kind = "push" || sc.ev[i].kind = "focus")) {
+            if (sc.ev[i].kind = "push") {
+                pushed := true
+            } else {
+                front := sc.ev[i].exe
+                moved := true
+            }
+            i++
+        }
+        Engine.frontExe := front
+        Engine.focusCache := Map()
+        if !pushed
+            Engine.ApplyLiveConfig()
+        live := Map()
+        for m in Field(Engine.profile, "macros", []) {
+            id := String(Field(m, "id", ""))
+            live[id] := true
+            if !tracks.Has(id) {
+                trig := Field(m, "trigger", Map())
+                tracks[id] := {name: String(Field(m, "name", "")), key: NormKey(Field(trig, "button", "")),
+                    kind: SoakKind(m), starts: 0, held: 0, blocked: 0, stopsHeld: 0,
+                    inPress: false, ok: false, at: 0, pressStarts: 0, playing: false, gap: 0}
+                order.Push(id)
+            }
+        }
+        if moved
+            for id, t in tracks
+                t.ok := false
+        while (i <= sc.ev.Length && sc.ev[i].at = now) {
+            e := sc.ev[i++]
+            if (e.kind = "push" || e.kind = "focus")
+                continue
+            SoakInput(e.key, e.kind != "up")
+            if (e.kind = "repeat")
+                continue
+            for id, t in tracks {
+                if (t.key != NormKey(e.key))
+                    continue
+                if (e.kind = "down") {
+                    t.inPress := true
+                    t.ok := live.Has(id)
+                    t.at := now
+                    t.pressStarts := 0
+                    t.gap := 0
+                    t.playing := Engine.HasRunner(id)
+                } else {
+                    SoakClose(sc, outName, t, now, errs)
+                    t.inPress := false
+                    t.ok := false
+                }
+            }
+        }
+        ; A reload runs in Tick, after the hook callbacks of this ms.
+        if pushed {
+            Engine.profile := JSON.Parse(text)
+            Engine.liveId := Chr(1)
+            Engine.ApplyLiveConfig()
+        }
+        Engine.capture := []
+        TestTick(now)
+        for line in Engine.capture {
+            if !RegExMatch(line, " id=(\S+)", &mm) || !tracks.Has(mm[1])
+                continue
+            t := tracks[mm[1]]
+            if (SubStr(line, 1, 13) = "runner start ") {
+                t.starts++
+                if InStr(line, "reason=held-press")
+                    t.held++
+                if t.inPress
+                    t.pressStarts++
+            } else if (SubStr(line, 1, 14) = "start blocked ") {
+                t.blocked++
+            } else if (SubStr(line, 1, 12) = "runner stop ") {
+                if InStr(line, "trigger=down")
+                    t.stopsHeld++
+            }
+        }
+        Engine.capture := ""
+        for id, t in tracks
+            if (t.kind = "held" && t.inPress && t.ok && now >= t.at + 3 && !Engine.HasRunner(id))
+                t.gap++
+        now++
+    }
+    rows := ""
+    for id in order {
+        t := tracks[id]
+        if (t.starts || t.blocked)
+            rows .= Format("{} {} {} starts={} held-press={} blocked={} stops-held={}`n",
+                sc.name, outName, t.name, t.starts, t.held, t.blocked, t.stopsHeld)
+    }
+    Engine.capture := []
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.capture := ""
+    return rows
+}
+
+SoakClose(sc, outName, t, now, errs) {
+    if !t.ok
+        return
+    where := sc.name " " outName " " t.name
+    if (t.kind = "run-once") {
+        want := t.playing ? 0 : 1
+        if (t.pressStarts != want)
+            errs.Push(where ": " (want ? "a press did not play once" : "a press while playing started it") " at " t.at " ms")
+    } else if (t.kind = "once-hold") {
+        if (t.pressStarts != 1)
+            errs.Push(where ": a press did not start exactly once at " t.at " ms")
+    } else if (t.kind = "held") {
+        if (t.pressStarts > 1)
+            errs.Push(where ": stopped and started again inside one hold at " t.at " ms")
+        if (t.gap > 0)
+            errs.Push(where ": not playing for part of the hold at " now " ms")
+    }
 }
 
 ; One low-level keyboard event, built like KBDLLHOOKSTRUCT.
@@ -4821,6 +5412,7 @@ TestTick(now) {
     started += Engine.pending.Length
     Engine.FlushPending()
     Engine.RemoveDone()
+    Engine.PollOwed()
     return started
 }
 

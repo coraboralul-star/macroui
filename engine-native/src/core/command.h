@@ -65,6 +65,9 @@ struct engine_trigger_mem {
        new image reseeds, like AHK sets liveId to Chr(1) on a profile. */
     uint64_t profile_seq;
     uint8_t prev[ENGINE_TRIGGER_MEM];
+    /* A whileHeld press refused because the last runner was still finishing.
+       Kept until the key comes up, by macro index like prev. */
+    uint8_t owed[ENGINE_TRIGGER_MEM];
 };
 
 /* The triggers AHK would have hooked last tick, and its swallow focus. */
@@ -119,16 +122,32 @@ void engine_trigger_seed(struct engine_trigger_mem *mem, const struct engine_liv
 /* A new profile image reseeds on the next poll. */
 void engine_trigger_note_profile(struct engine_trigger_mem *mem, uint64_t seq);
 
+/* Seed now when a reseed is due. Playback calls this before it drains the
+   tick's finger events, so a press or release that arrives with a profile,
+   a reload or a start is still an edge. A key held before that does not
+   start. 1 when it seeded. */
+int engine_trigger_seed_due(struct engine_trigger_mem *mem, const struct engine_live_config *live,
+                            const struct engine_fingers *fingers);
+
 /* First ENGINE_TRIGGER_MEM macros. A tapHold or tapSpam block uses whileHeld
    for the edge. Advanced blocks ask-stop when the release should finish the
    pass. A done once-lock does not start the macro again. An open lock starts
    it once, then the lock is spent. A start needs a down edge, like AHK.
-   A runner that ends while the key is still down is not started again.
+   A runner that ends while the key is still down is not started again,
+   except a whileHeld press that came while it was finishing (owed below).
    A Run Once (play once, no hold loop) that is still playing ignores a new
    down edge: one press is one whole pass. The edge is noted as "playing". */
 void engine_poll_triggers(struct engine_play *play, const struct engine_live_config *live,
                           struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
                           const char *front, const char *owner);
+
+/* After the tick. A whileHeld press refused as already-running, because the
+   last runner was finishing its pass after the release, starts once that
+   runner is gone and the key is still down. Reason held-press. An up, a
+   focus switch, a disabled macro or a mute drops it. */
+void engine_trigger_owed(struct engine_play *play, const struct engine_live_config *live,
+                         struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
+                         const char *front, const char *owner);
 
 /* ArmOnceLock. Each id passes its trigger until release. A live runner is
    marked done. A finger that is already down starts one play, then done.

@@ -1038,6 +1038,216 @@ static void build_stratagem(struct engine_step *steps)
 /* Run Once on a held trigger: Windows repeats a held key after 500 ms, then
    every 33 ms, with no up. That is never a new edge. Only an up and then a
    down starts the macro again, and not while the last pass is playing. */
+static void build_tap_block(struct engine_step *steps, uint16_t key);
+
+/* One ms of playback_tick, from the seed to the owed presses. down is the
+   finger for this ms. Counts the notes. */
+struct owed_run {
+    int starts;
+    int held_press;
+    int blocked;
+    int playing;
+    int dead_ms;
+};
+
+static void owed_ms(struct engine_play *play, const struct engine_live_config *live,
+                    struct engine_trigger_mem *mem, struct engine_fingers *fingers, uint16_t key,
+                    int down, const char *front, int64_t now, struct owed_run *run)
+{
+    int i;
+
+    engine_trigger_seed_due(mem, live, fingers);
+    engine_fingers_set(fingers, key, down);
+    engine_play_set_fingers(play, fingers);
+    engine_poll_triggers(play, live, mem, fingers, front, "");
+    engine_play_tick(play, now);
+    engine_trigger_owed(play, live, mem, fingers, front, "");
+    for (i = 0; i < play->note_count; i++) {
+        if (play->notes[i].kind == ENGINE_NOTE_START)
+            run->starts++;
+        if (play->notes[i].kind == ENGINE_NOTE_START && play->notes[i].why == ENGINE_WHY_HELD_PRESS)
+            run->held_press++;
+        if (play->notes[i].kind == ENGINE_NOTE_BLOCK && play->notes[i].why == ENGINE_WHY_RUNNING)
+            run->blocked++;
+        if (play->notes[i].kind == ENGINE_NOTE_BLOCK && play->notes[i].why == ENGINE_WHY_PLAYING)
+            run->playing++;
+    }
+    play->note_count = 0;
+}
+
+/* Simple Edit: whileHeld with a onceHeld block, 85 ms gap after a release.
+   A re-press inside the gap was refused as already-running and the key then
+   stayed held with nothing playing. It is kept and starts as held-press once
+   the gap ends. A tap that is up again before then is dropped. */
+static void check_held_press(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_step steps[4];
+    struct engine_macro macro;
+    struct engine_profile_extra extra;
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    static const int outputs[] = { ENGINE_OUTPUT_SOFTWARE, ENGINE_OUTPUT_RP2350 };
+    int o;
+
+    if (!play) {
+        expect(0, "held press play alloc");
+        return;
+    }
+    memset(steps, 0, sizeof steps);
+    steps[0].type = ENGINE_STEP_ONCE_HELD;
+    steps[0].a = 85;
+    steps[0].first = 1;
+    steps[0].count = 3;
+    steps[1].type = ENGINE_STEP_KEY;
+    steps[1].action = ENGINE_ACT_DOWN;
+    steps[1].key = 0x4F;
+    steps[2].type = ENGINE_STEP_WAIT;
+    steps[2].a = 10;
+    steps[3].type = ENGINE_STEP_KEY;
+    steps[3].action = ENGINE_ACT_UP;
+    steps[3].key = 0x4F;
+    engine_macro_init(&macro);
+    snprintf(macro.id, sizeof macro.id, "edit");
+    macro.mode = ENGINE_MODE_WHILE_HELD;
+    macro.advanced = 1;
+    macro.release_stop = ENGINE_STOP_FINISH;
+    macro.trigger = 0x42;
+    macro.steps = steps;
+    macro.step_count = 4;
+    macro.top_count = 1;
+    memset(&extra, 0, sizeof extra);
+    extra.enabled = 1;
+    memset(&live, 0, sizeof live);
+    live.macros = &macro;
+    live.extras = &extra;
+    live.macro_count = 1;
+
+    for (o = 0; o < 2; o++) {
+        struct owed_run run;
+        int64_t now;
+
+        /* Down 100-400, up, down again at 425 and held to 1425. */
+        memset(&run, 0, sizeof run);
+        engine_play_init(play);
+        play->output.mode = outputs[o];
+        engine_play_set_macros(play, &macro, 1);
+        engine_trigger_init(&mem);
+        engine_fingers_clear(&fingers);
+        for (now = 0; now < 1600; now++) {
+            int down = (now >= 100 && now < 400) || (now >= 425 && now < 1425);
+
+            owed_ms(play, &live, &mem, &fingers, 0x42, down, "", now, &run);
+            if (now >= 520 && now < 1425 && !engine_play_has_runner(play, "edit"))
+                run.dead_ms++;
+        }
+        expect(run.blocked == 1, "a re-press in the gap is refused while the runner finishes");
+        expect(run.held_press == 1 && run.starts == 2, "the refused press starts as held-press");
+        expect(run.dead_ms == 0, "the held key plays the whole hold after the gap");
+        expect(!engine_play_has_runner(play, "edit"), "held-press runner stops on the up");
+
+        /* A 20 ms tap inside the gap is up before the runner ends: no start. */
+        memset(&run, 0, sizeof run);
+        engine_play_init(play);
+        play->output.mode = outputs[o];
+        engine_play_set_macros(play, &macro, 1);
+        engine_trigger_init(&mem);
+        engine_fingers_clear(&fingers);
+        for (now = 0; now < 800; now++) {
+            int down = (now >= 100 && now < 400) || (now >= 420 && now < 440);
+
+            owed_ms(play, &live, &mem, &fingers, 0x42, down, "", now, &run);
+        }
+        expect(run.blocked == 1 && run.held_press == 0 && run.starts == 1,
+               "a tap that is up before the gap ends is not owed");
+
+        /* Focus leaves mid-hold and comes back with the key still down: the
+           macro stays stopped until a new press. */
+        memset(&run, 0, sizeof run);
+        engine_play_init(play);
+        play->output.mode = outputs[o];
+        engine_play_set_macros(play, &macro, 1);
+        engine_trigger_init(&mem);
+        engine_fingers_clear(&fingers);
+        snprintf(extra.focus_exe, sizeof extra.focus_exe, "game.exe");
+        for (now = 0; now < 2000; now++) {
+            int down = (now >= 100 && now < 1200) || (now >= 1500 && now < 1800);
+            const char *front = (now >= 500 && now < 700) ? "explorer.exe" : "game.exe";
+
+            owed_ms(play, &live, &mem, &fingers, 0x42, down, front, now, &run);
+            if (now == 1000)
+                expect(!engine_play_has_runner(play, "edit"),
+                       "focus back with the key held does not restart it");
+        }
+        expect(run.starts == 2, "after a focus switch the next press plays");
+        extra.focus_exe[0] = '\0';
+    }
+    free(play);
+}
+
+/* A profile, reload or start seeds before the tick's events are drained.
+   A press drained in that same tick is still a down edge, and a key held
+   before it does not start. */
+static void check_seed_before_drain(void)
+{
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_step tap[5];
+    struct engine_macro macro;
+    struct engine_profile_extra extra;
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    struct owed_run run;
+
+    if (!play) {
+        expect(0, "seed play alloc");
+        return;
+    }
+    engine_play_init(play);
+    build_tap_block(tap, (uint16_t)'Z');
+    engine_macro_init(&macro);
+    snprintf(macro.id, sizeof macro.id, "reload");
+    macro.mode = ENGINE_MODE_WHILE_HELD;
+    macro.advanced = 1;
+    macro.trigger = (uint16_t)'A';
+    macro.steps = tap;
+    macro.step_count = 5;
+    macro.top_count = 5;
+    memset(&extra, 0, sizeof extra);
+    extra.enabled = 1;
+    memset(&live, 0, sizeof live);
+    live.macros = &macro;
+    live.extras = &extra;
+    live.macro_count = 1;
+    engine_play_set_macros(play, &macro, 1);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    memset(&run, 0, sizeof run);
+    owed_ms(play, &live, &mem, &fingers, (uint16_t)'A', 0, "", 1, &run);
+    /* The push and the press land in one tick. */
+    engine_trigger_note_profile(&mem, 7);
+    owed_ms(play, &live, &mem, &fingers, (uint16_t)'A', 1, "", 2, &run);
+    expect(run.starts == 1, "a press in the tick of a profile push starts");
+    {
+        int64_t now;
+
+        /* The release lands with a reload. The onceHeld gap runs out after it. */
+        engine_trigger_reseed(&mem);
+        for (now = 3; now < 400; now++)
+            owed_ms(play, &live, &mem, &fingers, (uint16_t)'A', 0, "", now, &run);
+    }
+    expect(!engine_play_has_runner(play, "reload"), "a release in the tick of a reload still stops it");
+
+    /* Held before the reload: no start. */
+    memset(&run, 0, sizeof run);
+    engine_fingers_set(&fingers, (uint16_t)'A', 1);
+    engine_trigger_reseed(&mem);
+    owed_ms(play, &live, &mem, &fingers, (uint16_t)'A', 1, "", 500, &run);
+    expect(run.starts == 0, "a key held before a reload does not start");
+    free(play);
+}
+
 static void check_run_once_held(void)
 {
     static const uint16_t triggers[] = { 0x34, 0x5B, ENGINE_KEY_XBUTTON1, ENGINE_KEY_XBUTTON2 };
@@ -1827,6 +2037,8 @@ int main(void)
     check_recover();
     check_held_again();
     check_run_once_held();
+    check_held_press();
+    check_seed_before_drain();
     check_many_starts();
     check_mute_compaction();
     check_mute_switch();

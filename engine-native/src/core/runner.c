@@ -2574,7 +2574,7 @@ static const char *const k_why[ENGINE_WHY_COUNT] = {
     "busy", "runner-cap", "arena-full", "no-id", "muted", "once-done", "focus", "disabled",
     "finished", "release", "next-up", "scan-release", "edge-release", "toggle", "stop",
     "stop-all", "exclusive", "restart", "orphan", "frame-cap", "hold-cap", "ask-stop",
-    "panic", "overflow", "command", "start", "playing"
+    "panic", "overflow", "command", "start", "playing", "held-press"
 };
 
 const char *engine_why_name(int why)

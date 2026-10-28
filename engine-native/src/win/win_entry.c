@@ -127,6 +127,7 @@ struct engine_resident {
     struct engine_win_raw raw_win;
     HANDLE raw_thread;
     int raw_want;
+    int raw_keys_want;
     int raw_logged;
     int desktop_known;
     int desktop_open;
@@ -779,6 +780,8 @@ static void send_play_report(const struct engine_report *report, int mode, int64
     }
 }
 
+static void engine_log(const char *text);
+
 static void apply_commands(int64_t now)
 {
     struct engine_cmd_item item;
@@ -794,12 +797,17 @@ static void apply_commands(int64_t now)
     }
     while (engine_cmd_pop(&g.cmds, &item)) {
         if (item.kind == ENGINE_CMD_START) {
+            if (!g.armed)
+                engine_log("armed on");
             g.armed = 1;
             engine_trigger_reseed(&g.triggers);
         } else if (item.kind == ENGINE_CMD_STOP) {
+            if (g.armed)
+                engine_log("armed off");
             g.armed = 0;
             engine_play_stop_all_why(g.play, ENGINE_WHY_COMMAND);
         } else if (item.kind == ENGINE_CMD_RELOAD) {
+            engine_log("reload");
             engine_trigger_reseed(&g.triggers);
         } else if (item.kind == ENGINE_CMD_OUTPUT) {
             struct engine_report release;
@@ -832,6 +840,18 @@ struct engine_log_ring {
 
 static struct engine_log_ring g_log;
 
+/* Local time to the millisecond. GetLocalTime moves in 15.6 ms steps on
+   many PCs, and a re-press inside a pass is shorter than that. */
+static void log_stamp(SYSTEMTIME *st)
+{
+    FILETIME utc;
+    FILETIME local;
+
+    GetSystemTimePreciseAsFileTime(&utc);
+    if (!FileTimeToLocalFileTime(&utc, &local) || !FileTimeToSystemTime(&local, st))
+        GetLocalTime(st);
+}
+
 static void engine_log(const char *text)
 {
     SYSTEMTIME st;
@@ -849,10 +869,11 @@ static void engine_log(const char *text)
         return;
     }
     at = tail & (ENGINE_LOG_LINES - 1u);
-    GetLocalTime(&st);
-    n = snprintf(g_log.line[at], ENGINE_LOG_LINE - 2, "%04u-%02u-%02u %02u:%02u:%02u %s",
+    log_stamp(&st);
+    n = snprintf(g_log.line[at], ENGINE_LOG_LINE - 2, "%04u-%02u-%02u %02u:%02u:%02u.%03u %s",
                  (unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay,
-                 (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond, text);
+                 (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond,
+                 (unsigned)st.wMilliseconds, text);
     if (n <= 0)
         return;
     if (n > ENGINE_LOG_LINE - 3)
@@ -906,10 +927,11 @@ static void log_flush(void)
         SYSTEMTIME st;
         int n;
 
-        GetLocalTime(&st);
-        n = snprintf(line, sizeof line, "%04u-%02u-%02u %02u:%02u:%02u log dropped %u\r\n",
+        log_stamp(&st);
+        n = snprintf(line, sizeof line, "%04u-%02u-%02u %02u:%02u:%02u.%03u log dropped %u\r\n",
                      (unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay,
-                     (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond, lost);
+                     (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond,
+                     (unsigned)st.wMilliseconds, lost);
         if (n > 0 && n < (int)sizeof line)
             log_write(line, n);
     }
@@ -1033,8 +1055,9 @@ static void redo_fingers(int64_t now)
         engine_finger_at_touch(g.finger_at, ENGINE_KEY_ID_MAX + 1, ids[i], now);
 }
 
-/* Raw Input is registered only while the config has a middle or side
-   trigger. A failed post is tried again next tick. */
+/* Raw Input for the mouse is registered only while the config has a middle
+   or side trigger. The keyboard is registered while armed, for the silent
+   hook line. A failed post is tried again next tick. */
 static void sync_raw(int need_mouse)
 {
     int status;
@@ -1042,6 +1065,9 @@ static void sync_raw(int need_mouse)
     if (g.raw_thread && g.raw_want != need_mouse &&
         engine_win_raw_want(&g.raw_win, need_mouse) == 0)
         g.raw_want = need_mouse;
+    if (g.raw_thread && g.raw_keys_want != g.armed &&
+        engine_win_raw_want_keys(&g.raw_win, g.armed) == 0)
+        g.raw_keys_want = g.armed;
     status = atomic_load_explicit(&g.raw_win.status, memory_order_acquire);
     if (status == g.raw_logged)
         return;
@@ -1253,6 +1279,25 @@ static void log_trigger_event(const struct engine_live_config *live, uint16_t id
 }
 
 /* Matched trigger edges, starts, stops, and refusals from this tick. */
+/* "down" or "up" for the macro's trigger finger now, "-" with no trigger. */
+static const char *trigger_state(const struct engine_live_config *live, const char *id)
+{
+    int i;
+
+    if (!live || !live->macros)
+        return "-";
+    for (i = 0; i < live->macro_count; i++) {
+        uint16_t key = live->macros[i].trigger;
+
+        if (strcmp(live->macros[i].id, id) != 0)
+            continue;
+        if (!engine_can_trigger(key))
+            return "-";
+        return engine_fingers_down(&g.fingers, key) ? "down" : "up";
+    }
+    return "-";
+}
+
 static void log_notes(const struct engine_live_config *live)
 {
     int64_t freq;
@@ -1279,10 +1324,11 @@ static void log_notes(const struct engine_live_config *live)
             snprintf(line, sizeof line, "runner start macro=\"%s\" id=%s mode=%s reason=%s", name,
                      note->id, mode_name(note->mode), why);
         } else if (note->kind == ENGINE_NOTE_STOP) {
+            /* A stop with the trigger still down is the one to look at. */
             snprintf(line, sizeof line,
-                     "runner stop macro=\"%s\" id=%s mode=%s reason=%s age=%lldms", name,
+                     "runner stop macro=\"%s\" id=%s mode=%s reason=%s age=%lldms trigger=%s", name,
                      note->id, mode_name(note->mode), why,
-                     (long long)(note->age * 1000 / freq));
+                     (long long)(note->age * 1000 / freq), trigger_state(live, note->id));
         } else if (note->kind == ENGINE_NOTE_BLOCK) {
             snprintf(line, sizeof line, "start blocked macro=\"%s\" id=%s mode=%s reason=%s",
                      name, note->id, mode_name(note->mode), why);
@@ -1336,6 +1382,33 @@ static void log_unmatched(const struct engine_live_config *live)
         engine_log(line);
     }
     g.edge_fingers = now;
+}
+
+/* What else was seen while the keyboard hook was quiet. Raw Input still sees
+   keys a dropped hook misses, so a recent raw key means Windows removed the
+   hook. mouse_age is the mouse hook's last event, for context. */
+static void silence_detail(char *line, size_t cap, const struct engine_hook_watch_in *in,
+                           int64_t freq)
+{
+    int raw_ok = atomic_load_explicit(&g.raw.keys_ok, memory_order_acquire);
+    int64_t raw_at = (int64_t)atomic_load_explicit(&g.raw.key_at, memory_order_acquire);
+    int verdict = engine_silence_verdict(raw_ok, in->key_stamp, raw_at, freq);
+    char raw_age[32];
+    char mouse_age[32];
+    size_t used = strlen(line);
+
+    if (!raw_ok || raw_at <= 0 || in->now < raw_at)
+        snprintf(raw_age, sizeof raw_age, "-");
+    else
+        snprintf(raw_age, sizeof raw_age, "%lldms", (long long)((in->now - raw_at) * 1000 / freq));
+    if (in->mouse_stamp <= 0 || in->now < in->mouse_stamp)
+        snprintf(mouse_age, sizeof mouse_age, "-");
+    else
+        snprintf(mouse_age, sizeof mouse_age, "%lldms",
+                 (long long)((in->now - in->mouse_stamp) * 1000 / freq));
+    if (used < cap)
+        snprintf(line + used, cap - used, " raw=%s raw_key_age=%s mouse_age=%s verdict=%s",
+                 raw_ok ? "on" : "off", raw_age, mouse_age, engine_silence_name(verdict));
 }
 
 static void watch_hooks(int64_t now, int need_mouse, int switched)
@@ -1398,6 +1471,8 @@ static void watch_hooks(int64_t now, int need_mouse, int switched)
                  (mouse && !in.need_mouse) ? "remove" : "reinstall", reason,
                  g.live_name[0] ? g.live_name : "-",
                  g.live_id[0] ? g.live_id : "-", (long long)age);
+        if (!mouse && watch.silent)
+            silence_detail(line, sizeof line, &in, freq);
         engine_log(line);
     }
     if (watch.count > 0)
@@ -1505,8 +1580,13 @@ static void playback_tick(int64_t now)
     engine_profile_pick(image, focus.name, image ? image->active_id : "", &live);
     engine_play_set_macros(g.play, live.macros, live.macro_count);
     if (seq != g.profile_seq) {
+        char line[200];
+
         g.profile_seq = seq;
         engine_reap_orphans(g.play, &live);
+        snprintf(line, sizeof line, "profile push seq=%llu config=\"%s\" macros=%d",
+                 (unsigned long long)seq, live.name[0] ? live.name : "-", live.macro_count);
+        engine_log(line);
     }
     /* AHK sets liveId to Chr(1) on a profile, so SeedTriggers runs. prev is
        by macro index, and a new image can reorder or retrigger macros. */
@@ -1544,6 +1624,9 @@ static void playback_tick(int64_t now)
 
     apply_commands(now);
     watch_hooks(now, engine_live_needs_mouse(&live), switched);
+    /* Before the drain: a profile, reload or start seeds what was held up to
+       now. A press or release in this tick's events is still an edge. */
+    engine_trigger_seed_due(&g.triggers, &live, &g.fingers);
     drain_fingers(now, &live);
     log_unmatched(&live);
     reconcile_fingers();
@@ -1560,6 +1643,9 @@ static void playback_tick(int64_t now)
     if (g.armed)
         engine_poll_triggers(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner);
     engine_play_tick(g.play, now);
+    /* The pending start keeps the next slice short, so it plays within 1 ms. */
+    if (g.armed)
+        engine_trigger_owed(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner);
     redo_fingers(now);
     sync_raw(engine_live_needs_mouse(&live));
     log_notes(&live);
@@ -1840,6 +1926,7 @@ static int run_resident(const struct engine_args *args)
     g.lost.raw = &g.raw;
     engine_win_raw_open(&g.raw_win, &g.raw);
     g.raw_want = -1;
+    g.raw_keys_want = -1;
     g.raw_logged = ENGINE_RAW_OFF;
     engine_report_queue_init(&g.reports);
     g.play = (struct engine_play *)calloc(1, sizeof *g.play);
