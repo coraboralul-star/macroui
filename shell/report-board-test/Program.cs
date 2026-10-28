@@ -144,6 +144,18 @@ static class ReportBoardTest
         cal.Cancel();
         Expect(!cal.Swallows(0x7A), "cancel lets the key through");
 
+        Expect(TurnCalibrator.MouseButton(0x20B, 2u << 16) == (0x06, true) && TurnCalibrator.MouseButton(0x20C, 2u << 16) == (0x06, false),
+            "M5 down and up are VK_XBUTTON2");
+        Expect(TurnCalibrator.MouseButton(0x20B, 1u << 16) == (0x05, true) && TurnCalibrator.MouseButton(0x207, 0) == (0x04, true),
+            "M4 and middle map to their vks");
+        Expect(TurnCalibrator.MouseButton(0x201, 0).Vk == 0 && TurnCalibrator.MouseButton(0x200, 0).Vk == 0,
+            "left click and moves are not watched");
+        Expect(!TurnCalibrator.Usable(0x01) && !TurnCalibrator.Usable(0x02) && TurnCalibrator.Usable(0x06) && TurnCalibrator.IsMouse(0x06) && !TurnCalibrator.IsMouse(0x79),
+            "left and right click are refused, M5 uses the mouse hook");
+        cal.Arm(0x06);
+        var m5 = TurnCalibrator.MouseButton(0x20B, 2u << 16);
+        Expect(cal.Swallows(m5.Vk) && cal.Key(m5.Vk, m5.Down) == "turning", "M5 starts a calibration");
+
         var pieces = TurnCalibrator.Pieces(40000);
         Expect(pieces.Count == 3 && pieces[0] == 16000 && pieces[1] == 16000 && pieces[2] == 8000, "a test turn goes out in 16000 pieces");
         Expect(TurnCalibrator.Pieces(-100).Count == 1 && TurnCalibrator.Pieces(-100)[0] == -100, "pieces keep the sign");
