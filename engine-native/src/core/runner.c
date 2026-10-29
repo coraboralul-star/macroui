@@ -1052,7 +1052,7 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
             return ENGINE_ADV_CONT;
         if (runner->stopping)
             return ENGINE_ADV_CONT;
-        if (runner->trigger != 0 && finger_seen(play, runner->trigger) &&
+        if (!runner->one_pass && runner->trigger != 0 && finger_seen(play, runner->trigger) &&
             !trigger_down(runner, play))
             return ENGINE_ADV_CONT;
         if (!push_hold(runner, play, step))
@@ -1770,7 +1770,7 @@ static int finger_seen(const struct engine_play *play, uint16_t id)
 /* The runner's own trigger. Up after let_go, whatever the finger does. */
 static int trigger_down(const struct engine_runner *runner, const struct engine_play *play)
 {
-    if (!runner || runner->trigger == 0 || runner->let_go)
+    if (!runner || runner->trigger == 0 || runner->let_go || runner->one_pass)
         return 0;
     return finger_down(play, runner->trigger);
 }
@@ -2020,7 +2020,7 @@ static void note_hold_release(struct engine_runner *runner, const struct engine_
 {
     int i;
 
-    if (!runner || !play || !play->have_fingers)
+    if (!runner || !play || !play->have_fingers || runner->one_pass)
         return;
     if (runner->trigger == 0 || trigger_down(runner, play))
         return;
@@ -2660,7 +2660,7 @@ static const char *const k_why[ENGINE_WHY_COUNT] = {
     "finished", "release", "next-up", "scan-release", "edge-release", "toggle", "stop",
     "stop-all", "exclusive", "restart", "orphan", "frame-cap", "hold-cap", "ask-stop",
     "panic", "overflow", "command", "start", "playing", "held-press",
-    "uncalibrated"
+    "uncalibrated", "radial"
 };
 
 const char *engine_why_name(int why)
@@ -2743,6 +2743,14 @@ int engine_play_start_why(struct engine_play *play, const struct engine_macro *m
                           : ENGINE_WHY_ARENA_FULL);
     play->refused = ENGINE_WHY_NONE;
     engine_play_note(play, ENGINE_NOTE_START, id, why, mode, 0, 0, 0);
+    return 1;
+}
+
+int engine_play_start_pass(struct engine_play *play, const struct engine_macro *macro, int why)
+{
+    if (!engine_play_start_why(play, macro, ENGINE_MODE_ONCE, 0, why))
+        return 0;
+    play->pending[play->pending_count - 1].one_pass = 1;
     return 1;
 }
 

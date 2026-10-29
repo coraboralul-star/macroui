@@ -70,7 +70,9 @@
 #define ENGINE_WHY_HELD_PRESS 34
 /* A turn step in a config with no countsPer360. It sends nothing. */
 #define ENGINE_WHY_UNCALIBRATED 35
-#define ENGINE_WHY_COUNT 36
+/* A radial menu slot. One full pass, whatever the macro's play mode. */
+#define ENGINE_WHY_RADIAL 36
+#define ENGINE_WHY_COUNT 37
 
 #define ENGINE_NOTE_EDGE 1
 #define ENGINE_NOTE_START 2
@@ -305,6 +307,9 @@ struct engine_runner {
     /* A nextUp release drained a hold loop. The trigger counts as up for the
        rest of this runner: a re-press belongs to the next one (held-press). */
     int let_go;
+    /* A radial slot: the trigger is up from the start, and a hold loop still
+       plays its pass once. No release drains it. */
+    int one_pass;
     int released_now;
     int scan_wait;
     int done;
@@ -601,6 +606,10 @@ int engine_play_start_why(struct engine_play *play, const struct engine_macro *m
                           int mode_override, int restart, int why);
 int engine_play_start(struct engine_play *play, const struct engine_macro *macro,
                       int mode_override, int restart);
+
+/* Play once, start to end, whatever the macro's play mode. A live id is left
+   alone. 1 when a runner was queued. */
+int engine_play_start_pass(struct engine_play *play, const struct engine_macro *macro, int why);
 
 /* "edge", "arena-full", and so on. Never NULL. */
 const char *engine_why_name(int why);

@@ -2249,6 +2249,326 @@ static void check_hold_repress(void)
     free(doc);
 }
 
+/* One scripted input for the radial harness. KEY is a key or button through
+   the hook. RAW is a real mouse move for Raw Input. MOVE is a mouse move
+   through the hook. FRONT changes the app in front. DISARM is Stop. */
+#define RADIAL_KEY 0
+#define RADIAL_RAW 1
+#define RADIAL_MOVE 2
+#define RADIAL_FRONT 3
+#define RADIAL_DISARM 4
+
+struct radial_input {
+    int64_t at;
+    int kind;
+    uint16_t id;
+    int down;
+    int32_t dx;
+    int32_t dy;
+};
+
+struct radial_run {
+    int starts;
+    int one_pass;
+    int space;
+    int e;
+    int x;
+    int z;
+    /* The hook's answer for each input, in script order. */
+    int swallow[24];
+    /* "open rk keys", "select rk 2 played", "cancel rk no-slot", joined by "|". */
+    char notes[512];
+    int open_at_end;
+};
+
+static void radial_notes(struct engine_radial_state *st, struct radial_run *run)
+{
+    int i;
+
+    for (i = 0; i < st->note_count; i++) {
+        const struct engine_radial_note *n = &st->notes[i];
+        size_t used = strlen(run->notes);
+        char line[96];
+
+        if (n->kind == ENGINE_RADIAL_NOTE_OPEN)
+            snprintf(line, sizeof line, "open %s %s|", n->radial, engine_radial_mode_name(n->mode));
+        else if (n->kind == ENGINE_RADIAL_NOTE_SELECT)
+            snprintf(line, sizeof line, "select %s %d %s|", n->radial, n->slot + 1,
+                     engine_radial_why_name(n->why, n->mode));
+        else
+            snprintf(line, sizeof line, "cancel %s %s|", n->radial, engine_radial_why_name(n->why, n->mode));
+        if (used + strlen(line) < sizeof run->notes)
+            memcpy(run->notes + used, line, strlen(line) + 1);
+    }
+    st->note_count = 0;
+}
+
+/* playback_tick's radial order on fixtures/radial.json, one tick per ms:
+   drain, take the raw sum, move, poll the menu, poll triggers, tick, owed,
+   then publish the swallow map. Counts the output downs. */
+static struct radial_run radial_play(const char *doc, size_t n, const struct radial_input *script,
+                                     int count, int output, int64_t until)
+{
+    static struct engine_hook_state hooks;
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_radial_state radial;
+    struct engine_raw_mouse raw;
+    struct engine_profile_slot slot;
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    struct engine_finger_lost lost;
+    struct engine_hook_decision decision;
+    const struct engine_profile_image *image;
+    struct radial_run run;
+    const char *front = "game.exe";
+    int armed = 1;
+    int had[4] = { 0, 0, 0, 0 };
+    int64_t now;
+    int i;
+
+    memset(&run, 0, sizeof run);
+    if (!play)
+        return run;
+    engine_profile_slot_init(&slot);
+    if (engine_profile_slot_apply_document(&slot, doc, n) != 1) {
+        free(play);
+        return run;
+    }
+    image = engine_profile_slot_adopt(&slot);
+    engine_profile_pick(image, "game.exe", image->active_id, &live);
+    engine_hook_init(&hooks);
+    engine_raw_mouse_init(&raw);
+    engine_radial_init(&radial);
+    engine_play_init(play);
+    play->output.mode = output;
+    engine_play_set_macros(play, live.macros, live.macro_count);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    memset(&lost, 0, sizeof lost);
+    engine_arm_swallow_radial(&hooks, &live, front, "", armed, play, &radial);
+    for (now = 0; now < until; now++) {
+        struct engine_finger ev;
+        uint16_t want[32];
+        static const uint16_t keys[4] = { 0x20, 0x45, 0x58, 0x5A };
+        int downs[4] = { 0, 0, 0, 0 };
+        int32_t dx = 0;
+        int32_t dy = 0;
+        int got;
+
+        for (i = 0; i < count; i++) {
+            const struct radial_input *in = &script[i];
+            struct engine_hook_sample sample;
+
+            if (in->at != now)
+                continue;
+            memset(&decision, 0, sizeof decision);
+            if (in->kind == RADIAL_KEY) {
+                hook_event(&hooks, in->id, in->down, now, &decision);
+            } else if (in->kind == RADIAL_RAW) {
+                engine_raw_move(&raw, in->dx, in->dy);
+            } else if (in->kind == RADIAL_MOVE) {
+                memset(&sample, 0, sizeof sample);
+                sample.kind = ENGINE_HOOK_MOUSE;
+                sample.msg = ENGINE_MSG_MOUSEMOVE;
+                sample.now = now;
+                engine_hook_classify(&hooks, &sample, &decision);
+            } else if (in->kind == RADIAL_FRONT) {
+                front = in->down ? "game.exe" : "MacroShell.exe";
+            } else if (in->kind == RADIAL_DISARM) {
+                armed = 0;
+            }
+            if (i < (int)(sizeof run.swallow / sizeof run.swallow[0]))
+                run.swallow[i] = decision.swallow;
+        }
+        while (engine_event_pop(&hooks, &ev))
+            engine_finger_note(&fingers, ev.id, ev.down, &lost);
+        engine_play_set_fingers(play, &fingers);
+        engine_raw_take(&raw, &dx, &dy);
+        engine_radial_move(&radial, dx, dy);
+        engine_radial_poll(&radial, play, &live, &fingers, front, "", armed);
+        engine_raw_aim(&raw, engine_radial_wants_motion(&radial));
+        radial_notes(&radial, &run);
+        if (armed)
+            engine_poll_triggers_radial(play, &live, &mem, &fingers, front, "", &radial);
+        for (i = 0; i < play->pending_count; i++)
+            run.one_pass += play->pending[i].one_pass;
+        engine_play_tick(play, now);
+        if (armed)
+            engine_trigger_owed(play, &live, &mem, &fingers, front, "");
+        for (i = 0; i < play->note_count; i++) {
+            if (play->notes[i].kind == ENGINE_NOTE_START)
+                run.starts++;
+        }
+        play->note_count = 0;
+        got = engine_play_desired(play, now, want, 32);
+        for (i = 0; i < got; i++) {
+            int k;
+
+            for (k = 0; k < 4; k++)
+                downs[k] |= want[i] == keys[k];
+        }
+        run.space += downs[0] && !had[0];
+        run.e += downs[1] && !had[1];
+        run.x += downs[2] && !had[2];
+        run.z += downs[3] && !had[3];
+        for (i = 0; i < 4; i++)
+            had[i] = downs[i];
+        engine_arm_swallow_radial(&hooks, &live, front, "", armed, play, &radial);
+    }
+    run.open_at_end = radial.open;
+    engine_profile_slot_shutdown(&slot);
+    free(play);
+    return run;
+}
+
+#define K(at, id, down) { at, RADIAL_KEY, id, down, 0, 0 }
+#define RAW(at, dx, dy) { at, RADIAL_RAW, 0, 0, dx, dy }
+#define MOVE(at) { at, RADIAL_MOVE, 0, 0, 0, 0 }
+
+/* fixtures/radial.json is written by the UI (npm run check -- --write-fixture).
+   rk is a keys menu on t, rf a flick menu on y with click to pick. Slots:
+   1 Strat A (space, e), 2 Strat B (x), 3 Held C (While Held, space, e),
+   4 empty. Key one is a macro on 1. The AHK --self-test plays the same file. */
+#define T 0x54
+#define Y 0x59
+#define Q 0x51
+#define E 0x45
+#define ONE 0x31
+static void check_radial(void)
+{
+    static const int outputs[] = { ENGINE_OUTPUT_SOFTWARE, ENGINE_OUTPUT_RP2350 };
+    static const struct radial_input pick[] = { K(10, T, 1), K(30, 0x32, 1), K(50, 0x32, 0), K(80, T, 0) };
+    static const struct radial_input cycle[] = { K(10, T, 1), K(20, E, 1), K(25, E, 0), K(30, E, 1),
+                                                 K(35, E, 0), K(40, Q, 1), K(45, Q, 0), K(80, T, 0) };
+    static const struct radial_input nothing[] = { K(10, T, 1), K(80, T, 0) };
+    static const struct radial_input empty[] = { K(10, T, 1), K(30, 0x34, 1), K(40, 0x34, 0), K(80, T, 0) };
+    static const struct radial_input owned[] = { K(10, T, 1), K(30, ONE, 1), K(50, ONE, 0), K(80, T, 0),
+                                                 K(400, ONE, 1), K(420, ONE, 0) };
+    static const struct radial_input held[] = { K(10, T, 1), K(30, 0x33, 1), K(40, 0x33, 0), K(80, T, 0) };
+    static const struct radial_input twice[] = { K(10, T, 1), K(20, ONE, 1), K(25, ONE, 0), K(30, T, 0),
+                                                 K(60, T, 1), K(70, ONE, 1), K(75, ONE, 0), K(90, T, 0) };
+    static const struct radial_input flick[] = { K(10, Y, 1), MOVE(20), RAW(20, 0, -100), K(80, Y, 0), MOVE(100) };
+    static const struct radial_input dead[] = { K(10, Y, 1), RAW(20, 10, 10), K(80, Y, 0) };
+    static const struct radial_input back[] = { K(10, Y, 1), RAW(20, 0, -100), RAW(30, 0, 400), K(80, Y, 0) };
+    static const struct radial_input click[] = { K(10, Y, 1), RAW(20, 100, 0), K(40, ENGINE_KEY_LBUTTON, 1),
+                                                 K(50, ENGINE_KEY_LBUTTON, 0), K(80, Y, 0), K(200, ENGINE_KEY_LBUTTON, 1),
+                                                 K(210, ENGINE_KEY_LBUTTON, 0) };
+    static const struct radial_input focus[] = { K(10, T, 1), K(20, 0x32, 1), K(25, 0x32, 0),
+                                                 { 30, RADIAL_FRONT, 0, 0, 0, 0 }, K(80, T, 0) };
+    static const struct radial_input stop[] = { K(10, T, 1), K(20, 0x32, 1), K(25, 0x32, 0),
+                                                { 30, RADIAL_DISARM, 0, 0, 0, 0 }, K(80, T, 0) };
+    char label[160];
+    size_t n = 0;
+    char *doc = read_fixture(FIXTURE_DIR "/radial.json", &n);
+    struct radial_run run;
+    int o;
+
+#define RUN(script) radial_play(doc, n, script, (int)(sizeof script / sizeof script[0]), outputs[o], 700)
+#define SAY(text) (snprintf(label, sizeof label, "radial %s: %s", outputs[o] ? "board" : "software", text), label)
+    if (!doc) {
+        expect(0, "radial.json read");
+        return;
+    }
+    expect(engine_radial_slot_at(0, -100, 4, 40) == 0 && engine_radial_slot_at(100, 0, 4, 40) == 1 &&
+               engine_radial_slot_at(0, 100, 4, 40) == 2 && engine_radial_slot_at(-100, 0, 4, 40) == 3,
+           "radial: slot 1 is up, then clockwise");
+    expect(engine_radial_slot_at(20, -20, 4, 40) == -1, "radial: inside the dead zone is no slot");
+    expect(engine_radial_slot_at(100, -100, 8, 40) == 1 && engine_radial_slot_at(-100, -100, 8, 40) == 7,
+           "radial: 8 slots split the diagonals");
+    {
+        static const char later[] =
+            "{\"version\":1,\"name\":\"R\",\"activeId\":\"c\",\"configs\":[{\"id\":\"c\",\"name\":\"C\",\"macros\":["
+            "{\"id\":\"m\",\"enabled\":true,\"advanced\":true,\"trigger\":{\"kind\":\"key\",\"button\":\"g\"},"
+            "\"blocks\":[{\"type\":\"steps\",\"steps\":[{\"type\":\"key\",\"action\":\"tap\",\"key\":\"x\"}]}]}],"
+            "\"radials\":[{\"id\":\"a\",\"trigger\":{\"kind\":\"key\",\"button\":\"t\"},\"select\":\"auto\",\"slots\":[\"m\",\"gone\"]},"
+            "{\"id\":\"b\",\"trigger\":{\"kind\":\"key\",\"button\":\"g\"},\"slots\":[\"m\",\"\"]},"
+            "{\"id\":\"c\",\"trigger\":{\"kind\":\"mouse\",\"button\":\"LButton\"},\"slots\":[\"m\",\"\"]}]}],\"macros\":[]}";
+        struct engine_profile_slot slot;
+        struct engine_live_config live;
+        const struct engine_profile_image *image;
+
+        engine_profile_slot_init(&slot);
+        expect(engine_profile_slot_apply_document(&slot, later, sizeof later - 1) == 1, "radial: profile loads");
+        image = engine_profile_slot_adopt(&slot);
+        engine_profile_pick(image, "game.exe", image ? image->active_id : "", &live);
+        expect(live.radial_count == 3, "radial: the config keeps its menus");
+        expect(live.radial_count == 3 && engine_radial_mode(&live.radials[0], &live) == ENGINE_RADIAL_KEYS,
+               "radial: a select this engine does not know plays as keys");
+        expect(live.radial_count == 3 && live.radials[0].slot[0] == 0 && live.radials[0].slot[1] == -1,
+               "radial: a slot whose macro is gone is empty");
+        expect(live.radial_count == 3 && engine_radial_ready(&live.radials[0], &live) &&
+                   !engine_radial_ready(&live.radials[1], &live) && !engine_radial_ready(&live.radials[2], &live),
+               "radial: a trigger a macro uses, or left click, never opens a menu");
+        expect(engine_live_claims(&live, 0x54) && !engine_live_needs_mouse(&live),
+               "radial: a keys menu on t claims t and needs no mouse hook");
+        engine_profile_slot_shutdown(&slot);
+    }
+    for (o = 0; o < 2; o++) {
+        run = RUN(pick);
+        expect(strcmp(run.notes, "open rk keys|select rk 2 played|") == 0, SAY("2 lights slot 2, the release plays it"));
+        expect(run.starts == 1 && run.x == 1 && run.space == 0, SAY("slot 2 plays Strat B once"));
+        expect(run.swallow[0] && run.swallow[1] && run.swallow[3], SAY("the trigger and 2 are swallowed"));
+
+        run = RUN(cycle);
+        expect(strcmp(run.notes, "open rk keys|select rk 1 played|") == 0, SAY("next, next, previous lands on slot 1"));
+        expect(run.space == 1 && run.x == 0, SAY("slot 1 plays Strat A"));
+        expect(run.swallow[1] && run.swallow[5], SAY("the step keys are swallowed while open"));
+
+        run = RUN(nothing);
+        expect(strcmp(run.notes, "open rk keys|cancel rk no-slot|") == 0 && run.starts == 0,
+               SAY("a release with nothing picked plays nothing"));
+
+        run = RUN(empty);
+        expect(strcmp(run.notes, "open rk keys|cancel rk empty-slot|") == 0 && run.starts == 0,
+               SAY("an empty slot plays nothing"));
+
+        run = RUN(owned);
+        expect(strcmp(run.notes, "open rk keys|select rk 1 played|") == 0, SAY("1 picks slot 1 while open"));
+        expect(run.z == 1 && run.space == 1, SAY("the macro on 1 does not start while the menu is open, then does"));
+
+        run = RUN(held);
+        expect(strcmp(run.notes, "open rk keys|select rk 3 played|") == 0, SAY("slot 3 plays"));
+        expect(run.one_pass == 1 && run.space == 1 && run.e == 1, SAY("a While Held slot plays one full pass"));
+
+        run = RUN(twice);
+        expect(strcmp(run.notes, "open rk keys|select rk 1 played|open rk keys|select rk 1 playing|") == 0,
+               SAY("a slot macro that is still playing is not started again"));
+        expect(run.starts == 1 && run.space == 1, SAY("Strat A plays once"));
+
+        run = RUN(flick);
+        expect(strcmp(run.notes, "open rf flick|select rf 1 played|") == 0, SAY("a flick up picks slot 1"));
+        expect(run.swallow[1] && !run.swallow[4], SAY("a move is swallowed only while the flick menu is open"));
+
+        run = RUN(dead);
+        expect(strcmp(run.notes, "open rf flick|cancel rf dead-zone|") == 0 && run.starts == 0,
+               SAY("a release inside the dead zone cancels"));
+
+        run = RUN(back);
+        expect(strcmp(run.notes, "open rf flick|select rf 3 played|") == 0, SAY("a flick back turns at once: the reach is capped"));
+
+        run = RUN(click);
+        expect(strcmp(run.notes, "open rf flick|select rf 2 played|") == 0 && run.x == 1, SAY("a click picks the lit slot"));
+        expect(run.swallow[2] && run.swallow[3] && !run.swallow[5], SAY("left click is the menu's only while open"));
+
+        run = RUN(focus);
+        expect(strcmp(run.notes, "open rk keys|cancel rk focus|") == 0 && run.starts == 0,
+               SAY("the menu closes when the game loses focus"));
+
+        run = RUN(stop);
+        expect(strcmp(run.notes, "open rk keys|cancel rk stop|") == 0 && run.starts == 0 && !run.open_at_end,
+               SAY("Stop closes the menu"));
+    }
+#undef RUN
+#undef SAY
+#undef T
+#undef Y
+#undef Q
+#undef E
+#undef ONE
+    free(doc);
+}
+
 int main(void)
 {
     check_frames();
@@ -2274,6 +2594,7 @@ int main(void)
     check_notes();
     check_create_paths();
     check_hold_repress();
+    check_radial();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

@@ -222,6 +222,9 @@ PhysKeyProc(nCode, wParam, lParam) {
 
 PhysMouseProc(nCode, wParam, lParam) {
     block := false
+    if (nCode >= 0 && wParam = 0x200 && Engine.hMouseHook && Engine.RadialWantsMotion()
+        && !(NumGet(lParam, 12, "UInt") & 0x03) && NumGet(lParam, A_PtrSize = 8 ? 24 : 20, "Ptr") != Engine.echo)
+        return 1
     ; Movement and the wheel are not triggers. Handling them here cuts the mouse rate.
     if (nCode >= 0 && Engine.hMouseHook && wParam != 0x200 && wParam != 0x20A && wParam != 0x20E) {
         Engine.mouseHookTick := A_TickCount
@@ -455,6 +458,9 @@ class Runner {
         ; A nextUp release drained a hold loop. The trigger counts as up for the
         ; rest of this runner: a re-press belongs to the next one (held-press).
         this.letGo := false
+        ; A radial slot: the trigger is up from the start, and a hold loop still
+        ; plays its pass once. No release drains it.
+        this.onePass := false
         this.releasedNow := false
         ; Why it ended, for the runner stop line. The first reason wins.
         this.endWhy := ""
@@ -501,7 +507,7 @@ class Runner {
     }
 
     NoteHoldRelease() {
-        if (this.trigger = "" || this.TriggerDown())
+        if (this.onePass || this.trigger = "" || this.TriggerDown())
             return
         if (this.StopMode() != "nextUp")
             return
@@ -520,11 +526,11 @@ class Runner {
 
     ; The runner's own trigger. Up after letGo, whatever the finger does.
     TriggerDown() {
-        return !this.letGo && Engine.KeyDown(this.trigger)
+        return !this.letGo && !this.onePass && Engine.KeyDown(this.trigger)
     }
 
     TriggerFinger() {
-        return !this.letGo && Engine.FingerDown(this.trigger)
+        return !this.letGo && !this.onePass && Engine.FingerDown(this.trigger)
     }
 
     StopMode() {
@@ -923,7 +929,7 @@ class Runner {
         if (kind = "holdLoop") {
             if this.stopping
                 return ""
-            if (this.trigger != "" && Engine.physDown.Has(this.trigger) && !this.TriggerDown())
+            if (!this.onePass && this.trigger != "" && Engine.physDown.Has(this.trigger) && !this.TriggerDown())
                 return ""
             this.PushHoldFrame(step)
             return ""
@@ -1351,6 +1357,18 @@ class Engine {
     ; A whileHeld press refused while the last runner was finishing. Starts
     ; as held-press once that runner is gone, if the key is still down.
     static owed := Map()
+    ; The radial menu. radialLit is 1-based, 0 is none.
+    static radialOpen := false
+    static radialMenu := Map()
+    static radialMode := "keys"
+    static radialLit := 0
+    static radialDx := 0
+    static radialDy := 0
+    static radialPrev := Map()
+    static radialKeyPrev := Map()
+    static radialClickPrev := false
+    static radialBlocked := Map()
+    static radialSeed := true
     static liveName := ""
     static profile := Map()
     static liveId := ""
@@ -1550,7 +1568,7 @@ class Engine {
         for key, _ in this.hooks
             if IsMouseButton(key)
                 return true
-        return false
+        return this.armed && this.RadialNeedsMouse()
     }
 
     ; Unhook first. A handle Windows already removed still looks valid, and
@@ -1654,6 +1672,11 @@ class Engine {
         }
         if (kind != 0)
             return
+        if this.RadialWantsMotion() && !(NumGet(buf, head, "UShort") & 0x01) {
+            device := NumGet(buf, 8, "Ptr")
+            if (device && !this.RawIsBoard(device))
+                this.RadialMove(NumGet(buf, head + 12, "Int"), NumGet(buf, head + 16, "Int"))
+        }
         flags := NumGet(buf, head + 4, "UShort")
         this.NoteRaw(NumGet(buf, 8, "Ptr"), flags)
     }
@@ -1753,7 +1776,8 @@ class Engine {
             return false
         if this.MatchHidEcho(name, !up)
             return false
-        return this.NoteHooked(name, !up)
+        block := this.NoteHooked(name, !up)
+        return this.RadialSwallow(name, !up) || block
     }
 
     ; Windows auto-repeat, or a second side-button down, while the finger is down.
@@ -1825,7 +1849,7 @@ class Engine {
         ; Left and right are never triggers. Their clicks always reach the game.
         if (name = "LButton" || name = "RButton") {
             this.NotePhysical(name, down)
-            return false
+            return name = "LButton" && this.RadialClick(down)
         }
         return this.NoteHooked(name, down)
     }
@@ -1960,6 +1984,7 @@ class Engine {
             this.SyncHooks()
             this.hooksDirty := false
         }
+        this.PollRadial()
         if this.armed
             this.PollTriggers()
         else
@@ -2062,10 +2087,13 @@ class Engine {
             if !(macros is Array)
                 macros := []
             this.profile["macros"] := macros
+            radials := Field(pick, "radials", [])
+            this.profile["radials"] := (radials is Array) ? radials : []
             this.profile["focusExe"] := String(Field(pick, "focusExe", ""))
             this.profile["activeId"] := id
         } else {
             this.profile["macros"] := []
+            this.profile["radials"] := []
             this.profile["focusExe"] := ""
         }
         this.SeedTriggers(true)
@@ -2743,6 +2771,7 @@ class Engine {
     ; A new or changed trigger, and a start, read the finger now: a key held
     ; before that does not start.
     static SeedTriggers(keep := false) {
+        this.radialSeed := true
         old := this.prevDown
         oldButton := this.prevButton
         this.prevDown := Map()
@@ -2774,9 +2803,334 @@ class Engine {
     static PollPanic() {
         down := false
         try down := GetKeyState("Pause", "P")
-        if (down && !this.panicWas)
+        if (down && !this.panicWas) {
             this.StopAll()
+            this.RadialCancel("stop")
+        }
         this.panicWas := down
+    }
+
+    ; Radial macro menu (#97), like engine-native/src/core/radial.c. Hold the
+    ; trigger to open, pick a slot, release to play that slot's macro once.
+    ; One open menu at a time. Every way it ends goes through RadialClose.
+    ; The mode is chosen once, at open, by RadialMode. Flick reads a vector:
+    ; RadialMove adds raw mouse counts.
+    static RadialList() {
+        list := Field(this.profile, "radials", [])
+        return (list is Array) ? list : []
+    }
+
+    static RadialTrigger(radial) {
+        trig := Field(radial, "trigger", Map())
+        key := NormKey((trig is Map) ? String(Field(trig, "button", "")) : "")
+        return (key = "LButton" || key = "RButton" || key = "Pause") ? "" : key
+    }
+
+    static RadialStepKey(radial, name, fallback) {
+        key := NormKey(String(Field(radial, name, "")))
+        return key = "" ? fallback : key
+    }
+
+    ; 1 to 8, then previous and next.
+    static RadialKeys(radial) {
+        keys := ["1", "2", "3", "4", "5", "6", "7", "8"]
+        keys.Push(this.RadialStepKey(radial, "prevKey", "q"), this.RadialStepKey(radial, "nextKey", "e"))
+        return keys
+    }
+
+    static MacroOn(macro) {
+        if !(macro is Map) || !Field(macro, "enabled", true)
+            return false
+        steps := Field(macro, "steps", [])
+        blocks := Field(macro, "blocks", [])
+        return ((steps is Array) && steps.Length > 0) || (Field(macro, "advanced", false) && (blocks is Array) && blocks.Length > 0)
+    }
+
+    ; The slot's macro, or "" for empty, gone, or disabled.
+    static RadialSlotMacro(radial, slot) {
+        slots := Field(radial, "slots", [])
+        if !(slots is Array) || slot < 1 || slot > Min(slots.Length, 8)
+            return ""
+        macro := this.FindMacro(String(slots[slot]))
+        return this.MacroOn(macro) ? macro : ""
+    }
+
+    static RadialSlotCount(radial) {
+        slots := Field(radial, "slots", [])
+        return Max(2, Min(8, (slots is Array) ? slots.Length : 0))
+    }
+
+    ; Enabled, a trigger, no enabled macro with steps on that trigger, and a macro in a slot.
+    static RadialReady(radial) {
+        if !(radial is Map) || !Field(radial, "enabled", true)
+            return false
+        key := this.RadialTrigger(radial)
+        if (key = "")
+            return false
+        macros := Field(this.profile, "macros", [])
+        if (macros is Array) {
+            for macro in macros {
+                trig := (macro is Map) ? Field(macro, "trigger", Map()) : ""
+                if (this.MacroOn(macro) && (trig is Map) && NormKey(String(Field(trig, "button", ""))) = key)
+                    return false
+            }
+        }
+        loop this.RadialSlotCount(radial)
+            if (this.RadialSlotMacro(radial, A_Index) != "")
+                return true
+        return false
+    }
+
+    ; #100 picks flick with camera lock and auto here. A select this engine does not know is keys.
+    static RadialModeOf(radial) {
+        return String(Field(radial, "select", "keys")) = "flick" ? "flick" : "keys"
+    }
+
+    static RadialDeadZone(radial) {
+        dead := Round(AsNum(Field(radial, "deadZone", 40), 40))
+        return dead >= 1 ? dead : 40
+    }
+
+    ; 1-based slot, clockwise from straight up. 0 inside the dead zone.
+    static RadialSlotAt(dx, dy, count, dead) {
+        if (count <= 0 || dx * dx + dy * dy <= dead * dead)
+            return 0
+        angle := DllCall("msvcrt\atan2", "Double", dx, "Double", -dy, "Cdecl Double") * 180 / 3.14159265358979323846
+        if (angle < 0)
+            angle += 360
+        width := 360 / count
+        return Mod(Floor((angle + width / 2) / width), count) + 1
+    }
+
+    static RadialNeedsMouse() {
+        for radial in this.RadialList()
+            if (this.RadialReady(radial) && (IsMouseButton(this.RadialTrigger(radial)) || this.RadialModeOf(radial) = "flick"))
+                return true
+        return false
+    }
+
+    static RadialHookKeys() {
+        keys := []
+        for radial in this.RadialList()
+            if this.RadialReady(radial)
+                keys.Push(this.RadialTrigger(radial))
+        return keys
+    }
+
+    ; While a menu is open, this key is the menu's: a macro on it does not start.
+    static RadialOwns(key) {
+        if (!this.radialOpen || key = "")
+            return false
+        if (key = this.RadialTrigger(this.radialMenu))
+            return true
+        if (key = "LButton")
+            return this.RadialWantsClick()
+        if (this.radialMode != "keys")
+            return false
+        for k in this.RadialKeys(this.radialMenu)
+            if (k = key)
+                return true
+        return false
+    }
+
+    static RadialWantsMotion() {
+        return this.radialOpen && this.radialMode = "flick"
+    }
+
+    static RadialWantsClick() {
+        return this.RadialWantsMotion() && Field(this.radialMenu, "clickSelect", false)
+    }
+
+    ; The LL key hook, for software and the board. A down the open menu owns is
+    ; swallowed, and so is the up of a down it swallowed.
+    static RadialSwallow(name, down) {
+        if !down {
+            if !this.radialBlocked.Has(name)
+                return false
+            this.radialBlocked.Delete(name)
+            return true
+        }
+        if (name = this.RadialTrigger(this.radialMenu) || !this.RadialOwns(name) || !this.SwallowTriggers())
+            return false
+        this.radialBlocked[name] := true
+        return true
+    }
+
+    ; Left click picks while a flick menu with click to pick is open. Its up
+    ; follows its down.
+    static RadialClick(down) {
+        if !down {
+            if !this.radialBlocked.Has("LButton")
+                return false
+            this.radialBlocked.Delete("LButton")
+            return true
+        }
+        if !this.RadialWantsClick()
+            return false
+        this.radialBlocked["LButton"] := true
+        return true
+    }
+
+    ; Raw mouse counts from a real mouse. Only an open flick menu uses them.
+    static RadialMove(dx, dy) {
+        if !this.RadialWantsMotion()
+            return
+        this.radialDx += dx
+        this.radialDy += dy
+        dead := this.RadialDeadZone(this.radialMenu)
+        reach := dead * 3
+        len := Sqrt(this.radialDx * this.radialDx + this.radialDy * this.radialDy)
+        if (len > reach) {
+            this.radialDx := Round(this.radialDx * reach / len)
+            this.radialDy := Round(this.radialDy * reach / len)
+        }
+        this.radialLit := this.RadialSlotAt(this.radialDx, this.radialDy, this.RadialSlotCount(this.radialMenu), dead)
+    }
+
+    static RadialFind(id) {
+        for radial in this.RadialList()
+            if (radial is Map && String(Field(radial, "id", "")) = id)
+                return radial
+        return ""
+    }
+
+    static RadialLine(kind, why, slot := 0, macro := "") {
+        menu := this.radialMenu
+        name := Field(menu, "name", "")
+        id := Field(menu, "id", "")
+        if (kind = "open")
+            this.Log(Format('radial open menu="{}" id={} mode={} slots={}', name, id, this.radialMode, this.RadialSlotCount(menu)))
+        else if (kind = "select")
+            this.Log(Format('radial select menu="{}" id={} slot={} macro="{}" macro_id={} result={}', name, id, slot,
+                Field(macro, "name", ""), Field(macro, "id", ""), why))
+        else
+            this.Log(Format('radial cancel menu="{}" id={} mode={} reason={}', name, id, this.radialMode, why))
+    }
+
+    ; The one way out. #100's camera lock lets go here too.
+    static RadialClose(kind, why, slot := 0, macro := "") {
+        if !this.radialOpen
+            return
+        this.RadialLine(kind, why, slot, macro)
+        this.radialOpen := false
+        this.radialLit := 0
+        this.radialDx := 0
+        this.radialDy := 0
+    }
+
+    static RadialCancel(why) {
+        this.RadialClose("cancel", why)
+    }
+
+    ; One full pass, whatever the macro's play mode. Not again while it plays.
+    static RadialSelect() {
+        slot := this.radialLit
+        if (slot <= 0)
+            return this.RadialClose("cancel", this.radialMode = "flick" ? "dead-zone" : "no-slot")
+        macro := this.RadialSlotMacro(this.radialMenu, slot)
+        if (macro = "")
+            return this.RadialClose("cancel", "empty-slot")
+        id := String(Field(macro, "id", ""))
+        if (this.HasRunner(id) || this.HasPending(id))
+            return this.RadialClose("select", "playing", slot, macro)
+        ok := this.StartRunner(macro, "once", false, "radial")
+        if ok
+            this.pending[-1].onePass := true
+        this.RadialClose("select", ok ? "played" : "refused", slot, macro)
+    }
+
+    static RadialSeedNow() {
+        this.radialPrev := Map()
+        for radial in this.RadialList()
+            if (radial is Map)
+                this.radialPrev[String(Field(radial, "id", ""))] := this.KeyDown(this.RadialTrigger(radial))
+        this.radialKeyPrev := Map()
+        if this.radialOpen
+            for k in this.RadialKeys(this.radialMenu)
+                this.radialKeyPrev[k] := this.KeyDown(k)
+        this.radialClickPrev := this.FingerDown("LButton")
+        this.radialSeed := false
+    }
+
+    static RadialShow(radial) {
+        this.radialOpen := true
+        this.radialMenu := radial
+        this.radialMode := this.RadialModeOf(radial)
+        this.radialLit := 0
+        this.radialDx := 0
+        this.radialDy := 0
+        ; A key already down when the menu opens is not a pick.
+        this.radialKeyPrev := Map()
+        for k in this.RadialKeys(radial)
+            this.radialKeyPrev[k] := this.KeyDown(k)
+        this.radialClickPrev := this.FingerDown("LButton")
+        this.RadialLine("open", "")
+    }
+
+    static RadialReadKeys() {
+        count := this.RadialSlotCount(this.radialMenu)
+        keys := this.RadialKeys(this.radialMenu)
+        for i, k in keys {
+            down := this.KeyDown(k)
+            was := this.radialKeyPrev.Has(k) && this.radialKeyPrev[k]
+            this.radialKeyPrev[k] := down
+            if (!down || was || this.radialMode != "keys")
+                continue
+            if (i <= 8) {
+                if (i <= count)
+                    this.radialLit := i
+            } else if (i = 9) {
+                this.radialLit := this.radialLit <= 1 ? count : this.radialLit - 1
+            } else {
+                this.radialLit := (this.radialLit <= 0 || this.radialLit >= count) ? 1 : this.radialLit + 1
+            }
+        }
+    }
+
+    ; Before PollTriggers, like engine_radial_poll.
+    static PollRadial() {
+        if !this.armed {
+            this.RadialCancel("stop")
+            this.RadialSeedNow()
+            return
+        }
+        focusOk := this.SwallowTriggers()
+        if this.radialOpen {
+            now := this.RadialFind(String(Field(this.radialMenu, "id", "")))
+            if (now = "" || !this.RadialReady(now))
+                this.RadialCancel((now != "" && !Field(now, "enabled", true)) ? "disabled" : "profile")
+            else if !focusOk
+                this.RadialCancel("focus")
+            else
+                this.radialMenu := now
+        }
+        if this.radialSeed {
+            this.RadialSeedNow()
+            if (this.radialOpen && !this.KeyDown(this.RadialTrigger(this.radialMenu)))
+                this.RadialSelect()
+            return
+        }
+        if this.radialOpen {
+            click := this.FingerDown("LButton")
+            clicked := click && !this.radialClickPrev
+            this.radialClickPrev := click
+            this.RadialReadKeys()
+            if (clicked && this.RadialWantsClick())
+                this.RadialSelect()
+            else if !this.KeyDown(this.RadialTrigger(this.radialMenu))
+                this.RadialSelect()
+        }
+        for radial in this.RadialList() {
+            if !(radial is Map)
+                continue
+            id := String(Field(radial, "id", ""))
+            down := this.KeyDown(this.RadialTrigger(radial))
+            was := this.radialPrev.Has(id) && this.radialPrev[id]
+            this.radialPrev[id] := down
+            if (this.radialOpen || !down || was || !focusOk || !this.RadialReady(radial))
+                continue
+            this.RadialShow(radial)
+        }
     }
 
     static PollTriggers() {
@@ -2802,6 +3156,8 @@ class Engine {
             if (!down && this.owed.Has(id))
                 this.owed.Delete(id)
             key := NormKey(button)
+            if this.RadialOwns(key)
+                continue
             ; A repeat left physDown true, so it is not an edge. One line per hold.
             if (key != "" && down && this.repeatSeen.Has(key) && !this.repeatLogged.Has(key)) {
                 this.repeatLogged[key] := true
@@ -3077,6 +3433,8 @@ class Engine {
                     want[key] := true
                 }
             }
+            for key in this.RadialHookKeys()
+                want[key] := true
         }
         for key, _ in this.hooks.Clone() {
             if want.Has(key)
@@ -5095,6 +5453,7 @@ RunChecks(fails) {
     fails := SoakChecks(fails)
     fails := CreatePathChecks(fails)
     fails := HoldRepressChecks(fails)
+    fails := RadialChecks(fails)
     fails := TurnChecks(fails)
     return fails
 }
@@ -5645,6 +6004,7 @@ TestTick(now) {
     started := 0
     Engine.sendNow := Map()
     Engine.focusCache := Map()
+    Engine.PollRadial()
     Engine.PollTriggers()
     Engine.RemoveDone()
     started += Engine.pending.Length
@@ -5918,6 +6278,192 @@ HoldRepressChecks(fails) {
         }
     }
     return fails
+}
+
+; engine-native\tests\fixtures\radial.json is written by the UI. rk is a keys
+; menu on t, rf a flick menu on y with click to pick. Slots: 1 Strat A
+; (space, e), 2 Strat B (x), 3 Held C (While Held, space, e), 4 empty. Key one
+; is a macro on 1. engine-command-test check_radial plays the same scripts.
+RadialChecks(fails) {
+    text := ""
+    try text := FileRead(A_ScriptDir "\..\engine-native\tests\fixtures\radial.json", "UTF-8")
+    if (text = "")
+        return Check(false, "radial.json readable", fails)
+    config := JSON.Parse(text)["configs"][1]
+    ; [ms, kind, key, down, dx, dy]. kind: key, raw, move, front, disarm.
+    pick := [[10, "key", "t", 1], [30, "key", "2", 1], [50, "key", "2", 0], [80, "key", "t", 0]]
+    cycle := [[10, "key", "t", 1], [20, "key", "e", 1], [25, "key", "e", 0], [30, "key", "e", 1],
+        [35, "key", "e", 0], [40, "key", "q", 1], [45, "key", "q", 0], [80, "key", "t", 0]]
+    nothing := [[10, "key", "t", 1], [80, "key", "t", 0]]
+    empty := [[10, "key", "t", 1], [30, "key", "4", 1], [40, "key", "4", 0], [80, "key", "t", 0]]
+    owned := [[10, "key", "t", 1], [30, "key", "1", 1], [50, "key", "1", 0], [80, "key", "t", 0],
+        [400, "key", "1", 1], [420, "key", "1", 0]]
+    held := [[10, "key", "t", 1], [30, "key", "3", 1], [40, "key", "3", 0], [80, "key", "t", 0]]
+    twice := [[10, "key", "t", 1], [20, "key", "1", 1], [25, "key", "1", 0], [30, "key", "t", 0],
+        [60, "key", "t", 1], [70, "key", "1", 1], [75, "key", "1", 0], [90, "key", "t", 0]]
+    flick := [[10, "key", "y", 1], [20, "move"], [20, "raw", "", 0, 0, -100], [80, "key", "y", 0], [100, "move"]]
+    dead := [[10, "key", "y", 1], [20, "raw", "", 0, 10, 10], [80, "key", "y", 0]]
+    back := [[10, "key", "y", 1], [20, "raw", "", 0, 0, -100], [30, "raw", "", 0, 0, 400], [80, "key", "y", 0]]
+    click := [[10, "key", "y", 1], [20, "raw", "", 0, 100, 0], [40, "key", "LButton", 1],
+        [50, "key", "LButton", 0], [80, "key", "y", 0], [200, "key", "LButton", 1], [210, "key", "LButton", 0]]
+    focus := [[10, "key", "t", 1], [20, "key", "2", 1], [25, "key", "2", 0], [30, "front"], [80, "key", "t", 0]]
+    stop := [[10, "key", "t", 1], [20, "key", "2", 1], [25, "key", "2", 0], [30, "disarm"], [80, "key", "t", 0]]
+    for output in ["software", "rp2350"] {
+        run := RadialPlay(config, pick, output)
+        fails := Check(run["notes"] = "open rk keys|select rk 2 played|", RadialSay(output, "2 lights slot 2, the release plays it"), fails)
+        fails := Check(run["starts"] = 1 && run["x"] = 1 && run["space"] = 0, RadialSay(output, "slot 2 plays Strat B once"), fails)
+        fails := Check(run["swallow"][1] && run["swallow"][2] && run["swallow"][4], RadialSay(output, "the trigger and 2 are swallowed"), fails)
+
+        run := RadialPlay(config, cycle, output)
+        fails := Check(run["notes"] = "open rk keys|select rk 1 played|", RadialSay(output, "next, next, previous lands on slot 1"), fails)
+        fails := Check(run["space"] = 1 && run["x"] = 0, RadialSay(output, "slot 1 plays Strat A"), fails)
+        fails := Check(run["swallow"][2] && run["swallow"][6], RadialSay(output, "the step keys are swallowed while open"), fails)
+
+        run := RadialPlay(config, nothing, output)
+        fails := Check(run["notes"] = "open rk keys|cancel rk no-slot|" && run["starts"] = 0, RadialSay(output, "a release with nothing picked plays nothing"), fails)
+
+        run := RadialPlay(config, empty, output)
+        fails := Check(run["notes"] = "open rk keys|cancel rk empty-slot|" && run["starts"] = 0, RadialSay(output, "an empty slot plays nothing"), fails)
+
+        run := RadialPlay(config, owned, output)
+        fails := Check(run["notes"] = "open rk keys|select rk 1 played|", RadialSay(output, "1 picks slot 1 while open"), fails)
+        fails := Check(run["z"] = 1 && run["space"] = 1, RadialSay(output, "the macro on 1 does not start while the menu is open, then does"), fails)
+
+        run := RadialPlay(config, held, output)
+        fails := Check(run["notes"] = "open rk keys|select rk 3 played|", RadialSay(output, "slot 3 plays"), fails)
+        fails := Check(run["space"] = 1 && run["e"] = 1 && !run["alive"], RadialSay(output, "a While Held slot plays one full pass"), fails)
+
+        run := RadialPlay(config, twice, output)
+        fails := Check(run["notes"] = "open rk keys|select rk 1 played|open rk keys|select rk 1 playing|", RadialSay(output, "a slot macro that is still playing is not started again"), fails)
+        fails := Check(run["starts"] = 1 && run["space"] = 1, RadialSay(output, "Strat A plays once"), fails)
+
+        run := RadialPlay(config, flick, output)
+        fails := Check(run["notes"] = "open rf flick|select rf 1 played|", RadialSay(output, "a flick up picks slot 1"), fails)
+        fails := Check(run["swallow"][2] && !run["swallow"][5], RadialSay(output, "a move is swallowed only while the flick menu is open"), fails)
+
+        run := RadialPlay(config, dead, output)
+        fails := Check(run["notes"] = "open rf flick|cancel rf dead-zone|" && run["starts"] = 0, RadialSay(output, "a release inside the dead zone cancels"), fails)
+
+        run := RadialPlay(config, back, output)
+        fails := Check(run["notes"] = "open rf flick|select rf 3 played|", RadialSay(output, "a flick back turns at once: the reach is capped"), fails)
+
+        run := RadialPlay(config, click, output)
+        fails := Check(run["notes"] = "open rf flick|select rf 2 played|" && run["x"] = 1, RadialSay(output, "a click picks the lit slot"), fails)
+        fails := Check(run["swallow"][3] && run["swallow"][4] && !run["swallow"][6], RadialSay(output, "left click is the menu's only while open"), fails)
+
+        run := RadialPlay(config, focus, output)
+        fails := Check(run["notes"] = "open rk keys|cancel rk focus|" && run["starts"] = 0, RadialSay(output, "the menu closes when the game loses focus"), fails)
+
+        run := RadialPlay(config, stop, output)
+        fails := Check(run["notes"] = "open rk keys|cancel rk stop|" && run["starts"] = 0 && !run["open"], RadialSay(output, "Stop closes the menu"), fails)
+    }
+    fails := Check(Engine.RadialSlotAt(0, -100, 4, 40) = 1 && Engine.RadialSlotAt(100, 0, 4, 40) = 2
+        && Engine.RadialSlotAt(0, 100, 4, 40) = 3 && Engine.RadialSlotAt(-100, 0, 4, 40) = 4, "radial: slot 1 is up, then clockwise", fails)
+    fails := Check(Engine.RadialSlotAt(20, -20, 4, 40) = 0, "radial: inside the dead zone is no slot", fails)
+    fails := Check(Engine.RadialSlotAt(100, -100, 8, 40) = 2 && Engine.RadialSlotAt(-100, -100, 8, 40) = 8, "radial: 8 slots split the diagonals", fails)
+    fails := Check(Engine.RadialModeOf(Map("select", "auto")) = "keys", "radial: a select this engine does not know plays as keys", fails)
+    return fails
+}
+
+RadialSay(output, label) {
+    return "radial " (output = "software" ? "software" : "board") ": " label
+}
+
+; One tick per ms in TestTick's order, publishing like the real loop. Counts
+; starts and the space, e, x and z downs sent. notes is the radial log, short.
+RadialPlay(config, script, output) {
+    saved := Map("rawOk", Engine.rawOk, "mouse", Engine.hMouseHook, "out", Engine.outputMode, "armed", Engine.armed,
+        "profile", Engine.profile, "known", Engine.frontKnown, "front", Engine.frontExe, "dry", Engine.dry)
+    Engine.BuildVkMap()
+    Engine.dry := true
+    Engine.rawOk := true
+    Engine.hMouseHook := 1
+    Engine.armed := true
+    Engine.frontKnown := true
+    Engine.frontExe := "game.exe"
+    Engine.hidEcho := []
+    Engine.outputMode := output
+    Engine.profile := Map("macros", config["macros"], "radials", config["radials"])
+    Engine.hooks := Map("t", true, "y", true, "1", true)
+    Engine.physDown := Map()
+    Engine.lastSwallow := Map()
+    Engine.repeatSeen := Map()
+    Engine.repeatLogged := Map()
+    Engine.rawOn := true
+    Engine.rawUpCount := Map()
+    Engine.rawAtDown := Map()
+    Engine.redo := Map()
+    Engine.sent := []
+    Engine.applied := Map()
+    Engine.radialOpen := false
+    Engine.radialBlocked := Map()
+    Engine.capture := []
+    Engine.SeedTriggers()
+    swallow := []
+    for item in script
+        swallow.Push(false)
+    move := Buffer(A_PtrSize = 8 ? 32 : 24, 0)
+    starts := 0
+    now := 0
+    while (now < 700) {
+        for i, item in script {
+            if (item[1] != now)
+                continue
+            kind := item[2]
+            ; Software swallows a hooked trigger with its $* hotkey, the board in the LL hook.
+            if (kind = "key")
+                swallow[i] := TestTrigger(item[3], item[4]) || (output = "software" && Engine.TriggerSwallowed(item[3]))
+            else if (kind = "raw")
+                Engine.RadialMove(item[5], item[6])
+            else if (kind = "move")
+                swallow[i] := PhysMouseProc(0, 0x200, move.Ptr) = 1
+            else if (kind = "front")
+                Engine.frontExe := "MacroShell.exe"
+            else if (kind = "disarm")
+                Engine.armed := false
+        }
+        starts += TestTick(now)
+        Engine.Publish(now)
+        now++
+    }
+    counts := Map("space", 0, "e", 0, "x", 0, "z", 0)
+    for item in Engine.sent
+        for k in item["down"]
+            if counts.Has(k)
+                counts[k] += 1
+    notes := ""
+    for line in Engine.capture {
+        if RegExMatch(line, '^radial open .* id=(\S+) mode=(\S+)', &m)
+            notes .= "open " m[1] " " m[2] "|"
+        else if RegExMatch(line, '^radial select .* id=(\S+) slot=(\d+) .* result=(\S+)', &m)
+            notes .= "select " m[1] " " m[2] " " m[3] "|"
+        else if RegExMatch(line, '^radial cancel .* id=(\S+) mode=\S+ reason=(\S+)', &m)
+            notes .= "cancel " m[1] " " m[2] "|"
+    }
+    alive := Engine.runners.Length > 0
+    open := Engine.radialOpen
+    Engine.capture := ""
+    Engine.RadialCancel("stop")
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.sent := []
+    Engine.applied := Map()
+    Engine.hooks := Map()
+    Engine.physDown := Map()
+    Engine.lastSwallow := Map()
+    Engine.repeatSeen := Map()
+    Engine.repeatLogged := Map()
+    Engine.radialBlocked := Map()
+    Engine.rawOk := saved["rawOk"]
+    Engine.hMouseHook := saved["mouse"]
+    Engine.outputMode := saved["out"]
+    Engine.armed := saved["armed"]
+    Engine.profile := saved["profile"]
+    Engine.frontKnown := saved["known"]
+    Engine.frontExe := saved["front"]
+    Engine.dry := saved["dry"]
+    return Map("starts", starts, "notes", notes, "swallow", swallow, "alive", alive, "open", open,
+        "space", counts["space"], "e", counts["e"], "x", counts["x"], "z", counts["z"])
 }
 
 ; One trigger, one tick per ms, publishing like the real loop. edges are

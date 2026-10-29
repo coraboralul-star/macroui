@@ -22,6 +22,7 @@
 #include "output_win.h"
 #include "process.h"
 #include "profile.h"
+#include "radial.h"
 #include "raw_win.h"
 #include "version.h"
 #include "win_entry.h"
@@ -98,6 +99,7 @@ struct engine_resident {
     struct engine_play *play;
     struct engine_cmd_ring cmds;
     struct engine_trigger_mem triggers;
+    struct engine_radial_state radial;
     struct engine_claim_mem claims;
     int output_changed;
     struct engine_fingers edge_fingers;
@@ -801,6 +803,7 @@ static void apply_commands(int64_t now)
                 engine_log("armed on");
             g.armed = 1;
             engine_trigger_reseed(&g.triggers);
+            engine_radial_reseed(&g.radial);
         } else if (item.kind == ENGINE_CMD_STOP) {
             if (g.armed)
                 engine_log("armed off");
@@ -809,6 +812,7 @@ static void apply_commands(int64_t now)
         } else if (item.kind == ENGINE_CMD_RELOAD) {
             engine_log("reload");
             engine_trigger_reseed(&g.triggers);
+            engine_radial_reseed(&g.radial);
         } else if (item.kind == ENGINE_CMD_OUTPUT) {
             struct engine_report release;
             int rebind = 0;
@@ -1006,8 +1010,10 @@ static void drain_fingers(int64_t now, const struct engine_live_config *live)
     while (engine_event_pop(&g.hooks, &ev)) {
         int noted;
 
-        if (ev.id == ENGINE_KEY_PAUSE && engine_panic_edge(ev.id, pause, ev.down))
+        if (ev.id == ENGINE_KEY_PAUSE && engine_panic_edge(ev.id, pause, ev.down)) {
             engine_play_stop_all_why(g.play, ENGINE_WHY_PANIC);
+            engine_radial_cancel(&g.radial, ENGINE_RADIAL_WHY_STOP);
+        }
         /* Windows auto-repeat, or a second mouse 4 or 5 down, while the
            finger is down. It is not an edge, so a held trigger never starts
            again. One line per hold. A middle or side button that Raw Input
@@ -1298,6 +1304,30 @@ static const char *trigger_state(const struct engine_live_config *live, const ch
     return "-";
 }
 
+static void log_radial(const struct engine_live_config *live)
+{
+    int i;
+
+    for (i = 0; i < g.radial.note_count; i++) {
+        const struct engine_radial_note *note = &g.radial.notes[i];
+        const char *mode = engine_radial_mode_name(note->mode);
+        char line[400];
+
+        if (note->kind == ENGINE_RADIAL_NOTE_OPEN)
+            snprintf(line, sizeof line, "radial open menu=\"%s\" id=%s mode=%s slots=%u", note->name,
+                     note->radial, mode, (unsigned)note->slots);
+        else if (note->kind == ENGINE_RADIAL_NOTE_SELECT)
+            snprintf(line, sizeof line, "radial select menu=\"%s\" id=%s slot=%d macro=\"%s\" macro_id=%s result=%s",
+                     note->name, note->radial, note->slot + 1, macro_name(live, note->macro),
+                     note->macro, engine_radial_why_name(note->why, note->mode));
+        else
+            snprintf(line, sizeof line, "radial cancel menu=\"%s\" id=%s mode=%s reason=%s", note->name,
+                     note->radial, mode, engine_radial_why_name(note->why, note->mode));
+        engine_log(line);
+    }
+    g.radial.note_count = 0;
+}
+
 static void log_notes(const struct engine_live_config *live)
 {
     int64_t freq;
@@ -1374,7 +1404,7 @@ static void log_unmatched(const struct engine_live_config *live)
             continue;
         if (id == ENGINE_KEY_LBUTTON || id == ENGINE_KEY_RBUTTON || id == ENGINE_KEY_PAUSE)
             continue;
-        if (engine_live_claims(live, id))
+        if (engine_live_claims(live, id) || engine_radial_owns(&g.radial, id))
             continue;
         name = engine_key_name(id);
         if (name)
@@ -1607,6 +1637,7 @@ static void playback_tick(int64_t now)
         snprintf(g.live_id, sizeof g.live_id, "%s", live.live_id);
         engine_reap_orphans(g.play, &live);
         engine_trigger_reseed(&g.triggers);
+        engine_radial_reseed(&g.radial);
     }
     snprintf(g.live_name, sizeof g.live_name, "%s", live.name);
     snprintf(g.live_focus, sizeof g.live_focus, "%s", live.focus_exe);
@@ -1646,8 +1677,20 @@ static void playback_tick(int64_t now)
             log_released(gone, n, "forget");
     }
     engine_play_set_fingers(g.play, &g.fingers);
+    {
+        int32_t dx = 0;
+        int32_t dy = 0;
+
+        /* Moves since the last tick, then the release that may pick with them. */
+        engine_raw_take(&g.raw, &dx, &dy);
+        engine_radial_move(&g.radial, dx, dy);
+        engine_radial_poll(&g.radial, g.play, &live, &g.fingers, focus.name, focus.owner, g.armed);
+        engine_raw_aim(&g.raw, engine_radial_wants_motion(&g.radial));
+        log_radial(&live);
+    }
     if (g.armed)
-        engine_poll_triggers(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner);
+        engine_poll_triggers_radial(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner,
+                                    &g.radial);
     engine_play_tick(g.play, now);
     /* The pending start keeps the next slice short, so it plays within 1 ms. */
     if (g.armed)
@@ -1658,7 +1701,7 @@ static void playback_tick(int64_t now)
     log_state(now);
     send_play_report(&g.play->last, g.play->output.mode, now);
     publish_play_state(&live, &focus);
-    engine_arm_swallow(&g.hooks, &live, focus.name, focus.owner, g.armed, g.play);
+    engine_arm_swallow_radial(&g.hooks, &live, focus.name, focus.owner, g.armed, g.play, &g.radial);
     engine_hook_set_wake(&g.hooks, g.armed || engine_play_alive(g.play) > 0 || g.play->pending_count > 0);
 }
 
@@ -1926,6 +1969,7 @@ static int run_resident(const struct engine_args *args)
     engine_output_init(&g.output);
     engine_cmd_ring_init(&g.cmds);
     engine_trigger_init(&g.triggers);
+    engine_radial_init(&g.radial);
     engine_claims_init(&g.claims);
     engine_fingers_clear(&g.fingers);
     engine_raw_mouse_init(&g.raw);

@@ -70,6 +70,12 @@ static void on_input(struct engine_win_raw *raw, HRAWINPUT handle)
     }
     if (input.header.dwType != RIM_TYPEMOUSE)
         return;
+    /* A flick radial menu aims with the real mouse. Absolute moves are a tablet or a remote session. */
+    if ((input.data.mouse.lLastX || input.data.mouse.lLastY) &&
+        !(input.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) &&
+        atomic_load_explicit(&raw->tally->aim, memory_order_acquire) && input.header.hDevice &&
+        !from_board(input.header.hDevice))
+        engine_raw_move(raw->tally, (int32_t)input.data.mouse.lLastX, (int32_t)input.data.mouse.lLastY);
     flags = input.data.mouse.usButtonFlags;
     if ((flags & (RI_MOUSE_MIDDLE_BUTTON_UP | RI_MOUSE_BUTTON_4_UP | RI_MOUSE_BUTTON_5_UP)) == 0)
         return;

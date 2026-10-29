@@ -371,6 +371,8 @@ int engine_live_needs_mouse(const struct engine_live_config *live)
 {
     int i;
 
+    if (engine_radial_needs_mouse(live))
+        return 1;
     if (!live || !live->macros || live->macro_count <= 0)
         return 0;
     for (i = 0; i < live->macro_count; i++) {
@@ -388,7 +390,11 @@ int engine_live_claims(const struct engine_live_config *live, uint16_t id)
 {
     int i;
 
-    if (!live || !live->macros || !engine_can_trigger(id))
+    if (!live || !engine_can_trigger(id))
+        return 0;
+    if (engine_radial_claims(live, id))
+        return 1;
+    if (!live->macros)
         return 0;
     for (i = 0; i < live->macro_count; i++) {
         if (!macro_enabled(live, i) || live->macros[i].step_count == 0)
@@ -426,6 +432,14 @@ int engine_claims_sync(struct engine_claim_mem *mem, const struct engine_live_co
             if (!macro_enabled(live, i) || live->macros[i].step_count == 0)
                 continue;
             if (engine_can_trigger(id) && id < ENGINE_SWALLOW_IDS)
+                now[id] = 1;
+        }
+    }
+    if (armed && live && live->radials) {
+        for (i = 0; i < live->radial_count; i++) {
+            uint16_t id = live->radials[i].trigger;
+
+            if (id < ENGINE_SWALLOW_IDS && engine_radial_ready(&live->radials[i], live))
                 now[id] = 1;
         }
     }
@@ -482,6 +496,14 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
                           struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
                           const char *front, const char *owner)
 {
+    engine_poll_triggers_radial(play, live, mem, fingers, front, owner, NULL);
+}
+
+void engine_poll_triggers_radial(struct engine_play *play, const struct engine_live_config *live,
+                                 struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
+                                 const char *front, const char *owner,
+                                 const struct engine_radial_state *radial)
+{
     int n;
     int i;
 
@@ -511,6 +533,9 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
         if (!down)
             mem->owed[i] = 0;
         if (!engine_can_trigger(macro->trigger))
+            continue;
+        /* The open menu has this key. A press now, held after it closes, is not an edge. */
+        if (engine_radial_owns(radial, macro->trigger))
             continue;
         /* Every edge of a live trigger is one log line, written before the
            start or stop it causes. did is filled in below. */
@@ -682,6 +707,14 @@ void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_liv
                         const char *front, const char *owner, int armed,
                         const struct engine_play *play)
 {
+    engine_arm_swallow_radial(hooks, live, front, owner, armed, play, NULL);
+}
+
+void engine_arm_swallow_radial(struct engine_hook_state *hooks, const struct engine_live_config *live,
+                               const char *front, const char *owner, int armed,
+                               const struct engine_play *play,
+                               const struct engine_radial_state *radial)
+{
     uint8_t *bits;
     uint8_t swallow[ENGINE_SWALLOW_IDS];
     int focus_ok = 0;
@@ -717,6 +750,10 @@ void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_liv
                 swallow[id] = 1;
         }
     }
+    if (armed && live)
+        engine_radial_swallow(radial, live, engine_focus_swallow(live->focus_exe, front, owner), swallow);
+    engine_hook_set_radial(hooks, armed && engine_radial_wants_motion(radial),
+                           armed && engine_radial_wants_click(radial));
     for (i = 0; i < ENGINE_SWALLOW_IDS; i++) {
         int pass = play && play->pass_count[i] > 0;
 

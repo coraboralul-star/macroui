@@ -34,6 +34,10 @@ struct built_catalog {
     char id[ENGINE_ID_CAP];
     char name[ENGINE_PROFILE_NAME_CAP];
     char focus_exe[ENGINE_PROFILE_FOCUS_CAP];
+    struct engine_radial radials[ENGINE_RADIAL_CAP];
+    int radial_count;
+    /* Slot macro ids, turned into indexes once the macros are final. */
+    char slot_ids[ENGINE_RADIAL_CAP][ENGINE_RADIAL_SLOTS][ENGINE_ID_CAP];
 };
 
 struct build {
@@ -1137,6 +1141,32 @@ static void build_triggers(struct engine_catalog *cat)
     }
 }
 
+/* Slot ids to macro indexes. An id that is not in this config is an empty slot. */
+static void finalize_radials(struct engine_catalog *dst, const struct built_catalog *src)
+{
+    int r;
+
+    dst->radial_count = src->radial_count;
+    for (r = 0; r < src->radial_count; r++) {
+        int s;
+
+        dst->radials[r] = src->radials[r];
+        for (s = 0; s < dst->radials[r].slot_count; s++) {
+            int m;
+
+            dst->radials[r].slot[s] = -1;
+            if (!src->slot_ids[r][s][0])
+                continue;
+            for (m = 0; m < dst->count; m++) {
+                if (same_text(dst->macros[m].id, src->slot_ids[r][s])) {
+                    dst->radials[r].slot[s] = m;
+                    break;
+                }
+            }
+        }
+    }
+}
+
 static int finalize_catalog(struct engine_catalog *dst, struct built_catalog *src,
                             struct engine_step *steps)
 {
@@ -1146,8 +1176,10 @@ static int finalize_catalog(struct engine_catalog *dst, struct built_catalog *sr
     copy_cap(dst->id, sizeof dst->id, src->id);
     copy_cap(dst->name, sizeof dst->name, src->name);
     copy_cap(dst->focus_exe, sizeof dst->focus_exe, src->focus_exe);
-    if (src->count <= 0)
+    if (src->count <= 0) {
+        finalize_radials(dst, src);
         return 0;
+    }
     dst->macros = (struct engine_macro *)calloc((size_t)src->count, sizeof *dst->macros);
     dst->extras = (struct engine_profile_extra *)calloc((size_t)src->count, sizeof *dst->extras);
     dst->trigger_next = (uint32_t *)calloc((size_t)src->count, sizeof *dst->trigger_next);
@@ -1165,6 +1197,7 @@ static int finalize_catalog(struct engine_catalog *dst, struct built_catalog *sr
         dst->extras[i] = src->macros[i].extra;
     }
     build_triggers(dst);
+    finalize_radials(dst, src);
     return 0;
 }
 
@@ -1177,6 +1210,72 @@ static struct engine_profile_image *make_empty(void)
     copy_cap(image->name, sizeof image->name, "Default");
     image->has_variables = 1;
     return image;
+}
+
+static uint16_t radial_key(const struct json_value *object, const char *field, const char *fallback)
+{
+    char name[64];
+
+    if (!value_text(json_object_get(object, field), name, sizeof name) || !name[0])
+        copy_cap(name, sizeof name, fallback);
+    return key_of(name);
+}
+
+/* config.radials, like normalizeRadial in ui/src/profile.ts. A select this
+   engine does not know plays as keys. Left and right click are never a trigger. */
+static void compile_radials(struct build *b, const struct json_value *list, struct built_catalog *cat,
+                            const char *where)
+{
+    uint32_t i;
+
+    if (!list || list->kind != JSON_ARRAY)
+        return;
+    for (i = 0; i < list->length && cat->radial_count < ENGINE_RADIAL_CAP; i++) {
+        const struct json_value *item = &list->items[i];
+        const struct json_value *trigger;
+        const struct json_value *slots;
+        struct engine_radial *radial;
+        char spot[ENGINE_PROFILE_WHERE_CAP];
+        char text[64];
+        int r = cat->radial_count;
+        uint32_t s;
+
+        if (item->kind != JSON_OBJECT)
+            continue;
+        nest_where(spot, sizeof spot, where, "radials", i);
+        radial = &cat->radials[r];
+        memset(radial, 0, sizeof *radial);
+        memset(cat->slot_ids[r], 0, sizeof cat->slot_ids[r]);
+        value_text(json_object_get(item, "id"), radial->id, sizeof radial->id);
+        value_text(json_object_get(item, "name"), radial->name, sizeof radial->name);
+        radial->enabled = field_bool(item, "enabled", 1);
+        trigger = json_object_get(item, "trigger");
+        if (trigger && trigger->kind == JSON_OBJECT &&
+            value_text(json_object_get(trigger, "button"), text, sizeof text))
+            radial->trigger = key_of(text);
+        if (radial->trigger == ENGINE_KEY_LBUTTON || radial->trigger == ENGINE_KEY_RBUTTON)
+            radial->trigger = 0;
+        radial->select = value_text(json_object_get(item, "select"), text, sizeof text) &&
+                                 same_text(text, "flick")
+                             ? ENGINE_RADIAL_FLICK
+                             : ENGINE_RADIAL_KEYS;
+        radial->prev_key = radial_key(item, "prevKey", "q");
+        radial->next_key = radial_key(item, "nextKey", "e");
+        radial->at = value_text(json_object_get(item, "at"), text, sizeof text) && same_text(text, "cursor")
+                         ? ENGINE_RADIAL_AT_CURSOR
+                         : ENGINE_RADIAL_AT_CENTER;
+        radial->dead_zone = field_i(b, item, "deadZone", ENGINE_RADIAL_DEAD_ZONE, 0, spot);
+        if (radial->dead_zone < 1)
+            radial->dead_zone = ENGINE_RADIAL_DEAD_ZONE;
+        radial->click_select = field_bool(item, "clickSelect", 0);
+        slots = array_field(item, "slots");
+        for (s = 0; slots && s < slots->length && s < ENGINE_RADIAL_SLOTS; s++)
+            value_text(&slots->items[s], cat->slot_ids[r][s], ENGINE_ID_CAP);
+        radial->slot_count = slots ? (int)(slots->length < ENGINE_RADIAL_SLOTS ? slots->length : ENGINE_RADIAL_SLOTS) : 0;
+        if (radial->slot_count < 2)
+            radial->slot_count = 2;
+        cat->radial_count++;
+    }
 }
 
 /* turn.countsPer360 of a config, or of the profile when it has no configs.
@@ -1246,6 +1345,8 @@ int engine_profile_compile(const char *text, size_t length, struct engine_profil
                        b.configs[b.config_count].focus_exe,
                        sizeof b.configs[b.config_count].focus_exe);
             b.turn_per360 = turn_per360(&configs->items[i]);
+            compile_radials(&b, json_object_get(&configs->items[i], "radials"), &b.configs[b.config_count],
+                            spot);
             if (compile_catalog(&b, array_field(&configs->items[i], "macros"), &b.configs[b.config_count],
                                 spot) != 0) {
                 free_built_catalog(&b.configs[b.config_count]);
@@ -1331,6 +1432,8 @@ static void use_catalog(struct engine_live_config *out, const struct engine_cata
     out->trigger_head = cat->trigger_head;
     out->trigger_next = cat->trigger_next;
     out->macro_count = cat->count;
+    out->radials = cat->radials;
+    out->radial_count = cat->radial_count;
     copy_cap(out->focus_exe, sizeof out->focus_exe, cat->focus_exe);
     copy_cap(out->name, sizeof out->name, cat->name);
 }
