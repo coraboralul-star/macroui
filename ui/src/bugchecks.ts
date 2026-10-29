@@ -1,9 +1,12 @@
 import { applyDelayMode, expandTaps, isSleep, laneCells, scrollDy, setDelay } from "./eventLane";
-import { activeTurn, blankMacro, blankStep, normalizeProfile, setActiveTurn, turnCounts, type Block, type Macro, type Profile, type Step } from "./profile";
+import { appendSteps, insertTyped, withBlocks } from "./blocks";
+import { playModeChip, shownBlocks } from "./macroFlow";
+import { activeTurn, blankMacro, blankStep, normalizeProfile, repairedModes, setActiveTurn, turnCounts, writeActive, type Block, type Macro, type Profile, type Step, type Trigger } from "./profile";
+import { useMacroActions, type TriggerMenu } from "./useMacroActions";
 import { parseTurn } from "./hostMessages";
 import { TURN_INPUT_DEFAULT, inputLabel, nudge } from "./components/TurnPanel";
 import { vkOf } from "./vk";
-import { deleteMacro, macroIssues } from "./profileEdits";
+import { deleteMacro, macroIssues, upsertMacro } from "./profileEdits";
 import { readList, segment } from "./tape";
 
 const failures: string[] = [];
@@ -22,14 +25,208 @@ function macro(patch: Partial<Macro> & Pick<Macro, "id">): Macro {
   return { ...blankMacro(), name: patch.id, trigger: { kind: "key", button: "" }, ...patch };
 }
 
-export function runBugChecks(): string[] {
+/** fixture is engine-native/tests/fixtures/create-paths.json, which both engines also play. */
+export function runBugChecks(fixture?: unknown): string[] {
   failures.length = 0;
   checkDelayMode();
   checkScroll();
   checkDeleteMacro();
   checkBrokenRepeat();
   checkTurn();
+  checkCreatePaths(fixture);
+  checkCanonicalLoad();
   return failures.slice();
+}
+
+// One pass, about 190 ms: space, then e. The engine tests count both.
+const PASS: Step[] = [
+  { type: "key", action: "down", key: "space" },
+  { type: "wait", ms: 20 },
+  { type: "key", action: "up", key: "space" },
+  { type: "wait", ms: 150 },
+  { type: "key", action: "down", key: "e" },
+  { type: "wait", ms: 20 },
+  { type: "key", action: "up", key: "e" },
+];
+
+/** The app's state and actions, with the setters React would own. */
+function app(menu: TriggerMenu | null = null) {
+  const state = { profile: normalizeProfile({ version: 1, name: "T", variables: {}, macros: [] }), selected: "" };
+  const update = (next: Profile) => {
+    state.profile = writeActive(next, next.macros);
+  };
+  const actions = (at: TriggerMenu | null = menu) =>
+    useMacroActions({
+      profile: state.profile,
+      selected: state.selected,
+      graphId: null,
+      menu: at,
+      update,
+      saveMacro: (next) => {
+        update(upsertMacro(state.profile, next));
+        state.selected = next.id;
+      },
+      setSelected: (id) => {
+        state.selected = id;
+      },
+      setPicked() {},
+      setMenu() {},
+      setGraphId() {},
+      openAdvanced() {},
+    });
+  const current = () => state.profile.macros.find((item) => item.id === state.selected) as Macro;
+  return { state, actions, current };
+}
+
+/** GraphEditor: Library > Run Once, then the steps land in it. Blocks come from shownBlocks, as on screen. */
+function graphRunOnce(macro: Macro): Macro {
+  const added = insertTyped(shownBlocks(macro), 0, "steps");
+  const withBlock = withBlocks(macro, added.blocks);
+  return withBlocks(withBlock, shownBlocks(withBlock).map((block) => (block.id === added.pick ? appendSteps(block, PASS) : block)));
+}
+
+type Choice = { name: string; trigger: Trigger };
+
+const keyMenu = (trigger: Trigger): TriggerMenu => ({ kind: trigger.kind, code: trigger.button, x: 0, y: 0 });
+
+/** Every way to make a Run Once macro. Each returns the saved macro. */
+const CREATE_PATHS: Record<string, (choice: Choice) => Macro> = {
+  // Remap or Mouse: click the trigger > New macro > Advanced > Run Once.
+  "trigger menu > New macro": ({ name, trigger }) => {
+    const ui = app(keyMenu(trigger));
+    ui.actions().menu.create();
+    ui.actions().graph.change(graphRunOnce({ ...ui.current(), name }));
+    return ui.current();
+  },
+  // Macro Editor > New > Advanced > Run Once > Assign trigger.
+  "Macro Editor > New > Advanced": ({ name, trigger }) => {
+    const ui = app();
+    ui.actions().studio.add();
+    ui.actions().graph.change({ ...graphRunOnce({ ...ui.current(), name }), trigger });
+    return ui.current();
+  },
+  // Macro Editor > New, record in Simple, Save, then Advanced. The steps are already a Run Once.
+  "Macro Editor > New > Simple > Advanced": ({ name, trigger }) => {
+    const ui = app();
+    ui.actions().studio.add();
+    ui.actions().studio.change({ ...ui.current(), name, steps: PASS });
+    const shown = ui.current();
+    ui.actions().graph.change({ ...withBlocks(shown, shownBlocks(shown)), trigger });
+    return ui.current();
+  },
+  // A Simple macro assigned from the trigger menu, then the menu's Macro Editor.
+  "Simple macro > trigger menu > Macro Editor": ({ name, trigger }) => {
+    const ui = app();
+    ui.actions().studio.add();
+    ui.actions().studio.change({ ...ui.current(), name, steps: PASS });
+    ui.actions(keyMenu(trigger)).menu.assign(ui.state.selected);
+    ui.actions(keyMenu(trigger)).menu.edit();
+    return ui.current();
+  },
+  // Add a Tap Hold block, then remove it. Its whileHeld must not stay behind.
+  "Tap Hold added then removed": ({ name, trigger }) => {
+    const ui = app();
+    ui.actions().studio.add();
+    const made = graphRunOnce({ ...ui.current(), name, trigger });
+    const tapped = withBlocks(made, insertTyped(made.blocks ?? [], 1, "tapHold").blocks);
+    check(tapped.playMode === "whileHeld", "a Tap Hold block makes the macro whileHeld");
+    ui.actions().graph.change(withBlocks(tapped, (tapped.blocks ?? []).filter((block) => block.type !== "tapHold")));
+    return ui.current();
+  },
+};
+
+/** Ids are random per run. Everything else must match. */
+function masked(macro: Macro, id: string): Macro {
+  return JSON.parse(JSON.stringify({ ...macro, id, blocks: (macro.blocks ?? []).map((block, index) => ({ ...block, id: `${id}-b${index + 1}` })) }));
+}
+
+/** Trigger menu > Play > Repeat, Times 3, on a recorded Simple macro. */
+function repeatThree(trigger: Trigger): Macro {
+  const ui = app(keyMenu(trigger));
+  ui.actions().studio.add();
+  ui.actions().studio.change({ ...ui.current(), name: "Repeat 3", steps: PASS.slice(0, 4) });
+  ui.actions().menu.assign(ui.state.selected);
+  ui.actions().menu.times(3);
+  ui.actions().menu.play("repeat");
+  return ui.current();
+}
+
+/** What engine-native/tests/fixtures/create-paths.json holds: one macro per creation path. */
+export function createPathsFixture(): Profile {
+  const macros = [
+    masked(CREATE_PATHS["trigger menu > New macro"]({ name: "Key path", trigger: { kind: "key", button: "g" } }), "key-path"),
+    masked(CREATE_PATHS["Macro Editor > New > Advanced"]({ name: "New path", trigger: { kind: "key", button: "h" } }), "new-path"),
+    masked(repeatThree({ kind: "key", button: "j" }), "repeat-3"),
+  ];
+  return normalizeProfile({ version: 1, name: "Create paths", variables: {}, activeId: "paths", configs: [{ id: "paths", name: "Create paths", macros }], macros });
+}
+
+function checkCreatePaths(fixture: unknown) {
+  for (const trigger of [{ kind: "key", button: "g" }, { kind: "side", button: "XButton2" }] as Trigger[]) {
+    const made = Object.entries(CREATE_PATHS).map(([path, create]) => [path, masked(create({ name: "Test", trigger }), "m")] as const);
+    const [firstPath, first] = made[0];
+    check(first.playMode === "once" && first.advanced === true && first.blocks?.[0]?.type === "steps", `${firstPath} is a Run Once`);
+    for (const [path, macro] of made.slice(1)) same(macro, first, `${path} on ${trigger.button} saves the same macro as ${firstPath}`);
+  }
+
+  const repeat = repeatThree({ kind: "key", button: "j" });
+  const block = repeat.blocks?.[0];
+  check(repeat.playMode === "once" && block?.type === "repeat" && block.count === 3, "Play > Repeat x3 counts once, in its repeat block (not 3 x 3)");
+
+  const pressed = app();
+  pressed.actions().studio.add();
+  pressed.actions().studio.change({ ...pressed.current(), playMode: "whileHeld", steps: PASS });
+  pressed.actions(keyMenu({ kind: "key", button: "k" })).menu.assign(pressed.state.selected);
+  pressed.actions(keyMenu({ kind: "key", button: "k" })).menu.edit();
+  const held = pressed.current();
+  check(held.playMode === "whileHeld" && held.blocks?.length === 1 && held.blocks[0].type === "whileHeld",
+    "a Simple While pressed macro opens in Advanced as a While Held block, so it plays the same");
+  same(playModeChip(held).label, "While held", "the chip shows the saved mode");
+
+  if (fixture === undefined) return;
+  same(normalizeProfile(fixture).macros, createPathsFixture().macros,
+    "engine-native/tests/fixtures/create-paths.json is what the UI makes (npm run check -- --write-fixture)");
+}
+
+function checkCanonicalLoad() {
+  const steps = [{ type: "steps", steps: PASS }];
+  const held = [{ type: "whileHeld", mute: [], steps: PASS }];
+  const saved = (patch: Partial<Macro> & { blocks?: unknown[] }) => ({ ...blankMacro(), advanced: true, name: patch.id, ...patch });
+  const raw = [
+    // Saved by Macro Editor > New before the fix.
+    saved({ id: "legacy-new", playMode: "whileHeld", blocks: steps as unknown as Block[] }),
+    saved({ id: "legacy-flat", playMode: "whileHeld", steps: PASS }),
+    saved({ id: "hold", playMode: "whileHeld", blocks: held as unknown as Block[] }),
+    saved({ id: "hold-once", playMode: "once", blocks: held as unknown as Block[] }),
+    saved({ id: "tap", playMode: "once", blocks: [{ type: "tapHold", key: "z", watch: ["t"] }] as Block[] }),
+    saved({ id: "double", playMode: "repeat", repeatCount: 3, blocks: [{ type: "repeat", count: 3, steps: PASS }] as Block[] }),
+    saved({ id: "plain-repeat", playMode: "repeat", repeatCount: 3, blocks: steps as unknown as Block[] }),
+    saved({ id: "toggle", playMode: "toggle", blocks: steps as unknown as Block[] }),
+    { ...blankMacro(), id: "simple-held", playMode: "whileHeld", steps: PASS },
+  ];
+  const once = normalizeProfile({ version: 1, name: "Old", variables: {}, macros: raw });
+  const modes = Object.fromEntries(once.macros.map((item) => [item.id, item.playMode]));
+  same(modes, {
+    "legacy-new": "once",
+    "legacy-flat": "once",
+    hold: "whileHeld",
+    "hold-once": "once",
+    tap: "whileHeld",
+    double: "once",
+    "plain-repeat": "repeat",
+    toggle: "toggle",
+    "simple-held": "whileHeld",
+  }, "load repairs only modes the blocks contradict");
+  same(normalizeProfile(JSON.parse(JSON.stringify(once))), once, "the repair is idempotent");
+  const old = { version: 1, name: "Old", variables: {}, macros: raw };
+  same(repairedModes(old, once), [
+    "Old / legacy-new: whileHeld -> once",
+    "Old / legacy-flat: whileHeld -> once",
+    "Old / tap: once -> whileHeld",
+    "Old / double: repeat -> once",
+  ], "the load lists what it repaired, so the page saves it");
+  same(repairedModes(JSON.parse(JSON.stringify(once)), once), [], "a repaired profile loads without another save");
+  check(once.macros[0] === once.configs[0].macros[0], "the live macros are the repaired ones");
 }
 
 function checkTurn() {

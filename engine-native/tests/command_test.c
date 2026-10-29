@@ -1,3 +1,7 @@
+#ifdef _MSC_VER
+#define _CRT_SECURE_NO_WARNINGS
+#endif
+
 /* Frames, the command ring, trigger edges, and the state image.
    Does not arm profiles/default.json and does not call SendInput. */
 #include "command.h"
@@ -2023,6 +2027,154 @@ static void check_notes(void)
     free(play);
 }
 
+#ifndef FIXTURE_DIR
+#define FIXTURE_DIR "tests/fixtures"
+#endif
+
+struct path_run {
+    int starts;
+    int playing;
+    int space;
+    int e;
+};
+
+/* One trigger on create-paths.json in playback_tick's order. edges are
+   down/up pairs in ms. Counts starts, presses ignored while playing, and
+   the space and e downs the output sees. */
+static struct path_run play_path(const char *doc, size_t n, uint16_t trigger,
+                                 const int64_t *edges, int pairs)
+{
+    static struct engine_hook_state hooks;
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_profile_slot slot;
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    struct engine_finger_lost lost;
+    struct engine_hook_decision decision;
+    const struct engine_profile_image *image;
+    struct path_run run;
+    int had_space = 0;
+    int had_e = 0;
+    int64_t now;
+    int i;
+
+    memset(&run, 0, sizeof run);
+    if (!play)
+        return run;
+    engine_profile_slot_init(&slot);
+    if (engine_profile_slot_apply_document(&slot, doc, n) != 1) {
+        free(play);
+        return run;
+    }
+    image = engine_profile_slot_adopt(&slot);
+    engine_profile_pick(image, "game.exe", image->active_id, &live);
+    engine_hook_init(&hooks);
+    engine_play_init(play);
+    engine_play_set_macros(play, live.macros, live.macro_count);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    memset(&lost, 0, sizeof lost);
+    engine_arm_swallow(&hooks, &live, "game.exe", "", 1, play);
+    for (now = 0; now < 1500; now++) {
+        struct engine_finger ev;
+        uint16_t want[32];
+        int got;
+        int space = 0;
+        int e = 0;
+
+        for (i = 0; i < pairs; i++) {
+            if (edges[2 * i] == now)
+                hook_event(&hooks, trigger, 1, now, &decision);
+            if (edges[2 * i + 1] == now)
+                hook_event(&hooks, trigger, 0, now, &decision);
+        }
+        while (engine_event_pop(&hooks, &ev))
+            engine_finger_note(&fingers, ev.id, ev.down, &lost);
+        engine_play_set_fingers(play, &fingers);
+        engine_poll_triggers(play, &live, &mem, &fingers, "game.exe", "");
+        engine_play_tick(play, now);
+        engine_trigger_owed(play, &live, &mem, &fingers, "game.exe", "");
+        for (i = 0; i < play->note_count; i++) {
+            if (play->notes[i].kind == ENGINE_NOTE_START)
+                run.starts++;
+            if (play->notes[i].kind == ENGINE_NOTE_BLOCK && play->notes[i].why == ENGINE_WHY_PLAYING)
+                run.playing++;
+        }
+        play->note_count = 0;
+        got = engine_play_desired(play, now, want, 32);
+        for (i = 0; i < got; i++) {
+            space |= want[i] == 0x20;
+            e |= want[i] == 0x45;
+        }
+        run.space += space && !had_space;
+        run.e += e && !had_e;
+        had_space = space;
+        had_e = e;
+        engine_arm_swallow(&hooks, &live, "game.exe", "", 1, play);
+    }
+    engine_profile_slot_shutdown(&slot);
+    free(play);
+    return run;
+}
+
+/* fixtures/create-paths.json is written by the UI (npm run check --
+   --write-fixture): one macro per way to make a Run Once, and Play > Repeat
+   x3. The AHK --self-test plays the same file with the same expectations. */
+static void check_create_paths(void)
+{
+    static const int64_t hold[] = { 10, 610 };
+    static const int64_t tap[] = { 10, 40 };
+    static const int64_t twice[] = { 10, 40, 90, 120 };
+    static const int64_t held_again[] = { 10, 40, 90, 410 };
+    static const struct {
+        const char *name;
+        uint16_t trigger;
+    } paths[] = { { "key path", 0x47 }, { "new path", 0x48 } };
+    char label[128];
+    char *doc;
+    size_t n = 0;
+    FILE *f = fopen(FIXTURE_DIR "/create-paths.json", "rb");
+    struct path_run run;
+    int p;
+
+    if (!f) {
+        expect(0, "create-paths.json readable");
+        return;
+    }
+    fseek(f, 0, SEEK_END);
+    n = (size_t)ftell(f);
+    fseek(f, 0, SEEK_SET);
+    doc = (char *)malloc(n + 1);
+    if (!doc || fread(doc, 1, n, f) != n) {
+        fclose(f);
+        free(doc);
+        expect(0, "create-paths.json read");
+        return;
+    }
+    fclose(f);
+    doc[n] = 0;
+    for (p = 0; p < 2; p++) {
+        run = play_path(doc, n, paths[p].trigger, hold, 1);
+        snprintf(label, sizeof label, "%s: held 600 ms plays one pass", paths[p].name);
+        expect(run.starts == 1 && run.space == 1 && run.e == 1, label);
+        run = play_path(doc, n, paths[p].trigger, tap, 1);
+        snprintf(label, sizeof label, "%s: a 30 ms tap plays the whole pass", paths[p].name);
+        expect(run.starts == 1 && run.space == 1 && run.e == 1, label);
+        run = play_path(doc, n, paths[p].trigger, twice, 2);
+        snprintf(label, sizeof label, "%s: a press while it plays is ignored", paths[p].name);
+        expect(run.starts == 1 && run.playing == 1 && run.space == 1 && run.e == 1, label);
+        run = play_path(doc, n, paths[p].trigger, held_again, 2);
+        snprintf(label, sizeof label, "%s: a held press while it plays is ignored", paths[p].name);
+        expect(run.starts == 1 && run.playing == 1 && run.space == 1 && run.e == 1, label);
+    }
+    run = play_path(doc, n, 0x4A, tap, 1);
+    expect(run.starts == 1 && run.space == 3, "repeat x3: a tap plays 3 times, not 9");
+    run = play_path(doc, n, 0x4A, hold, 1);
+    expect(run.starts == 1 && run.space == 3, "repeat x3: held plays 3 times, not 9");
+    free(doc);
+}
+
 int main(void)
 {
     check_frames();
@@ -2046,6 +2198,7 @@ int main(void)
     check_profile_reseed();
     check_forget_triggers();
     check_notes();
+    check_create_paths();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

@@ -3,6 +3,7 @@ import type { Block, Macro, Step } from "../profile";
 import { BlockLead } from "./BlockLead";
 import { EventLane } from "./EventLane";
 import { KeyFace } from "./KeyFace";
+import { PlayChip } from "./PlayChip";
 import { ReleaseField } from "./ReleaseField";
 
 export function MacroBrief({
@@ -40,6 +41,7 @@ export function MacroBrief({
           onChange={(event) => onChange({ ...macro, name: event.target.value })}
         />
         <div className="brief-actions">
+          <PlayChip macro={macro} />
           {showBriefRelease(macro) ? (
             <ReleaseField compact label="Macro on release" value={macro.releaseStop} onChange={(releaseStop) => onChange({ ...macro, releaseStop: releaseStop ?? "nextUp" })} />
           ) : null}

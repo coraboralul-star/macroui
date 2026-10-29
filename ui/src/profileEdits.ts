@@ -43,18 +43,13 @@ export function assignTrigger(profile: Profile, kind: TriggerKind, code: string,
   return writeActive({ ...profile, macros }, macros);
 }
 
+/** A new macro on a key or button: blankMacro, named after it. */
 export function freshTrigger(kind: TriggerKind, code: string, extra: Partial<Macro> = {}): Macro {
-  return {
-    ...blankMacro(),
+  return blankMacro({
     name: kind === "key" ? keyLabel(code) : pressLabel(code),
-    playMode: "once",
-    basic: false,
-    gapMs: MIN_REPEAT_MS,
     trigger: { kind, button: code },
-    steps: [],
-    recording: null,
     ...extra,
-  };
+  });
 }
 
 export function addConfig(profile: Profile): Profile {

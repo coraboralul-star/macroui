@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent } from "react";
 import { post } from "../bridge";
-import { appendSteps, cloneBlock, insertStepBlock, insertTyped, moveBlockAfter, reorderBlocks, splitFrom, takesSteps, allowsScanWait } from "../blocks";
+import { appendSteps, cloneBlock, insertStepBlock, insertTyped, moveBlockAfter, reorderBlocks, splitFrom, takesSteps, allowsScanWait, withBlocks } from "../blocks";
 import { pressPair, applyDelayMode } from "../eventLane";
 import { LIBRARY, LIBRARY_MIME, MENU_GROUPS, libraryItem, librarySteps, matchInput } from "../library";
 import { compileRecording, type RecEvent } from "../recording";
-import { effectivePlayMode, GRAPH_NODE_H, GRAPH_NODE_W, graphLayout, place, shownBlocks, usesReleaseStop } from "../macroFlow";
+import { GRAPH_NODE_H, GRAPH_NODE_W, graphLayout, place, shownBlocks, usesReleaseStop } from "../macroFlow";
 import { macroIssues } from "../profileEdits";
 import type { Block, Macro, Step } from "../profile";
 import { BlockFields } from "./BlockFields";
@@ -14,6 +14,7 @@ import { Confirm } from "./Confirm";
 import { GraphPreview } from "./GraphPreview";
 import { KeyFace } from "./KeyFace";
 import { Library } from "./Library";
+import { PlayChip } from "./PlayChip";
 import { RecordSurface } from "./RecordSurface";
 import { DelayGear, modeOf, type DelayMode } from "./RecordDeck";
 import { ReleaseField } from "./ReleaseField";
@@ -42,7 +43,7 @@ export function GraphEditor({
   const blocks = macro ? shownBlocks(macro) : [];
   const others = macros.filter((item) => item.id !== macro?.id);
   const trigger = macro ? place(macro) : "";
-  const mode = macro ? effectivePlayMode(macro) : "once";
+  const mode = macro?.playMode ?? "once";
   const [tab, setTab] = useState<"full" | "edit">("full");
   const [picked, setPicked] = useState(blocks[0]?.id ?? "");
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -96,16 +97,7 @@ export function GraphEditor({
 
   const commit = (next: Block[], pick?: string, patch?: Partial<Macro>) => {
     if (!macro) return;
-    edit({
-      ...macro,
-      advanced: true,
-      basic: false,
-      blocks: next,
-      steps: [],
-      playMode: next.some((block) => block.type === "tapHold" || block.type === "tapSpam") ? "whileHeld" : macro.playMode,
-      releaseStop: macro.releaseStop === "finish" ? "finish" : "nextUp",
-      ...patch,
-    });
+    edit(withBlocks(macro, next, patch));
     if (pick) setPicked(pick);
   };
 
@@ -406,6 +398,7 @@ export function GraphEditor({
             onChange={(event) => edit({ ...macro, name: event.target.value })}
           />
         ) : null}
+        {macro ? <PlayChip macro={macro} /> : null}
         <span className="graph-bar-space" />
         {macro && usesReleaseStop(macro) ? (
           <ReleaseField compact label="Macro on release" value={macro.releaseStop} onChange={(releaseStop) => edit({ ...macro, releaseStop: releaseStop ?? "nextUp" })} />

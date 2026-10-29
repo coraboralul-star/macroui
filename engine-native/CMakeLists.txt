@@ -69,6 +69,7 @@ target_link_libraries(engine-profile-test PRIVATE engine_core)
 
 add_executable(engine-command-test tests/command_test.c)
 target_link_libraries(engine-command-test PRIVATE engine_core)
+target_compile_definitions(engine-command-test PRIVATE FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
 
 add_executable(engine-soak-test tests/soak_test.c)
 target_link_libraries(engine-soak-test PRIVATE engine_core)

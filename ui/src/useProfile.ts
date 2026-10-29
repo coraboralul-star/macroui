@@ -5,6 +5,7 @@ import {
   defaultProfile,
   normalizeInputMode,
   normalizeProfile,
+  repairedModes,
   writeActive,
   type InputMode,
   type Macro,
@@ -34,7 +35,10 @@ export function useProfile(shell: boolean) {
           console.error("[vendetta] profile on disk could not be read", error);
           return;
         }
-        echo.current = false;
+        // A repaired playMode is written back now, so the engine plays what the editor shows.
+        const repaired = repairedModes(message.profile, next);
+        if (repaired.length) console.info("[vendetta] repaired play modes", repaired);
+        echo.current = repaired.length > 0;
         booted.current = true;
         setProfile(next);
         setSelected((current) => (next.macros.some((macro) => macro.id === current) ? current : next.macros[0]?.id ?? ""));

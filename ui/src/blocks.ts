@@ -1,4 +1,24 @@
-import { basicSteps, MIN_REPEAT_MS, mouseSteps, newId, type Block, type Macro, type PlayMode, type Step } from "./profile";
+import { shownBlocks } from "./macroFlow";
+import { basicSteps, canonicalMacro, MIN_REPEAT_MS, mouseSteps, newId, type Block, type Macro, type PlayMode, type Step } from "./profile";
+
+/** Every Advanced edit: these blocks, and the playMode they imply. */
+export function withBlocks(macro: Macro, blocks: Block[], patch: Partial<Macro> = {}): Macro {
+  return canonicalMacro({
+    ...macro,
+    advanced: true,
+    basic: false,
+    blocks,
+    steps: [],
+    releaseStop: macro.releaseStop === "finish" ? "finish" : "nextUp",
+    ...patch,
+  });
+}
+
+/** Simple to Advanced. The playback becomes the block that performs it, so it plays the same. */
+export function toAdvanced(macro: Macro): Macro {
+  if (macro.advanced) return canonicalMacro(macro);
+  return withBlocks(macro, shownBlocks(macro).map((block) => ({ ...block, id: newId() })));
+}
 
 export function createBlock(type: Block["type"]): Block {
   const id = newId();
@@ -93,7 +113,7 @@ export function applyPlayback(macro: Macro, mode: PlayMode): Macro {
 function withPlaybackBlock(macro: Macro, type: "whileHeld" | "repeat" | "steps", mode: PlayMode): Macro {
   const blocks = macro.blocks ?? [];
   if (blocks.some((block) => block.type === type))
-    return { ...macro, playMode: mode, advanced: true, basic: false };
+    return canonicalMacro({ ...macro, playMode: mode, advanced: true, basic: false });
   const steps = macro.steps.length ? macro.steps : triggerSteps(macro);
   const created = createBlock(type);
   const block: Block =
@@ -102,15 +122,8 @@ function withPlaybackBlock(macro: Macro, type: "whileHeld" | "repeat" | "steps",
       : created.type === "whileHeld" || created.type === "steps"
         ? { ...created, steps }
         : created;
-  return {
-    ...macro,
-    playMode: mode,
-    advanced: true,
-    basic: false,
-    blocks: [block, ...blocks],
-    steps: [],
-    releaseStop: macro.releaseStop === "finish" ? "finish" : "nextUp",
-  };
+  // A repeat block holds the count, so canonicalMacro plays it once, not count x count.
+  return withBlocks({ ...macro, playMode: mode }, [block, ...blocks]);
 }
 
 /** Steps need a block to live in, so a loose step dropped on the canvas gets a Run Once. */

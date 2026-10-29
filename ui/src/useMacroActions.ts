@@ -1,4 +1,4 @@
-import { applyPlayback } from "./blocks";
+import { applyPlayback, toAdvanced } from "./blocks";
 import { applyGap, blankMacro, renameActive, setFocusExe, switchConfig, type Macro, type PlayMode, type Profile, type TriggerKind } from "./profile";
 import {
   addConfig,
@@ -128,13 +128,12 @@ export function useMacroActions({
     menu: {
       create() {
         if (!menu) return;
-        const created = menuMacro ?? freshTrigger(menu.kind, menu.code, { advanced: true });
-        saveMacro({ ...created, advanced: true });
+        saveMacro(toAdvanced(menuMacro ?? freshTrigger(menu.kind, menu.code)));
         openAdvanced();
       },
       edit() {
         if (!menuMacro) return;
-        saveMacro({ ...menuMacro, advanced: true });
+        saveMacro(toAdvanced(menuMacro));
         setSelected(menuMacro.id);
         openAdvanced();
       },
