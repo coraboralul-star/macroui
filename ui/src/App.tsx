@@ -5,6 +5,8 @@ import { GraphEditor } from "./components/GraphEditor";
 import { Keyboard } from "./components/Keyboard";
 import { KeyMenu } from "./components/KeyMenu";
 import { MousePad } from "./components/MousePad";
+import { RadialPanel } from "./components/RadialPanel";
+import { activeRadial, setActiveRadial } from "./radial";
 import { ProfileList } from "./components/MacroList";
 import { MacroStudio } from "./components/MacroStudio";
 import { Mark } from "./components/Mark";
@@ -20,7 +22,7 @@ import { useMacroActions, type TriggerMenu } from "./useMacroActions";
 import { useProfile } from "./useProfile";
 
 type Page = "keyboard" | "settings";
-type Board = "remap" | "advanced" | "mouse" | "gamepad";
+type Board = "remap" | "advanced" | "mouse" | "radial" | "gamepad";
 
 const CLOSE_KEY = "macroui-close";
 
@@ -32,6 +34,7 @@ const BOARDS: { id: Board; label: string; later?: boolean }[] = [
   { id: "remap", label: "Remap" },
   { id: "advanced", label: "Macro Editor" },
   { id: "mouse", label: "Mouse" },
+  { id: "radial", label: "Radial" },
   { id: "gamepad", label: "Gamepad", later: true },
 ];
 
@@ -301,6 +304,13 @@ export function App() {
                     setGraphId(id);
                     setMenu(null);
                   }}
+                />
+              ) : board === "radial" ? (
+                <RadialPanel
+                  configName={profile.name}
+                  radial={activeRadial(profile)}
+                  macros={profile.macros}
+                  onChange={(radial) => update(setActiveRadial(profile, radial))}
                 />
               ) : board === "gamepad" ? (
                 <div className="empty-board">

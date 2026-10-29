@@ -53,6 +53,91 @@ export function normalizeTurnCalibration(value: unknown): TurnCalibration | unde
   return Number.isFinite(counts) && counts >= 1 ? { countsPer360: Math.round(counts) } : undefined;
 }
 
+/** keys: 1 to 8 pick a slot, prev and next cycle it. flick: mouse direction picks. A hook can't
+ *  stop the mouse reaching a Raw Input game, so flick also turns the camera there. Keys can be stopped. */
+export type RadialSelect = "keys" | "flick";
+export type RadialAt = "center" | "cursor";
+
+export const RADIAL_SLOTS_MIN = 2;
+export const RADIAL_SLOTS_MAX = 8;
+export const RADIAL_DEAD_ZONE = 40;
+
+/** Hold the trigger to open, pick a slot, release to play that slot's macro once.
+ *  A slot is a macro id or "" for empty. */
+export type Radial = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  trigger: Trigger;
+  slots: string[];
+  select: RadialSelect;
+  prevKey: string;
+  nextKey: string;
+  at: RadialAt;
+  /** Flick only. Raw mouse counts from where the menu opened before a slot lights up. */
+  deadZone: number;
+  /** Flick only. Left click plays the lit slot instead of waiting for the release. */
+  clickSelect: boolean;
+};
+
+export function blankRadial(extra: Partial<Radial> = {}): Radial {
+  return {
+    id: newId(),
+    name: "Radial menu",
+    enabled: true,
+    trigger: { kind: "key", button: "" },
+    slots: ["", "", "", ""],
+    select: "keys",
+    prevKey: "q",
+    nextKey: "e",
+    at: "center",
+    deadZone: RADIAL_DEAD_ZONE,
+    clickSelect: false,
+    ...extra,
+  };
+}
+
+function radialKey(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const key = canonKey(value);
+  return key && key !== "LButton" && key !== "RButton" ? key : fallback;
+}
+
+/** Slots past the max are dropped, a short list is padded with empty slots. */
+export function normalizeRadial(value: unknown): Radial | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Partial<Radial>;
+  const base = blankRadial();
+  const trigger = raw.trigger && typeof raw.trigger === "object" ? raw.trigger : base.trigger;
+  const kind: TriggerKind = trigger.kind === "mouse" || trigger.kind === "side" ? trigger.kind : "key";
+  const sided = typeof trigger.button === "string" ? (kind === "key" ? canonKey(trigger.button) : trigger.button) : "";
+  const button = sided === "LButton" || sided === "RButton" ? "" : sided;
+  const slots = (Array.isArray(raw.slots) ? raw.slots : base.slots)
+    .slice(0, RADIAL_SLOTS_MAX)
+    .map((slot) => (typeof slot === "string" ? slot : ""));
+  while (slots.length < RADIAL_SLOTS_MIN) slots.push("");
+  const dead = Number(raw.deadZone);
+  return {
+    id: typeof raw.id === "string" && raw.id ? raw.id : base.id,
+    name: typeof raw.name === "string" && raw.name ? raw.name : base.name,
+    enabled: raw.enabled !== false,
+    trigger: { kind, button },
+    slots,
+    select: raw.select === "flick" ? "flick" : "keys",
+    prevKey: radialKey(raw.prevKey, base.prevKey),
+    nextKey: radialKey(raw.nextKey, base.nextKey),
+    at: raw.at === "cursor" ? "cursor" : "center",
+    deadZone: Number.isFinite(dead) && dead >= 1 ? Math.round(dead) : RADIAL_DEAD_ZONE,
+    clickSelect: Boolean(raw.clickSelect),
+  };
+}
+
+export function normalizeRadials(value: unknown): Radial[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const list = value.map(normalizeRadial).filter((item): item is Radial => Boolean(item));
+  return list.length ? list : undefined;
+}
+
 /** The engines' rounding: half up on the magnitude. */
 export function turnCounts(degrees: number, countsPer360: number): number {
   return Math.floor((degrees * countsPer360) / 360 + 0.5);
@@ -141,6 +226,8 @@ export type Config = {
   focusExe?: string;
   /** Turn by degrees calibration for this game. Missing means not calibrated. */
   turn?: TurnCalibration;
+  /** Radial macro menus for this game. The editor shows the first one. */
+  radials?: Radial[];
 };
 
 export type Profile = {
@@ -438,9 +525,10 @@ export function normalizeProfile(value: unknown): Profile {
   const macroList = (list: unknown[]) => onePerTrigger(list.filter((item) => item && typeof item === "object").map((item) => normalizeMacro(item as Macro)));
   const macros = macroList(value.macros);
   const saved = Array.isArray(value.configs) ? value.configs : [];
-  const withTurn = (config: Config, turn: unknown): Config => {
+  const withTurn = (config: Config, turn: unknown, radialList?: unknown): Config => {
     const calibration = normalizeTurnCalibration(turn);
-    return calibration ? { ...config, turn: calibration } : config;
+    const radials = normalizeRadials(radialList);
+    return { ...config, ...(calibration ? { turn: calibration } : {}), ...(radials ? { radials } : {}) };
   };
   const configs: Config[] = saved.length
     ? saved.map((item, index) => withTurn({
@@ -448,7 +536,7 @@ export function normalizeProfile(value: unknown): Profile {
         name: item?.name || `Profile ${index + 1}`,
         macros: Array.isArray(item?.macros) ? macroList(item.macros) : [],
         focusExe: typeof item?.focusExe === "string" ? item.focusExe : "",
-      }, item?.turn))
+      }, item?.turn, item?.radials))
     // A profile saved without configs keeps its own turn on the config it becomes.
     : [withTurn({ id: "default", name: value.name || "Default", macros, focusExe: typeof (value as Profile).focusExe === "string" ? (value as Profile).focusExe : "" }, (value as { turn?: unknown }).turn)];
   const activeId = configs.some((config) => config.id === value.activeId) ? value.activeId : configs[0].id;

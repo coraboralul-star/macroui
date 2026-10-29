@@ -1,7 +1,8 @@
 import { applyDelayMode, expandTaps, isSleep, laneCells, scrollDy, setDelay } from "./eventLane";
 import { appendSteps, insertTyped, withBlocks } from "./blocks";
 import { playModeChip, shownBlocks } from "./macroFlow";
-import { activeTurn, blankMacro, blankStep, normalizeProfile, repairedModes, setActiveTurn, turnCounts, writeActive, type Block, type Macro, type Profile, type Step, type Trigger } from "./profile";
+import { activeTurn, blankMacro, blankRadial, blankStep, normalizeProfile, normalizeRadial, repairedModes, setActiveTurn, switchConfig, turnCounts, writeActive, type Block, type Macro, type Profile, type Radial, type Step, type Trigger } from "./profile";
+import { activeRadial, radialProblems, setActiveRadial, slotAngle, withSlot, withSlotCount } from "./radial";
 import { useMacroActions, type TriggerMenu } from "./useMacroActions";
 import { parseTurn } from "./hostMessages";
 import { TURN_INPUT_DEFAULT, inputLabel, nudge } from "./components/TurnPanel";
@@ -35,6 +36,7 @@ export function runBugChecks(fixture?: unknown): string[] {
   checkTurn();
   checkCreatePaths(fixture);
   checkCanonicalLoad();
+  checkRadial();
   return failures.slice();
 }
 
@@ -158,7 +160,9 @@ export function createPathsFixture(): Profile {
     masked(CREATE_PATHS["Macro Editor > New > Advanced"]({ name: "New path", trigger: { kind: "key", button: "h" } }), "new-path"),
     masked(repeatThree({ kind: "key", button: "j" }), "repeat-3"),
   ];
-  return normalizeProfile({ version: 1, name: "Create paths", variables: {}, activeId: "paths", configs: [{ id: "paths", name: "Create paths", macros }], macros });
+  // The radial is not played here. It shows both engines still load a config that has one.
+  const radials = [blankRadial({ id: "radial-1", trigger: { kind: "key", button: "t" }, slots: ["key-path", "new-path", "", ""] })];
+  return normalizeProfile({ version: 1, name: "Create paths", variables: {}, activeId: "paths", configs: [{ id: "paths", name: "Create paths", macros, radials }], macros });
 }
 
 function checkCreatePaths(fixture: unknown) {
@@ -446,4 +450,65 @@ function checkBrokenRepeat() {
   const known = segment([{ type: "repeat", count: 2, steps: [] }]);
   check(known.length === 1 && known[0]?.type === "repeat" && known[0].steps.length === 0, "a real repeat is still a repeat");
   check(readList([{ type: "repeat", count: 1 } as Step], [0]).length === 0, "reading a repeat with no steps returns an empty list");
+}
+
+function checkRadial() {
+  const fresh = normalizeRadial({});
+  check(Boolean(fresh?.id), "a radial gets an id");
+  same({ ...fresh, id: "" }, { ...blankRadial(), id: "" }, "a bare radial gets every default");
+  same([fresh?.select, fresh?.prevKey, fresh?.nextKey, fresh?.at, fresh?.deadZone], ["keys", "q", "e", "center", 40],
+    "keys is the default: 1 to 8 pick, Q and E step, menu in the middle");
+  same(normalizeRadial({ slots: Array(12).fill("a") })?.slots.length, 8, "more than 8 slots keeps 8");
+  same(normalizeRadial({ slots: ["a"] })?.slots, ["a", ""], "fewer than 2 slots pads to 2");
+  same(normalizeRadial({ trigger: { kind: "mouse", button: "LButton" } })?.trigger, { kind: "mouse", button: "" }, "left click is never a radial trigger");
+  same(normalizeRadial({ prevKey: "RButton", nextKey: 7 })?.prevKey, "q", "a mouse button is not a step key");
+  same(normalizeRadial({ select: "flick", deadZone: 0 })?.deadZone, 40, "a dead zone below 1 is the default");
+
+  const games = normalizeProfile({
+    version: 1,
+    name: "Games",
+    variables: {},
+    activeId: "hd2",
+    configs: [
+      { id: "hd2", name: "Helldivers 2", macros: [], radials: [{ id: "r1", name: "Strats", trigger: { kind: "key", button: "LCtrl" }, slots: ["", ""] }, { id: "r2" }] },
+      { id: "fn", name: "Fortnite", macros: [] },
+    ],
+    macros: [],
+  });
+  same(games.configs[0].radials?.map((item) => item.id), ["r1", "r2"], "a config keeps its list of radials");
+  check(!("radials" in games.configs[1]), "a config without radials has none");
+  check(!("radials" in normalizeProfile({ version: 1, name: "Old", variables: {}, macros: [] }).configs[0]), "an old profile has no radials");
+  same(writeActive(games, games.macros).configs[0].radials?.length, 2, "saving macros keeps the radials");
+  same(activeRadial(games)?.name, "Strats", "the editor shows the first radial");
+  check(activeRadial(switchConfig(games, "fn")) === undefined, "each config has its own radial");
+
+  const edited = setActiveRadial(games, { ...(activeRadial(games) as Radial), name: "Stratagems" });
+  same(edited.configs[0].radials?.map((item) => item.name), ["Stratagems", "Radial menu"], "an edit replaces the first and keeps the rest");
+  same(edited.configs[1], games.configs[1], "the other config is untouched");
+  same(setActiveRadial(games, undefined).configs[0].radials?.map((item) => item.id), ["r2"], "remove drops only the first");
+  check(!("radials" in setActiveRadial(normalizeProfile({ ...games, configs: [{ id: "hd2", name: "H", macros: [], radials: [{ id: "x" }] }] }), undefined).configs[0]),
+    "removing the last radial leaves no list");
+
+  const four = blankRadial({ slots: ["a", "b", "c", "d"] });
+  same(withSlotCount(four, 6).slots, ["a", "b", "c", "d", "", ""], "more slots are empty");
+  same(withSlotCount(four, 3).slots, ["a", "b", "c"], "fewer slots drop the last");
+  same(withSlotCount(four, 1).slots.length, 2, "at least 2 slots");
+  same(withSlotCount(four, 20).slots.length, 8, "at most 8 slots");
+  same(withSlot(four, 1, "z").slots, ["a", "z", "c", "d"], "a slot takes a macro");
+  same([0, 1, 2, 3].map((i) => slotAngle(i, 4)), [0, 90, 180, 270], "slot 1 is straight up, then clockwise");
+
+  const reinforce = macro({ id: "reinforce", name: "Reinforce", trigger: { kind: "key", button: "f1" } });
+  const off = macro({ id: "off", name: "Off", enabled: false, trigger: { kind: "key", button: "f2" } });
+  const ready = blankRadial({ trigger: { kind: "key", button: "LCtrl" }, slots: ["reinforce", ""] });
+  same(radialProblems(ready, [reinforce, off]), [], "a radial with a trigger and a macro is ready");
+  check(radialProblems({ ...ready, trigger: { kind: "key", button: "" } }, [reinforce]).some((p) => p.startsWith("Pick a trigger")), "no trigger arms nothing");
+  check(radialProblems({ ...ready, trigger: { kind: "key", button: "f1" } }, [reinforce]).some((p) => p.startsWith("Reinforce also uses")), "a macro's trigger can't open the menu");
+  same(radialProblems({ ...ready, trigger: { kind: "key", button: "f2" } }, [reinforce, off]), [], "a disabled macro's trigger is free");
+  check(radialProblems({ ...ready, trigger: { kind: "key", button: "3" } }, [reinforce]).some((p) => p.includes("can't be one of them")), "1 to 8 can't be the trigger with keys");
+  check(radialProblems({ ...ready, prevKey: "1" }, [reinforce]).some((p) => p.startsWith("Previous can't be 1 to 8")), "a step key can't be 1 to 8");
+  check(radialProblems({ ...ready, nextKey: "q" }, [reinforce]).some((p) => p.startsWith("Previous and Next")), "the step keys differ");
+  check(radialProblems({ ...ready, nextKey: "LCtrl" }, [reinforce]).some((p) => p.startsWith("Next can't be the trigger")), "a step key can't be the trigger");
+  same(radialProblems({ ...ready, select: "flick", trigger: { kind: "key", button: "3" }, prevKey: "1" }, [reinforce]), [], "flick ignores the keys rules");
+  check(radialProblems({ ...ready, slots: ["gone", ""] }, [reinforce]).some((p) => p.startsWith("Slot 1's macro was deleted")), "a deleted macro shows as an empty slot");
+  check(radialProblems({ ...ready, slots: ["", ""] }, [reinforce]).some((p) => p.startsWith("Put a macro")), "a radial needs at least one macro");
 }
