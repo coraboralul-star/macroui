@@ -255,7 +255,6 @@ export function RadialPanel({
               <span className="settings-row-name">Before you play</span>
               <span className="settings-row-note">
                 The menu draws over borderless and windowed games, not exclusive fullscreen. Competitive games and anti-cheat may treat sent input as cheating.
-                Playback comes in a later update: the engine doesn't open this menu yet.
               </span>
             </span>
           </div>

@@ -193,6 +193,9 @@ void engine_raw_mouse_init(struct engine_raw_mouse *raw)
         atomic_init(&raw->ups[i], 0u);
     atomic_init(&raw->keys_ok, 0);
     atomic_init(&raw->key_at, 0);
+    atomic_init(&raw->aim, 0);
+    atomic_init(&raw->dx, 0);
+    atomic_init(&raw->dy, 0);
 }
 
 void engine_raw_keys_set_ok(struct engine_raw_mouse *raw, int ok)
@@ -509,6 +512,59 @@ void engine_hook_set_stop(struct engine_hook_state *st, int stop)
     atomic_store_explicit(&st->stop, stop ? 1 : 0, memory_order_release);
 }
 
+void engine_raw_aim(struct engine_raw_mouse *raw, int on)
+{
+    if (!raw)
+        return;
+    if (!on) {
+        atomic_store_explicit(&raw->aim, 0, memory_order_release);
+        atomic_store_explicit(&raw->dx, 0, memory_order_release);
+        atomic_store_explicit(&raw->dy, 0, memory_order_release);
+        return;
+    }
+    atomic_store_explicit(&raw->aim, 1, memory_order_release);
+}
+
+void engine_raw_move(struct engine_raw_mouse *raw, int32_t dx, int32_t dy)
+{
+    if (!raw || !atomic_load_explicit(&raw->aim, memory_order_acquire))
+        return;
+    atomic_fetch_add_explicit(&raw->dx, dx, memory_order_acq_rel);
+    atomic_fetch_add_explicit(&raw->dy, dy, memory_order_acq_rel);
+}
+
+static int32_t clamp32(long long v)
+{
+    if (v > INT32_MAX)
+        return INT32_MAX;
+    if (v < INT32_MIN)
+        return INT32_MIN;
+    return (int32_t)v;
+}
+
+void engine_raw_take(struct engine_raw_mouse *raw, int32_t *dx, int32_t *dy)
+{
+    long long x = 0;
+    long long y = 0;
+
+    if (raw) {
+        x = atomic_exchange_explicit(&raw->dx, 0, memory_order_acq_rel);
+        y = atomic_exchange_explicit(&raw->dy, 0, memory_order_acq_rel);
+    }
+    if (dx)
+        *dx = clamp32(x);
+    if (dy)
+        *dy = clamp32(y);
+}
+
+void engine_hook_set_radial(struct engine_hook_state *st, int motion, int click)
+{
+    if (!st)
+        return;
+    atomic_store_explicit(&st->radial_motion, motion ? 1 : 0, memory_order_release);
+    atomic_store_explicit(&st->radial_click, click ? 1 : 0, memory_order_release);
+}
+
 int engine_echo_push(struct engine_hook_state *st, uint16_t id, int down, int64_t until)
 {
     uint32_t head;
@@ -605,8 +661,14 @@ void engine_hook_classify(struct engine_hook_state *st,
     }
     if (!st || !sample || !out)
         return;
-    if (sample->kind == ENGINE_HOOK_MOUSE && mouse_motion(sample->msg))
+    if (sample->kind == ENGINE_HOOK_MOUSE && mouse_motion(sample->msg)) {
+        /* Echo and injected moves are the engine's own output. They pass. */
+        if (sample->msg == ENGINE_MSG_MOUSEMOVE && sample->extra != ENGINE_EXTRA_ECHO &&
+            !(sample->flags & ENGINE_MOUSE_INJECTED) &&
+            atomic_load_explicit(&st->radial_motion, memory_order_acquire))
+            out->swallow = 1;
         return;
+    }
 
     if (sample->kind == ENGINE_HOOK_KEY)
         note_stamp(&st->key_stamp, sample->now);
@@ -645,6 +707,14 @@ void engine_hook_classify(struct engine_hook_state *st,
             st->down_blocked[id] = 0;
         }
         note_win(st, id, down, out);
+    } else if (id == ENGINE_KEY_LBUTTON) {
+        if (down) {
+            out->swallow = atomic_load_explicit(&st->radial_click, memory_order_acquire) ? 1 : 0;
+            st->down_blocked[id] = (uint8_t)out->swallow;
+        } else {
+            out->swallow = st->down_blocked[id] ? 1 : 0;
+            st->down_blocked[id] = 0;
+        }
     }
 
     finger.id = id;

@@ -141,6 +141,13 @@ void engine_poll_triggers(struct engine_play *play, const struct engine_live_con
                           struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
                           const char *front, const char *owner);
 
+/* The same, while a radial menu may be open. A macro on a key the open menu
+   owns (1 to 8, its step keys, left click to pick) sees no edge. radial may be NULL. */
+void engine_poll_triggers_radial(struct engine_play *play, const struct engine_live_config *live,
+                                 struct engine_trigger_mem *mem, const struct engine_fingers *fingers,
+                                 const char *front, const char *owner,
+                                 const struct engine_radial_state *radial);
+
 /* After the tick. A whileHeld press refused as already-running, because the
    last runner was finishing its pass after the release, starts once that
    runner is gone and the key is still down. Reason held-press. An up, a
@@ -170,11 +177,19 @@ void engine_arm_swallow(struct engine_hook_state *hooks, const struct engine_liv
                         const char *front, const char *owner, int armed,
                         const struct engine_play *play);
 
-/* 1 when a live enabled macro with steps triggers on middle or a side button.
+/* The same, plus each ready radial menu's trigger, the open menu's keys, and
+   the move and left-click flags for an open flick menu. radial may be NULL. */
+void engine_arm_swallow_radial(struct engine_hook_state *hooks, const struct engine_live_config *live,
+                               const char *front, const char *owner, int armed,
+                               const struct engine_play *play,
+                               const struct engine_radial_state *radial);
+
+/* 1 when a live enabled macro with steps triggers on middle or a side button,
+   or a ready radial menu does, or picks with flick.
    Left, right, and keyboard triggers do not install the mouse hook. */
 int engine_live_needs_mouse(const struct engine_live_config *live);
 
-/* 1 when an enabled macro with steps uses this id as its trigger. */
+/* 1 when an enabled macro with steps, or a ready radial menu, uses this id as its trigger. */
 int engine_live_claims(const struct engine_live_config *live, uint16_t id);
 
 void engine_claims_init(struct engine_claim_mem *mem);

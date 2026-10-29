@@ -26,8 +26,8 @@ function macro(patch: Partial<Macro> & Pick<Macro, "id">): Macro {
   return { ...blankMacro(), name: patch.id, trigger: { kind: "key", button: "" }, ...patch };
 }
 
-/** fixture is engine-native/tests/fixtures/create-paths.json, which both engines also play. */
-export function runBugChecks(fixture?: unknown): string[] {
+/** fixture is engine-native/tests/fixtures/create-paths.json and radials is radial.json. Both engines play them. */
+export function runBugChecks(fixture?: unknown, radials?: unknown): string[] {
   failures.length = 0;
   checkDelayMode();
   checkScroll();
@@ -37,6 +37,12 @@ export function runBugChecks(fixture?: unknown): string[] {
   checkCreatePaths(fixture);
   checkCanonicalLoad();
   checkRadial();
+  if (radials !== undefined) {
+    const saved = normalizeProfile(radials).configs[0];
+    const made = radialFixture().configs[0];
+    same([saved?.macros, saved?.radials], [made.macros, made.radials],
+      "engine-native/tests/fixtures/radial.json is what the UI makes (npm run check -- --write-fixture)");
+  }
   return failures.slice();
 }
 
@@ -163,6 +169,33 @@ export function createPathsFixture(): Profile {
   // The radial is not played here. It shows both engines still load a config that has one.
   const radials = [blankRadial({ id: "radial-1", trigger: { kind: "key", button: "t" }, slots: ["key-path", "new-path", "", ""] })];
   return normalizeProfile({ version: 1, name: "Create paths", variables: {}, activeId: "paths", configs: [{ id: "paths", name: "Create paths", macros, radials }], macros });
+}
+
+/** What engine-native/tests/fixtures/radial.json holds: a keys menu on t and a
+ *  flick menu on y with click to pick. Slot 1 plays PASS, slot 2 taps x, slot 3
+ *  is a While Held macro, slot 4 is empty. Key one is a macro on 1, which the
+ *  keys menu owns while it is open. */
+export function radialFixture(): Profile {
+  const tap = (key: string): Step[] => [
+    { type: "key", action: "down", key },
+    { type: "wait", ms: 20 },
+    { type: "key", action: "up", key },
+    { type: "wait", ms: 20 },
+  ];
+  const run = (id: string, name: string, steps: Step[], button = "") =>
+    macro({ id, name, advanced: true, trigger: { kind: "key", button }, blocks: [{ id: `${id}-b1`, type: "steps", steps }] });
+  const macros = writeActive(normalizeProfile({ version: 1, name: "R", variables: {}, macros: [] }), [
+    run("strat-a", "Strat A", PASS),
+    run("strat-b", "Strat B", tap("x")),
+    macro({ id: "held-c", name: "Held C", advanced: true, playMode: "whileHeld", blocks: [{ id: "held-c-b1", type: "whileHeld", mute: [], steps: PASS }] }),
+    run("key-one", "Key one", tap("z"), "1"),
+  ]).macros;
+  const slots = ["strat-a", "strat-b", "held-c", ""];
+  const radials = [
+    blankRadial({ id: "rk", name: "Keys menu", trigger: { kind: "key", button: "t" }, slots }),
+    blankRadial({ id: "rf", name: "Flick menu", trigger: { kind: "key", button: "y" }, slots, select: "flick", clickSelect: true }),
+  ];
+  return normalizeProfile({ version: 1, name: "Radial", variables: {}, activeId: "radial", configs: [{ id: "radial", name: "Radial", macros, radials }], macros });
 }
 
 function checkCreatePaths(fixture: unknown) {

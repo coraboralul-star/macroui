@@ -37,6 +37,7 @@ add_library(engine_core STATIC
   src/core/json.c
   src/core/profile.c
   src/core/command.c
+  src/core/radial.c
   src/ipc/report.c)
 target_include_directories(engine_core PUBLIC src/core src/ipc)
 if(NOT MSVC)

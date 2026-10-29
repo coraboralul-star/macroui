@@ -1,0 +1,506 @@
+{
+  "version": 1,
+  "name": "Radial",
+  "variables": {},
+  "activeId": "radial",
+  "configs": [
+    {
+      "id": "radial",
+      "name": "Radial",
+      "macros": [
+        {
+          "id": "strat-a",
+          "name": "Strat A",
+          "enabled": true,
+          "priority": 0,
+          "speed": 1,
+          "playMode": "once",
+          "repeatCount": 1,
+          "exclusive": false,
+          "focusExe": "",
+          "trigger": {
+            "kind": "key",
+            "button": ""
+          },
+          "steps": [],
+          "recording": null,
+          "basic": false,
+          "gapMs": 18,
+          "advanced": true,
+          "busy": false,
+          "blocks": [
+            {
+              "id": "strat-a-b1",
+              "type": "steps",
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 150
+                },
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "e"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "e"
+                }
+              ]
+            }
+          ],
+          "releaseStop": "nextUp"
+        },
+        {
+          "id": "strat-b",
+          "name": "Strat B",
+          "enabled": true,
+          "priority": 0,
+          "speed": 1,
+          "playMode": "once",
+          "repeatCount": 1,
+          "exclusive": false,
+          "focusExe": "",
+          "trigger": {
+            "kind": "key",
+            "button": ""
+          },
+          "steps": [],
+          "recording": null,
+          "basic": false,
+          "gapMs": 18,
+          "advanced": true,
+          "busy": false,
+          "blocks": [
+            {
+              "id": "strat-b-b1",
+              "type": "steps",
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "x"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "x"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                }
+              ]
+            }
+          ],
+          "releaseStop": "nextUp"
+        },
+        {
+          "id": "held-c",
+          "name": "Held C",
+          "enabled": true,
+          "priority": 0,
+          "speed": 1,
+          "playMode": "whileHeld",
+          "repeatCount": 1,
+          "exclusive": false,
+          "focusExe": "",
+          "trigger": {
+            "kind": "key",
+            "button": ""
+          },
+          "steps": [],
+          "recording": null,
+          "basic": false,
+          "gapMs": 18,
+          "advanced": true,
+          "busy": false,
+          "blocks": [
+            {
+              "id": "held-c-b1",
+              "type": "whileHeld",
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 150
+                },
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "e"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "e"
+                }
+              ],
+              "mute": []
+            }
+          ],
+          "releaseStop": "nextUp"
+        },
+        {
+          "id": "key-one",
+          "name": "Key one",
+          "enabled": true,
+          "priority": 0,
+          "speed": 1,
+          "playMode": "once",
+          "repeatCount": 1,
+          "exclusive": false,
+          "focusExe": "",
+          "trigger": {
+            "kind": "key",
+            "button": "1"
+          },
+          "steps": [],
+          "recording": null,
+          "basic": false,
+          "gapMs": 18,
+          "advanced": true,
+          "busy": false,
+          "blocks": [
+            {
+              "id": "key-one-b1",
+              "type": "steps",
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "z"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "z"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                }
+              ]
+            }
+          ],
+          "releaseStop": "nextUp"
+        }
+      ],
+      "focusExe": "",
+      "radials": [
+        {
+          "id": "rk",
+          "name": "Keys menu",
+          "enabled": true,
+          "trigger": {
+            "kind": "key",
+            "button": "t"
+          },
+          "slots": [
+            "strat-a",
+            "strat-b",
+            "held-c",
+            ""
+          ],
+          "select": "keys",
+          "prevKey": "q",
+          "nextKey": "e",
+          "at": "center",
+          "deadZone": 40,
+          "clickSelect": false
+        },
+        {
+          "id": "rf",
+          "name": "Flick menu",
+          "enabled": true,
+          "trigger": {
+            "kind": "key",
+            "button": "y"
+          },
+          "slots": [
+            "strat-a",
+            "strat-b",
+            "held-c",
+            ""
+          ],
+          "select": "flick",
+          "prevKey": "q",
+          "nextKey": "e",
+          "at": "center",
+          "deadZone": 40,
+          "clickSelect": true
+        }
+      ]
+    }
+  ],
+  "macros": [
+    {
+      "id": "strat-a",
+      "name": "Strat A",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "repeatCount": 1,
+      "exclusive": false,
+      "focusExe": "",
+      "trigger": {
+        "kind": "key",
+        "button": ""
+      },
+      "steps": [],
+      "recording": null,
+      "basic": false,
+      "gapMs": 18,
+      "advanced": true,
+      "busy": false,
+      "blocks": [
+        {
+          "id": "strat-a-b1",
+          "type": "steps",
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 150
+            },
+            {
+              "type": "key",
+              "action": "down",
+              "key": "e"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "e"
+            }
+          ]
+        }
+      ],
+      "releaseStop": "nextUp"
+    },
+    {
+      "id": "strat-b",
+      "name": "Strat B",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "repeatCount": 1,
+      "exclusive": false,
+      "focusExe": "",
+      "trigger": {
+        "kind": "key",
+        "button": ""
+      },
+      "steps": [],
+      "recording": null,
+      "basic": false,
+      "gapMs": 18,
+      "advanced": true,
+      "busy": false,
+      "blocks": [
+        {
+          "id": "strat-b-b1",
+          "type": "steps",
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "x"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "x"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            }
+          ]
+        }
+      ],
+      "releaseStop": "nextUp"
+    },
+    {
+      "id": "held-c",
+      "name": "Held C",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "whileHeld",
+      "repeatCount": 1,
+      "exclusive": false,
+      "focusExe": "",
+      "trigger": {
+        "kind": "key",
+        "button": ""
+      },
+      "steps": [],
+      "recording": null,
+      "basic": false,
+      "gapMs": 18,
+      "advanced": true,
+      "busy": false,
+      "blocks": [
+        {
+          "id": "held-c-b1",
+          "type": "whileHeld",
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 150
+            },
+            {
+              "type": "key",
+              "action": "down",
+              "key": "e"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "e"
+            }
+          ],
+          "mute": []
+        }
+      ],
+      "releaseStop": "nextUp"
+    },
+    {
+      "id": "key-one",
+      "name": "Key one",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "repeatCount": 1,
+      "exclusive": false,
+      "focusExe": "",
+      "trigger": {
+        "kind": "key",
+        "button": "1"
+      },
+      "steps": [],
+      "recording": null,
+      "basic": false,
+      "gapMs": 18,
+      "advanced": true,
+      "busy": false,
+      "blocks": [
+        {
+          "id": "key-one-b1",
+          "type": "steps",
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "z"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "z"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            }
+          ]
+        }
+      ],
+      "releaseStop": "nextUp"
+    }
+  ],
+  "swapClicks": false,
+  "inputMode": "software",
+  "focusExe": ""
+}

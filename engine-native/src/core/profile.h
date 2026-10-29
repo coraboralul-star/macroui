@@ -12,6 +12,7 @@
 #include <stdint.h>
 
 #include "json.h"
+#include "radial.h"
 #include "runner.h"
 
 #define ENGINE_PROFILE_NAME_CAP 128
@@ -60,6 +61,9 @@ struct engine_catalog {
     char focus_exe[ENGINE_PROFILE_FOCUS_CAP];
     uint16_t trigger_head[ENGINE_TRIGGER_SLOTS];
     uint32_t *trigger_next;
+    /* config.radials. Past ENGINE_RADIAL_CAP are dropped. */
+    struct engine_radial radials[ENGINE_RADIAL_CAP];
+    int radial_count;
 };
 
 struct engine_profile_image {
@@ -89,6 +93,8 @@ struct engine_live_config {
     const uint16_t *trigger_head;
     const uint32_t *trigger_next;
     int macro_count;
+    const struct engine_radial *radials;
+    int radial_count;
     char live_id[ENGINE_ID_CAP];
     char active_id[ENGINE_ID_CAP];
     char prefer[ENGINE_ID_CAP];

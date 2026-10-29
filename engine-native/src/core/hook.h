@@ -97,6 +97,10 @@ struct engine_hook_state {
     atomic_int suspect;
     atomic_uint pending_ops;
     atomic_int stop;
+    /* An open flick radial menu: moves do not reach the cursor, and with
+       click to pick, left click is the menu's. Playback writes these. */
+    atomic_int radial_motion;
+    atomic_int radial_click;
 
     /* Hook thread only. A key-up follows its own down: swallowed when the
        down was swallowed, passed when it was passed. win_passed is a LWin or
@@ -174,6 +178,11 @@ struct engine_raw_mouse {
        quiet one: Raw Input still sees keys that a dead hook misses. */
     atomic_int keys_ok;
     atomic_llong key_at;
+    /* Relative moves from a real mouse, summed only while aim is on: an open
+       flick radial menu. Playback takes the sum each tick. */
+    atomic_int aim;
+    atomic_llong dx;
+    atomic_llong dy;
 };
 
 /* What a silent keyboard hook was, for the reinstall log line. */
@@ -215,6 +224,15 @@ void engine_raw_mouse_up(struct engine_raw_mouse *raw, uint16_t id);
 int engine_raw_slot(uint16_t id);
 
 void engine_raw_keys_set_ok(struct engine_raw_mouse *raw, int ok);
+
+/* Off clears the sum. */
+void engine_raw_aim(struct engine_raw_mouse *raw, int on);
+
+/* One relative move from a real mouse. Nothing while aim is off. */
+void engine_raw_move(struct engine_raw_mouse *raw, int32_t dx, int32_t dy);
+
+/* The sum since the last take, then zero. */
+void engine_raw_take(struct engine_raw_mouse *raw, int32_t *dx, int32_t *dy);
 
 /* One key event from a real keyboard at qpc. */
 void engine_raw_key_seen(struct engine_raw_mouse *raw, int64_t qpc);
@@ -270,6 +288,7 @@ void engine_hook_set_wake(struct engine_hook_state *st, int wake);
 void engine_hook_set_need_mouse(struct engine_hook_state *st, int need);
 void engine_hook_set_suspect(struct engine_hook_state *st);
 void engine_hook_set_stop(struct engine_hook_state *st, int stop);
+void engine_hook_set_radial(struct engine_hook_state *st, int motion, int click);
 
 /* 1 when the token was stored. A full ring drops the new token.
    until is an absolute stamp in the same unit as now. Equal still matches. */
@@ -281,7 +300,8 @@ int engine_echo_match(struct engine_hook_state *st, uint16_t id, int down, int64
 /* Read the struct fields, write at most one event, and say whether to swallow.
    Move and wheel are not events. Echo and injected input are not a finger.
    Keyboard, middle, and both side buttons swallow from the published map.
-   Left and right always pass. */
+   Left and right pass, except left while a radial menu picks with a click.
+   A move is swallowed while a flick radial menu is open. The wheel always passes. */
 void engine_hook_classify(struct engine_hook_state *st,
                           const struct engine_hook_sample *sample,
                           struct engine_hook_decision *out);
