@@ -509,6 +509,7 @@ int engine_expand_press_hold(const char *key, int32_t hold_ms, int omitted,
 static int playing(const struct engine_play *play, const char *id);
 static int finger_down(const struct engine_play *play, uint16_t id);
 static int finger_seen(const struct engine_play *play, uint16_t id);
+static int trigger_down(const struct engine_runner *runner, const struct engine_play *play);
 static void release_frame_mute(struct engine_play *play, struct engine_runner *runner,
                                struct engine_frame *frame);
 static void release_edge_mute(struct engine_play *play, struct engine_runner *runner,
@@ -906,7 +907,7 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
     if (step->type == ENGINE_STEP_SCAN_WAIT) {
         /* FingerDown is the finger snapshot. An empty trigger does not stop.
            A missing snapshot and a key that was never reported count as up. */
-        if (runner->trigger != 0 && !finger_down(play, runner->trigger)) {
+        if (runner->trigger != 0 && !trigger_down(runner, play)) {
             mark_done(runner, play, ENGINE_WHY_SCAN_RELEASE);
             return ENGINE_ADV_WAIT;
         }
@@ -1052,7 +1053,7 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
         if (runner->stopping)
             return ENGINE_ADV_CONT;
         if (runner->trigger != 0 && finger_seen(play, runner->trigger) &&
-            !finger_down(play, runner->trigger))
+            !trigger_down(runner, play))
             return ENGINE_ADV_CONT;
         if (!push_hold(runner, play, step))
             return ENGINE_ADV_WAIT;
@@ -1070,9 +1071,9 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
         /* A reported up skips before the loop starts. An empty trigger, a key
            that was never reported, and a missing snapshot skip too. */
         if (runner->trigger != 0 && finger_seen(play, runner->trigger) &&
-            !finger_down(play, runner->trigger))
+            !trigger_down(runner, play))
             return ENGINE_ADV_CONT;
-        if (runner->trigger == 0 || !finger_down(play, runner->trigger))
+        if (runner->trigger == 0 || !trigger_down(runner, play))
             return ENGINE_ADV_CONT;
         if (runner->started_at >= 0 && now > runner->started_at)
             held = now - runner->started_at;
@@ -1093,7 +1094,7 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
         struct engine_frame *frame;
 
         /* No snapshot means the trigger is not down, so the children run. */
-        if (runner->trigger != 0 && finger_down(play, runner->trigger)) {
+        if (runner->trigger != 0 && trigger_down(runner, play)) {
             arm_ms(runner, now, 1.0, 1.0);
             return ENGINE_ADV_AGAIN;
         }
@@ -1113,7 +1114,7 @@ static int exec_step(struct engine_runner *runner, struct engine_play *play,
         int64_t freq = runner->freq > 0 ? runner->freq : 1000;
         int64_t held = held_ticks(runner, now);
         int64_t under = step->a > 0 ? engine_ms_to_ticks(step->a, freq) : 0;
-        int still = runner->trigger != 0 && finger_down(play, runner->trigger);
+        int still = runner->trigger != 0 && trigger_down(runner, play);
         int64_t left;
 
         /* underMs is wall time. The 1 ms yield is not divided by speed. */
@@ -1163,7 +1164,7 @@ static int trigger_is_up(const struct engine_runner *runner, const struct engine
 {
     if (!runner || runner->stopping || runner->trigger == 0)
         return 1;
-    return !finger_down(play, runner->trigger);
+    return !trigger_down(runner, play);
 }
 
 /* 0 stops this tick. 1 keeps walking.
@@ -1519,7 +1520,7 @@ static void tick_tap(struct engine_runner *runner, struct engine_play *play, int
     if (!runner || runner->stack_count <= 0)
         return;
     frame = &runner->stack[runner->stack_count - 1];
-    if (runner->stopping || (runner->trigger != 0 && !finger_down(play, runner->trigger))) {
+    if (runner->stopping || (runner->trigger != 0 && !trigger_down(runner, play))) {
         mark_done(runner, play, ENGINE_WHY_EDGE_RELEASE);
         return;
     }
@@ -1532,7 +1533,7 @@ static void tick_tap(struct engine_runner *runner, struct engine_play *play, int
         return;
     }
     if (frame->edge_phase == ENGINE_EDGE_PHASE_GAP) {
-        if (runner->trigger != 0 && !finger_down(play, runner->trigger)) {
+        if (runner->trigger != 0 && !trigger_down(runner, play)) {
             mark_done(runner, play, ENGINE_WHY_EDGE_RELEASE);
             return;
         }
@@ -1584,7 +1585,7 @@ static int tick_spam(struct engine_runner *runner, struct engine_play *play, int
     if (!runner || runner->stack_count <= 0)
         return 0;
     frame = &runner->stack[runner->stack_count - 1];
-    up = runner->trigger != 0 && !finger_down(play, runner->trigger);
+    up = runner->trigger != 0 && !trigger_down(runner, play);
     if (runner->stopping) {
         mark_done(runner, play, ENGINE_WHY_ASK_STOP);
         return 0;
@@ -1625,7 +1626,7 @@ static int edge_should_stop(const struct engine_runner *runner, const struct eng
         return 0;
     if (runner->stopping)
         return 1;
-    return runner->trigger != 0 && !finger_down(play, runner->trigger);
+    return runner->trigger != 0 && !trigger_down(runner, play);
 }
 
 /* FingerDown, not the edge-hold check. An empty trigger does not stop. */
@@ -1635,7 +1636,7 @@ static int scan_should_stop(const struct engine_runner *runner, const struct eng
         return 0;
     if (runner->stopping)
         return 1;
-    return runner->trigger != 0 && !finger_down(play, runner->trigger);
+    return runner->trigger != 0 && !trigger_down(runner, play);
 }
 
 static void advance_runner(struct engine_runner *runner, struct engine_play *play, int64_t now,
@@ -1764,6 +1765,14 @@ static int finger_seen(const struct engine_play *play, uint16_t id)
     if (!play || !play->have_fingers)
         return 0;
     return engine_fingers_seen(&play->fingers, id);
+}
+
+/* The runner's own trigger. Up after let_go, whatever the finger does. */
+static int trigger_down(const struct engine_runner *runner, const struct engine_play *play)
+{
+    if (!runner || runner->trigger == 0 || runner->let_go)
+        return 0;
+    return finger_down(play, runner->trigger);
 }
 
 static const struct engine_macro *find_macro(const struct engine_play *play, const char *id)
@@ -2013,13 +2022,15 @@ static void note_hold_release(struct engine_runner *runner, const struct engine_
 
     if (!runner || !play || !play->have_fingers)
         return;
-    if (runner->trigger == 0 || finger_down(play, runner->trigger))
+    if (runner->trigger == 0 || trigger_down(runner, play))
         return;
     if (stop_mode(runner) != ENGINE_STOP_NEXT_UP)
         return;
     for (i = 0; i < runner->stack_count; i++) {
-        if (runner->stack[i].hold_loop)
+        if (runner->stack[i].hold_loop) {
             runner->stack[i].drain = 1;
+            runner->let_go = 1;
+        }
     }
 }
 
@@ -2043,7 +2054,7 @@ static int finish_hold(struct engine_runner *runner, struct engine_play *play, i
         runner->stack_count--;
         return 1;
     }
-    if (runner->trigger != 0 && finger_down(play, runner->trigger)) {
+    if (runner->trigger != 0 && trigger_down(runner, play)) {
         if (frame->swap_after_ms > 0 &&
             held >= engine_ms_to_ticks(frame->swap_after_ms, runner->freq > 0 ? runner->freq : 1000)) {
             release_frame_mute(play, runner, frame);

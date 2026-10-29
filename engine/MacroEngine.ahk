@@ -452,6 +452,9 @@ class Runner {
             this.releaseStop := "nextUp"
         this.stopping := false
         this.sawUp := false
+        ; A nextUp release drained a hold loop. The trigger counts as up for the
+        ; rest of this runner: a re-press belongs to the next one (held-press).
+        this.letGo := false
         this.releasedNow := false
         ; Why it ended, for the runner stop line. The first reason wins.
         this.endWhy := ""
@@ -498,7 +501,7 @@ class Runner {
     }
 
     NoteHoldRelease() {
-        if (this.trigger = "" || Engine.KeyDown(this.trigger))
+        if (this.trigger = "" || this.TriggerDown())
             return
         if (this.StopMode() != "nextUp")
             return
@@ -508,9 +511,20 @@ class Runner {
             i--
             if !(frame is Object)
                 continue
-            if (frame.HasProp("holdLoop") && frame.holdLoop)
+            if (frame.HasProp("holdLoop") && frame.holdLoop) {
                 frame.drain := true
+                this.letGo := true
+            }
         }
+    }
+
+    ; The runner's own trigger. Up after letGo, whatever the finger does.
+    TriggerDown() {
+        return !this.letGo && Engine.KeyDown(this.trigger)
+    }
+
+    TriggerFinger() {
+        return !this.letGo && Engine.FingerDown(this.trigger)
     }
 
     StopMode() {
@@ -675,7 +689,7 @@ class Runner {
                         this.stack.Pop()
                         continue
                     }
-                    if (this.trigger != "" && Engine.KeyDown(this.trigger)) {
+                    if (this.trigger != "" && this.TriggerDown()) {
                         swapAt := frame.HasProp("swapAfterMs") ? AsNum(frame.swapAfterMs, 0) : 0
                         if (swapAt > 0 && this.heldMs >= swapAt) {
                             this.ReleaseFrameMute(frame)
@@ -754,7 +768,7 @@ class Runner {
         }
         if (kind = "wait" || kind = "scanWait") {
             if (kind = "scanWait") {
-                if (this.trigger != "" && !Engine.FingerDown(this.trigger)) {
+                if (this.trigger != "" && !this.TriggerFinger()) {
                     this.MarkDone()
                     return "wait"
                 }
@@ -909,7 +923,7 @@ class Runner {
         if (kind = "holdLoop") {
             if this.stopping
                 return ""
-            if (this.trigger != "" && Engine.physDown.Has(this.trigger) && !Engine.KeyDown(this.trigger))
+            if (this.trigger != "" && Engine.physDown.Has(this.trigger) && !this.TriggerDown())
                 return ""
             this.PushHoldFrame(step)
             return ""
@@ -917,10 +931,10 @@ class Runner {
         if (kind = "swapLoop") {
             if this.stopping
                 return ""
-            if (this.trigger != "" && Engine.physDown.Has(this.trigger) && !Engine.KeyDown(this.trigger))
+            if (this.trigger != "" && Engine.physDown.Has(this.trigger) && !this.TriggerDown())
                 return ""
             after := AsNum(Field(step, "afterMs", 150), 150)
-            still := this.trigger != "" && Engine.KeyDown(this.trigger)
+            still := this.trigger != "" && this.TriggerDown()
             if !still
                 return ""
             if (this.heldMs < after) {
@@ -932,7 +946,7 @@ class Runner {
         }
         if (kind = "ifShort") {
             under := AsNum(Field(step, "underMs", 150), 150)
-            still := this.trigger != "" && Engine.KeyDown(this.trigger)
+            still := this.trigger != "" && this.TriggerDown()
             if (still && this.heldMs < under) {
                 this.ArmWait(now,1)
                 return "again"
@@ -952,7 +966,7 @@ class Runner {
         if (kind = "burst") {
             ; After release runs only once the trigger is up. A down with no
             ; up in the block before this stays held until this block's up.
-            if (this.trigger != "" && Engine.KeyDown(this.trigger)) {
+            if (this.trigger != "" && this.TriggerDown()) {
                 this.ArmWait(now, 1)
                 return "again"
             }
@@ -978,7 +992,7 @@ class Runner {
     ; true means this tick should stop. false means Advance should keep going.
     TickOnce(frame, now) {
         phase := String(frame.oncePhase)
-        up := this.stopping || this.trigger = "" || !Engine.KeyDown(this.trigger)
+        up := this.stopping || this.trigger = "" || !this.TriggerDown()
         if (phase = "gap") {
             if (now < frame.onceReady) {
                 this.ArmWait(now, frame.onceReady - now)
@@ -1160,7 +1174,7 @@ class Runner {
         if (this.startedAt < 0)
             return false
         this.heldMs := now - this.startedAt
-        return this.trigger != "" && Engine.KeyDown(this.trigger) && this.heldMs >= swapAt
+        return this.trigger != "" && this.TriggerDown() && this.heldMs >= swapAt
     }
 
     HoldShouldStop() {
@@ -1173,13 +1187,13 @@ class Runner {
         if (this.HasProp("scanWait") && this.scanWait) {
             if this.stopping
                 return true
-            return this.trigger != "" && !Engine.FingerDown(this.trigger)
+            return this.trigger != "" && !this.TriggerFinger()
         }
         if !watching
             return false
         if this.stopping
             return true
-        return this.trigger != "" && !Engine.KeyDown(this.trigger)
+        return this.trigger != "" && !this.TriggerDown()
     }
 
     TickEdge(frame, now) {
@@ -1187,7 +1201,7 @@ class Runner {
             this.MarkDone()
             return
         }
-        if (this.trigger != "" && !Engine.KeyDown(this.trigger)) {
+        if (this.trigger != "" && !this.TriggerDown()) {
             this.MarkDone()
             return
         }
@@ -1201,7 +1215,7 @@ class Runner {
             return
         }
         if (frame.edgePhase = "gap") {
-            if (this.trigger != "" && !Engine.KeyDown(this.trigger)) {
+            if (this.trigger != "" && !this.TriggerDown()) {
                 this.MarkDone()
                 return
             }
@@ -1230,7 +1244,7 @@ class Runner {
     ; true means this tick should stop. false means the spam frame ended and Advance should continue.
     TickSpamEdge(frame, now) {
         key := frame.edgeKey
-        up := this.trigger != "" && !Engine.KeyDown(this.trigger)
+        up := this.trigger != "" && !this.TriggerDown()
         if (this.stopping) {
             this.MarkDone()
             return true
@@ -5080,6 +5094,7 @@ RunChecks(fails) {
     fails := HeldPressChecks(fails)
     fails := SoakChecks(fails)
     fails := CreatePathChecks(fails)
+    fails := HoldRepressChecks(fails)
     fails := TurnChecks(fails)
     return fails
 }
@@ -5874,9 +5889,41 @@ CreatePathChecks(fails) {
     return fails
 }
 
+; engine-native\tests\fixtures\hold-repress.json: one pass is space, 150 ms,
+; e, about 190 ms, releaseStop nextUp. Up at 40 and down again at 90 lands in
+; the pass that finishes after the release. A While Held, Swap After or One
+; Press block saved as whileHeld went silent there until the up (#95). The
+; press is kept and starts as held-press when that pass ends, so it plays like
+; the same macro saved as once. engine-command-test plays the same file.
+HoldRepressChecks(fails) {
+    text := ""
+    try text := FileRead(A_ScriptDir "\..\engine-native\tests\fixtures\hold-repress.json", "UTF-8")
+    if (text = "")
+        return Check(false, "hold-repress.json readable", fails)
+    macros := JSON.Parse(text)["macros"]
+    hold := [10, 610], heldAgain := [10, 40, 90, 410]
+    ; name, key, space held, starts, held-press, space, e. One Press plays its
+    ; whole pass after a release and the re-press keeps the same runner going.
+    cases := [["While Held, whileHeld", "k", 4, 2, 1, 3, 1],
+        ["While Held, once", "l", 4, 2, 0, 3, 1],
+        ["Swap After, whileHeld", "m", 4, 2, 1, 3, 1],
+        ["One Press, whileHeld", "n", 3, 1, 0, 2, 2]]
+    for output in ["software", "rp2350"] {
+        for c in cases {
+            name := c[1] " " output
+            run := CreatePathPlay(macros, c[2], hold, output)
+            fails := Check(run["starts"] = 1 && run["space"] = c[3] && run["e"] = 3, name ": held 600 ms plays every pass", fails)
+            run := CreatePathPlay(macros, c[2], heldAgain, output)
+            fails := Check(run["starts"] = c[4] && run["held"] = c[5] && run["space"] = c[6] && run["e"] = c[7], name ": a re-press while finishing plays while held", fails)
+        }
+    }
+    return fails
+}
+
 ; One trigger, one tick per ms, publishing like the real loop. edges are
-; down/up times. Counts starts and the space and e downs sent.
-CreatePathPlay(macros, key, edges) {
+; down/up times. Counts starts, held-press starts, and the space and e downs
+; sent.
+CreatePathPlay(macros, key, edges, output := "software") {
     saved := Map("rawOk", Engine.rawOk, "mouse", Engine.hMouseHook, "out", Engine.outputMode,
         "profile", Engine.profile, "known", Engine.frontKnown, "front", Engine.frontExe, "dry", Engine.dry)
     Engine.BuildVkMap()
@@ -5886,7 +5933,7 @@ CreatePathPlay(macros, key, edges) {
     Engine.frontKnown := true
     Engine.frontExe := "game.exe"
     Engine.hidEcho := []
-    Engine.outputMode := "software"
+    Engine.outputMode := output
     Engine.profile := Map("macros", macros)
     Engine.hooks := Map(key, true)
     Engine.physDown := Map()
@@ -5899,6 +5946,7 @@ CreatePathPlay(macros, key, edges) {
     Engine.redo := Map()
     Engine.sent := []
     Engine.applied := Map()
+    Engine.capture := []
     Engine.SeedTriggers()
     starts := 0
     now := 0
@@ -5910,6 +5958,11 @@ CreatePathPlay(macros, key, edges) {
         Engine.Publish(now)
         now++
     }
+    held := 0
+    for line in Engine.capture
+        if InStr(line, "runner start") && InStr(line, "reason=held-press")
+            held++
+    Engine.capture := ""
     space := 0, e := 0
     for item in Engine.sent {
         for k in item["down"] {
@@ -5935,5 +5988,5 @@ CreatePathPlay(macros, key, edges) {
     Engine.frontKnown := saved["known"]
     Engine.frontExe := saved["front"]
     Engine.dry := saved["dry"]
-    return Map("starts", starts, "space", space, "e", e)
+    return Map("starts", starts, "held", held, "space", space, "e", e)
 }
