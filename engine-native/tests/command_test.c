@@ -2033,6 +2033,7 @@ static void check_notes(void)
 
 struct path_run {
     int starts;
+    int held_press;
     int playing;
     int space;
     int e;
@@ -2041,8 +2042,8 @@ struct path_run {
 /* One trigger on create-paths.json in playback_tick's order. edges are
    down/up pairs in ms. Counts starts, presses ignored while playing, and
    the space and e downs the output sees. */
-static struct path_run play_path(const char *doc, size_t n, uint16_t trigger,
-                                 const int64_t *edges, int pairs)
+static struct path_run play_path_on(const char *doc, size_t n, uint16_t trigger,
+                                    const int64_t *edges, int pairs, int output)
 {
     static struct engine_hook_state hooks;
     struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
@@ -2071,6 +2072,7 @@ static struct path_run play_path(const char *doc, size_t n, uint16_t trigger,
     engine_profile_pick(image, "game.exe", image->active_id, &live);
     engine_hook_init(&hooks);
     engine_play_init(play);
+    play->output.mode = output;
     engine_play_set_macros(play, live.macros, live.macro_count);
     engine_trigger_init(&mem);
     engine_fingers_clear(&fingers);
@@ -2098,6 +2100,8 @@ static struct path_run play_path(const char *doc, size_t n, uint16_t trigger,
         for (i = 0; i < play->note_count; i++) {
             if (play->notes[i].kind == ENGINE_NOTE_START)
                 run.starts++;
+            if (play->notes[i].kind == ENGINE_NOTE_START && play->notes[i].why == ENGINE_WHY_HELD_PRESS)
+                run.held_press++;
             if (play->notes[i].kind == ENGINE_NOTE_BLOCK && play->notes[i].why == ENGINE_WHY_PLAYING)
                 run.playing++;
         }
@@ -2118,6 +2122,35 @@ static struct path_run play_path(const char *doc, size_t n, uint16_t trigger,
     return run;
 }
 
+static struct path_run play_path(const char *doc, size_t n, uint16_t trigger,
+                                 const int64_t *edges, int pairs)
+{
+    return play_path_on(doc, n, trigger, edges, pairs, ENGINE_OUTPUT_SOFTWARE);
+}
+
+/* The whole file, NUL-terminated, or NULL. */
+static char *read_fixture(const char *path, size_t *n)
+{
+    char *doc;
+    FILE *f = fopen(path, "rb");
+
+    *n = 0;
+    if (!f)
+        return NULL;
+    fseek(f, 0, SEEK_END);
+    *n = (size_t)ftell(f);
+    fseek(f, 0, SEEK_SET);
+    doc = (char *)malloc(*n + 1);
+    if (!doc || fread(doc, 1, *n, f) != *n) {
+        fclose(f);
+        free(doc);
+        return NULL;
+    }
+    fclose(f);
+    doc[*n] = 0;
+    return doc;
+}
+
 /* fixtures/create-paths.json is written by the UI (npm run check --
    --write-fixture): one macro per way to make a Run Once, and Play > Repeat
    x3. The AHK --self-test plays the same file with the same expectations. */
@@ -2132,28 +2165,15 @@ static void check_create_paths(void)
         uint16_t trigger;
     } paths[] = { { "key path", 0x47 }, { "new path", 0x48 } };
     char label[128];
-    char *doc;
     size_t n = 0;
-    FILE *f = fopen(FIXTURE_DIR "/create-paths.json", "rb");
+    char *doc = read_fixture(FIXTURE_DIR "/create-paths.json", &n);
     struct path_run run;
     int p;
 
-    if (!f) {
-        expect(0, "create-paths.json readable");
-        return;
-    }
-    fseek(f, 0, SEEK_END);
-    n = (size_t)ftell(f);
-    fseek(f, 0, SEEK_SET);
-    doc = (char *)malloc(n + 1);
-    if (!doc || fread(doc, 1, n, f) != n) {
-        fclose(f);
-        free(doc);
+    if (!doc) {
         expect(0, "create-paths.json read");
         return;
     }
-    fclose(f);
-    doc[n] = 0;
     for (p = 0; p < 2; p++) {
         run = play_path(doc, n, paths[p].trigger, hold, 1);
         snprintf(label, sizeof label, "%s: held 600 ms plays one pass", paths[p].name);
@@ -2172,6 +2192,60 @@ static void check_create_paths(void)
     expect(run.starts == 1 && run.space == 3, "repeat x3: a tap plays 3 times, not 9");
     run = play_path(doc, n, 0x4A, hold, 1);
     expect(run.starts == 1 && run.space == 3, "repeat x3: held plays 3 times, not 9");
+    free(doc);
+}
+
+/* fixtures/hold-repress.json: one pass is space, 150 ms, e, about 190 ms,
+   releaseStop nextUp. Up at 40 and down again at 90 lands in the pass that
+   finishes after the release. A While Held, Swap After or One Press block
+   saved as whileHeld went silent there until the up (#95). The press is
+   kept and starts as held-press when that pass ends, so it plays like the
+   same macro saved as once. The AHK --self-test plays the same file. */
+static void check_hold_repress(void)
+{
+    static const int64_t hold[] = { 10, 610 };
+    static const int64_t held_again[] = { 10, 40, 90, 410 };
+    static const int outputs[] = { ENGINE_OUTPUT_SOFTWARE, ENGINE_OUTPUT_RP2350 };
+    /* One Press plays its whole pass after a release and the re-press keeps
+       the same runner going: one start, a second pass. */
+    static const struct {
+        const char *name;
+        uint16_t trigger;
+        int hold_space;
+        int starts;
+        int held_press;
+        int space;
+        int e;
+    } macros[] = {
+        { "While Held, whileHeld", 0x4B, 4, 2, 1, 3, 1 },
+        { "While Held, once", 0x4C, 4, 2, 0, 3, 1 },
+        { "Swap After, whileHeld", 0x4D, 4, 2, 1, 3, 1 },
+        { "One Press, whileHeld", 0x4E, 3, 1, 0, 2, 2 },
+    };
+    char label[160];
+    size_t n = 0;
+    char *doc = read_fixture(FIXTURE_DIR "/hold-repress.json", &n);
+    struct path_run run;
+    int m;
+    int o;
+
+    if (!doc) {
+        expect(0, "hold-repress.json read");
+        return;
+    }
+    for (o = 0; o < 2; o++) {
+        for (m = 0; m < 4; m++) {
+            run = play_path_on(doc, n, macros[m].trigger, hold, 1, outputs[o]);
+            snprintf(label, sizeof label, "%s: held 600 ms plays every pass", macros[m].name);
+            expect(run.starts == 1 && run.space == macros[m].hold_space && run.e == 3, label);
+            run = play_path_on(doc, n, macros[m].trigger, held_again, 2, outputs[o]);
+            snprintf(label, sizeof label, "%s: a re-press while finishing plays while held",
+                     macros[m].name);
+            expect(run.starts == macros[m].starts && run.held_press == macros[m].held_press &&
+                       run.space == macros[m].space && run.e == macros[m].e,
+                   label);
+        }
+    }
     free(doc);
 }
 
@@ -2199,6 +2273,7 @@ int main(void)
     check_forget_triggers();
     check_notes();
     check_create_paths();
+    check_hold_repress();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

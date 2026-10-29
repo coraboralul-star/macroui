@@ -302,6 +302,9 @@ struct engine_runner {
     int release_stop;
     int stopping;
     int saw_up;
+    /* A nextUp release drained a hold loop. The trigger counts as up for the
+       rest of this runner: a re-press belongs to the next one (held-press). */
+    int let_go;
     int released_now;
     int scan_wait;
     int done;

@@ -1,0 +1,565 @@
+{
+  "version": 1,
+  "name": "Hold re-press",
+  "variables": {},
+  "activeId": "repress",
+  "configs": [
+    {
+      "id": "repress",
+      "name": "Hold re-press",
+      "macros": [
+        {
+          "id": "held-wh",
+          "name": "While Held, whileHeld",
+          "enabled": true,
+          "priority": 0,
+          "speed": 1,
+          "playMode": "whileHeld",
+          "repeatCount": 1,
+          "exclusive": false,
+          "focusExe": "",
+          "trigger": {
+            "kind": "key",
+            "button": "k"
+          },
+          "steps": [],
+          "recording": null,
+          "basic": false,
+          "gapMs": 18,
+          "advanced": true,
+          "busy": false,
+          "blocks": [
+            {
+              "id": "held-wh-b1",
+              "type": "whileHeld",
+              "mute": [],
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 150
+                },
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "e"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "e"
+                }
+              ]
+            }
+          ],
+          "releaseStop": "nextUp"
+        },
+        {
+          "id": "held-once",
+          "name": "While Held, once",
+          "enabled": true,
+          "priority": 0,
+          "speed": 1,
+          "playMode": "once",
+          "repeatCount": 1,
+          "exclusive": false,
+          "focusExe": "",
+          "trigger": {
+            "kind": "key",
+            "button": "l"
+          },
+          "steps": [],
+          "recording": null,
+          "basic": false,
+          "gapMs": 18,
+          "advanced": true,
+          "busy": false,
+          "blocks": [
+            {
+              "id": "held-once-b1",
+              "type": "whileHeld",
+              "mute": [],
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 150
+                },
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "e"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "e"
+                }
+              ]
+            }
+          ],
+          "releaseStop": "nextUp"
+        },
+        {
+          "id": "swap-wh",
+          "name": "Swap After, whileHeld",
+          "enabled": true,
+          "priority": 0,
+          "speed": 1,
+          "playMode": "whileHeld",
+          "repeatCount": 1,
+          "exclusive": false,
+          "focusExe": "",
+          "trigger": {
+            "kind": "key",
+            "button": "m"
+          },
+          "steps": [],
+          "recording": null,
+          "basic": false,
+          "gapMs": 18,
+          "advanced": true,
+          "busy": false,
+          "blocks": [
+            {
+              "id": "swap-wh-b1",
+              "type": "whileHeld",
+              "mute": [],
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 150
+                },
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "e"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "e"
+                }
+              ]
+            },
+            {
+              "id": "swap-wh-b2",
+              "type": "swapAfter",
+              "afterMs": 5000,
+              "mute": [],
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "x"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "x"
+                }
+              ]
+            }
+          ],
+          "releaseStop": "nextUp"
+        },
+        {
+          "id": "press-wh",
+          "name": "One Press, whileHeld",
+          "enabled": true,
+          "priority": 0,
+          "speed": 1,
+          "playMode": "whileHeld",
+          "repeatCount": 1,
+          "exclusive": false,
+          "focusExe": "",
+          "trigger": {
+            "kind": "key",
+            "button": "n"
+          },
+          "steps": [],
+          "recording": null,
+          "basic": false,
+          "gapMs": 18,
+          "advanced": true,
+          "busy": false,
+          "blocks": [
+            {
+              "id": "press-wh-b1",
+              "type": "onceHeld",
+              "gapMs": 70,
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "space"
+                },
+                {
+                  "type": "wait",
+                  "ms": 150
+                },
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "e"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "e"
+                }
+              ]
+            }
+          ],
+          "releaseStop": "nextUp"
+        }
+      ],
+      "focusExe": ""
+    }
+  ],
+  "macros": [
+    {
+      "id": "held-wh",
+      "name": "While Held, whileHeld",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "whileHeld",
+      "repeatCount": 1,
+      "exclusive": false,
+      "focusExe": "",
+      "trigger": {
+        "kind": "key",
+        "button": "k"
+      },
+      "steps": [],
+      "recording": null,
+      "basic": false,
+      "gapMs": 18,
+      "advanced": true,
+      "busy": false,
+      "blocks": [
+        {
+          "id": "held-wh-b1",
+          "type": "whileHeld",
+          "mute": [],
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 150
+            },
+            {
+              "type": "key",
+              "action": "down",
+              "key": "e"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "e"
+            }
+          ]
+        }
+      ],
+      "releaseStop": "nextUp"
+    },
+    {
+      "id": "held-once",
+      "name": "While Held, once",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "repeatCount": 1,
+      "exclusive": false,
+      "focusExe": "",
+      "trigger": {
+        "kind": "key",
+        "button": "l"
+      },
+      "steps": [],
+      "recording": null,
+      "basic": false,
+      "gapMs": 18,
+      "advanced": true,
+      "busy": false,
+      "blocks": [
+        {
+          "id": "held-once-b1",
+          "type": "whileHeld",
+          "mute": [],
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 150
+            },
+            {
+              "type": "key",
+              "action": "down",
+              "key": "e"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "e"
+            }
+          ]
+        }
+      ],
+      "releaseStop": "nextUp"
+    },
+    {
+      "id": "swap-wh",
+      "name": "Swap After, whileHeld",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "whileHeld",
+      "repeatCount": 1,
+      "exclusive": false,
+      "focusExe": "",
+      "trigger": {
+        "kind": "key",
+        "button": "m"
+      },
+      "steps": [],
+      "recording": null,
+      "basic": false,
+      "gapMs": 18,
+      "advanced": true,
+      "busy": false,
+      "blocks": [
+        {
+          "id": "swap-wh-b1",
+          "type": "whileHeld",
+          "mute": [],
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 150
+            },
+            {
+              "type": "key",
+              "action": "down",
+              "key": "e"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "e"
+            }
+          ]
+        },
+        {
+          "id": "swap-wh-b2",
+          "type": "swapAfter",
+          "afterMs": 5000,
+          "mute": [],
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "x"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "x"
+            }
+          ]
+        }
+      ],
+      "releaseStop": "nextUp"
+    },
+    {
+      "id": "press-wh",
+      "name": "One Press, whileHeld",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "whileHeld",
+      "repeatCount": 1,
+      "exclusive": false,
+      "focusExe": "",
+      "trigger": {
+        "kind": "key",
+        "button": "n"
+      },
+      "steps": [],
+      "recording": null,
+      "basic": false,
+      "gapMs": 18,
+      "advanced": true,
+      "busy": false,
+      "blocks": [
+        {
+          "id": "press-wh-b1",
+          "type": "onceHeld",
+          "gapMs": 70,
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "space"
+            },
+            {
+              "type": "wait",
+              "ms": 150
+            },
+            {
+              "type": "key",
+              "action": "down",
+              "key": "e"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "e"
+            }
+          ]
+        }
+      ],
+      "releaseStop": "nextUp"
+    }
+  ]
+}
