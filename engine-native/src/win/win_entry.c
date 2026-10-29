@@ -100,6 +100,13 @@ struct engine_resident {
     struct engine_cmd_ring cmds;
     struct engine_trigger_mem triggers;
     struct engine_radial_state radial;
+    /* What the overlay draws. Playback writes it, the IPC thread sends it. */
+    SRWLOCK radial_lock;
+    struct engine_radial_view radial_view;
+    uint32_t radial_seq;
+    uint32_t radial_sent;
+    int64_t radial_at;
+    int64_t radial_stamp;
     struct engine_claim_mem claims;
     int output_changed;
     struct engine_fingers edge_fingers;
@@ -1304,6 +1311,50 @@ static const char *trigger_state(const struct engine_live_config *live, const ch
     return "-";
 }
 
+/* Opening, a new lit slot, and closing publish at once and wake the IPC
+   thread. While open the view goes out again every beat. */
+static void publish_radial(int64_t now, const struct engine_live_config *live)
+{
+    struct engine_radial_view view;
+    int64_t freq = g.play && g.play->freq > 0 ? g.play->freq : 1000;
+
+    engine_radial_fill_view(&g.radial, live, &view);
+    if (view.open && !g.radial_view.open) {
+        uint16_t trigger = g.radial.menu.trigger;
+
+        g.radial_stamp = trigger <= ENGINE_KEY_ID_MAX && g.finger_at[trigger] ? g.finger_at[trigger] : now;
+    }
+    if (!engine_radial_due(&g.radial_view, &view, now, g.radial_at, freq))
+        return;
+    view.seq = ++g.radial_seq;
+    view.stamp = view.open ? g.radial_stamp : 0;
+    AcquireSRWLockExclusive(&g.radial_lock);
+    g.radial_view = view;
+    ReleaseSRWLockExclusive(&g.radial_lock);
+    g.radial_at = now;
+    if (g.ipc_wake)
+        SetEvent(g.ipc_wake);
+}
+
+/* IPC thread. The newest view only: a lit slot passed over is not worth sending. */
+static void flush_radial(void)
+{
+    struct engine_radial_view view;
+    unsigned char buf[1600];
+    int n;
+
+    if (!g.client || !g.pipe)
+        return;
+    AcquireSRWLockShared(&g.radial_lock);
+    view = g.radial_view;
+    ReleaseSRWLockShared(&g.radial_lock);
+    if (view.seq == g.radial_sent)
+        return;
+    n = engine_radial_frame(&view, buf, (int)sizeof buf);
+    if (n > 0 && write_frame(g.pipe, buf, n) == 0)
+        g.radial_sent = view.seq;
+}
+
 static void log_radial(const struct engine_live_config *live)
 {
     int i;
@@ -1687,6 +1738,7 @@ static void playback_tick(int64_t now)
         engine_radial_poll(&g.radial, g.play, &live, &g.fingers, focus.name, focus.owner, g.armed);
         engine_raw_aim(&g.raw, engine_radial_wants_motion(&g.radial));
         log_radial(&live);
+        publish_radial(now, &live);
     }
     if (g.armed)
         engine_poll_triggers_radial(g.play, &live, &g.triggers, &g.fingers, focus.name, focus.owner,
@@ -1731,8 +1783,9 @@ static DWORD WINAPI ipc_thread(LPVOID param)
         DWORD now = GetTickCount();
 
         /* Reports first: a down and its up must leave before the window
-           walk or a pipe read can delay them. */
+           walk or a pipe read can delay them. The radial ring next. */
         flush_report();
+        flush_radial();
         log_flush();
         pump_window();
         refresh_front();
@@ -1744,6 +1797,7 @@ static DWORD WINAPI ipc_thread(LPVOID param)
             poll_pipe();
         if (g.client) {
             flush_report();
+            flush_radial();
             maybe_write_state();
         }
         if (atomic_load_explicit(&g.quit, memory_order_acquire))
@@ -1970,6 +2024,8 @@ static int run_resident(const struct engine_args *args)
     engine_cmd_ring_init(&g.cmds);
     engine_trigger_init(&g.triggers);
     engine_radial_init(&g.radial);
+    InitializeSRWLock(&g.radial_lock);
+    g.radial_view.lit = -1;
     engine_claims_init(&g.claims);
     engine_fingers_clear(&g.fingers);
     engine_raw_mouse_init(&g.raw);

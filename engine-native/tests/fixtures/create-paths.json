@@ -203,7 +203,9 @@
           "nextKey": "e",
           "at": "center",
           "deadZone": 40,
-          "clickSelect": false
+          "clickSelect": false,
+          "size": 340,
+          "opacity": 88
         }
       ]
     }

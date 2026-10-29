@@ -851,6 +851,44 @@ int engine_state_frame(const struct engine_state_snapshot *snap,
     return at;
 }
 
+int engine_radial_frame(const struct engine_radial_view *view, unsigned char *buf, int cap)
+{
+    int at = 34;
+    int count;
+    int i;
+
+    if (!view || !buf || cap < at)
+        return -1;
+    count = view->slot_count < 0 ? 0 : view->slot_count;
+    if (count > ENGINE_RADIAL_SLOTS)
+        count = ENGINE_RADIAL_SLOTS;
+    memset(buf, 0, (size_t)at);
+    memcpy(buf, k_magic, 4);
+    write_u16(buf + 4, 1);
+    write_u16(buf + 6, 9);
+    buf[12] = view->open ? 1 : 0;
+    buf[13] = (unsigned char)view->mode;
+    buf[14] = (unsigned char)count;
+    buf[15] = (unsigned char)(int8_t)view->lit;
+    buf[16] = (unsigned char)view->at;
+    buf[17] = (unsigned char)view->why;
+    write_u16(buf + 18, (unsigned)(view->size < 0 ? 0 : view->size));
+    buf[20] = (unsigned char)(view->opacity < 0 ? 0 : view->opacity);
+    buf[21] = 0;
+    write_u32(buf + 22, view->seq);
+    write_u32(buf + 26, (uint32_t)((uint64_t)view->stamp & 0xFFFFFFFFu));
+    write_u32(buf + 30, (uint32_t)((uint64_t)view->stamp >> 32));
+    if (put_str(buf, cap, &at, view->id) != 0 || put_str(buf, cap, &at, view->name) != 0 ||
+        put_str(buf, cap, &at, view->prev) != 0 || put_str(buf, cap, &at, view->next) != 0)
+        return -1;
+    for (i = 0; i < count; i++) {
+        if (put_str(buf, cap, &at, view->labels[i]) != 0)
+            return -1;
+    }
+    write_u32(buf + 8, (uint32_t)(at - 12));
+    return at;
+}
+
 _Static_assert((ENGINE_REPORT_QUEUE_CAP & (ENGINE_REPORT_QUEUE_CAP - 1u)) == 0, "report cap");
 
 void engine_report_queue_init(struct engine_report_queue *queue)

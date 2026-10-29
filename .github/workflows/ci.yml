@@ -56,6 +56,8 @@ jobs:
         run: dotnet run --project shell/report-board-test/ReportBoardTest.csproj -c Release
       - name: Engine link
         run: dotnet run --project shell/engine-link-test/EngineLinkTest.csproj -c Release
+      - name: Radial overlay
+        run: dotnet run --project shell/radial-overlay-test/RadialOverlayTest.csproj -c Release
 
   engine-linux:
     name: Native engine core

@@ -1,5 +1,15 @@
 import { useState } from "react";
-import { RADIAL_SLOTS_MAX, RADIAL_SLOTS_MIN, blankRadial, type Macro, type Radial } from "../profile";
+import {
+  RADIAL_OPACITY_MAX,
+  RADIAL_OPACITY_MIN,
+  RADIAL_SIZE_MAX,
+  RADIAL_SIZE_MIN,
+  RADIAL_SLOTS_MAX,
+  RADIAL_SLOTS_MIN,
+  blankRadial,
+  type Macro,
+  type Radial,
+} from "../profile";
 import { radialProblems, slotAngle, withSlot, withSlotCount } from "../radial";
 import { Capture, type Captured } from "./Capture";
 import { FieldSelect } from "./FieldSelect";
@@ -224,6 +234,39 @@ export function RadialPanel({
               </label>
             </>
           )}
+        </div>
+
+        <div className="settings-block">
+          <div className="settings-row is-static">
+            <span>
+              <span className="settings-row-name">Look</span>
+              <span className="settings-row-note">Size is at 100 % display scaling. A monitor set to 150 % draws it 1.5 times as big, so it looks the same.</span>
+            </span>
+          </div>
+          <label className="radial-range">
+            <span className="radial-label">Size</span>
+            <input
+              type="range"
+              min={RADIAL_SIZE_MIN}
+              max={RADIAL_SIZE_MAX}
+              step={10}
+              value={radial.size}
+              onChange={(event) => set({ size: Number(event.target.value) })}
+            />
+            <span className="radial-value">{radial.size} px</span>
+          </label>
+          <label className="radial-range">
+            <span className="radial-label">Opacity</span>
+            <input
+              type="range"
+              min={RADIAL_OPACITY_MIN}
+              max={RADIAL_OPACITY_MAX}
+              step={1}
+              value={radial.opacity}
+              onChange={(event) => set({ opacity: Number(event.target.value) })}
+            />
+            <span className="radial-value">{radial.opacity} %</span>
+          </label>
         </div>
 
         <div className="settings-block">

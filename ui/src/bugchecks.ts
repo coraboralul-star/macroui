@@ -496,6 +496,11 @@ function checkRadial() {
   same(normalizeRadial({ trigger: { kind: "mouse", button: "LButton" } })?.trigger, { kind: "mouse", button: "" }, "left click is never a radial trigger");
   same(normalizeRadial({ prevKey: "RButton", nextKey: 7 })?.prevKey, "q", "a mouse button is not a step key");
   same(normalizeRadial({ select: "flick", deadZone: 0 })?.deadZone, 40, "a dead zone below 1 is the default");
+  same([fresh?.size, fresh?.opacity], [340, 88], "the ring is 340 px at 88 % unless changed");
+  same([normalizeRadial({ size: 90, opacity: 300 })?.size, normalizeRadial({ size: 90, opacity: 300 })?.opacity], [200, 100],
+    "size and opacity are clamped to 200 to 600 px and 40 to 100 %");
+  same([normalizeRadial({ size: 512.4, opacity: 61 })?.size, normalizeRadial({ size: 512.4, opacity: 61 })?.opacity], [512, 61],
+    "size and opacity in range are kept, rounded");
 
   const games = normalizeProfile({
     version: 1,

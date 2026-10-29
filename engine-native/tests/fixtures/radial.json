@@ -251,7 +251,9 @@
           "nextKey": "e",
           "at": "center",
           "deadZone": 40,
-          "clickSelect": false
+          "clickSelect": false,
+          "size": 340,
+          "opacity": 88
         },
         {
           "id": "rf",
@@ -272,7 +274,9 @@
           "nextKey": "e",
           "at": "center",
           "deadZone": 40,
-          "clickSelect": true
+          "clickSelect": true,
+          "size": 340,
+          "opacity": 88
         }
       ]
     }

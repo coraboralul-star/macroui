@@ -61,6 +61,18 @@ export type RadialAt = "center" | "cursor";
 export const RADIAL_SLOTS_MIN = 2;
 export const RADIAL_SLOTS_MAX = 8;
 export const RADIAL_DEAD_ZONE = 40;
+/** The overlay ring: pixels across at 100 % scaling, and opacity in percent. */
+export const RADIAL_SIZE = 340;
+export const RADIAL_SIZE_MIN = 200;
+export const RADIAL_SIZE_MAX = 600;
+export const RADIAL_OPACITY = 88;
+export const RADIAL_OPACITY_MIN = 40;
+export const RADIAL_OPACITY_MAX = 100;
+
+function clampRound(value: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : fallback;
+}
 
 /** Hold the trigger to open, pick a slot, release to play that slot's macro once.
  *  A slot is a macro id or "" for empty. */
@@ -78,6 +90,10 @@ export type Radial = {
   deadZone: number;
   /** Flick only. Left click plays the lit slot instead of waiting for the release. */
   clickSelect: boolean;
+  /** Ring size in pixels at 100 % scaling. Bigger monitors scale it by their DPI. */
+  size: number;
+  /** 40 to 100 percent. */
+  opacity: number;
 };
 
 export function blankRadial(extra: Partial<Radial> = {}): Radial {
@@ -93,6 +109,8 @@ export function blankRadial(extra: Partial<Radial> = {}): Radial {
     at: "center",
     deadZone: RADIAL_DEAD_ZONE,
     clickSelect: false,
+    size: RADIAL_SIZE,
+    opacity: RADIAL_OPACITY,
     ...extra,
   };
 }
@@ -129,6 +147,8 @@ export function normalizeRadial(value: unknown): Radial | undefined {
     at: raw.at === "cursor" ? "cursor" : "center",
     deadZone: Number.isFinite(dead) && dead >= 1 ? Math.round(dead) : RADIAL_DEAD_ZONE,
     clickSelect: Boolean(raw.clickSelect),
+    size: clampRound(raw.size, RADIAL_SIZE_MIN, RADIAL_SIZE_MAX, RADIAL_SIZE),
+    opacity: clampRound(raw.opacity, RADIAL_OPACITY_MIN, RADIAL_OPACITY_MAX, RADIAL_OPACITY),
   };
 }
 

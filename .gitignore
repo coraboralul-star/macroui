@@ -13,6 +13,7 @@ engine-native/build/
 tools/probes/build/
 shell/report-board-test/bin/
 shell/engine-link-test/bin/
+shell/radial-overlay-test/bin/
 profiles/*.json
 profiles/*.json.bak
 profiles/*.json.tmp

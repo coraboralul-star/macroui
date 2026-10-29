@@ -1268,6 +1268,16 @@ static void compile_radials(struct build *b, const struct json_value *list, stru
         if (radial->dead_zone < 1)
             radial->dead_zone = ENGINE_RADIAL_DEAD_ZONE;
         radial->click_select = field_bool(item, "clickSelect", 0);
+        radial->size = field_i(b, item, "size", ENGINE_RADIAL_SIZE, 0, spot);
+        if (radial->size < ENGINE_RADIAL_SIZE_MIN)
+            radial->size = ENGINE_RADIAL_SIZE_MIN;
+        if (radial->size > ENGINE_RADIAL_SIZE_MAX)
+            radial->size = ENGINE_RADIAL_SIZE_MAX;
+        radial->opacity = field_i(b, item, "opacity", ENGINE_RADIAL_OPACITY, 0, spot);
+        if (radial->opacity < ENGINE_RADIAL_OPACITY_MIN)
+            radial->opacity = ENGINE_RADIAL_OPACITY_MIN;
+        if (radial->opacity > ENGINE_RADIAL_OPACITY_MAX)
+            radial->opacity = ENGINE_RADIAL_OPACITY_MAX;
         slots = array_field(item, "slots");
         for (s = 0; slots && s < slots->length && s < ENGINE_RADIAL_SLOTS; s++)
             value_text(&slots->items[s], cat->slot_ids[r][s], ENGINE_ID_CAP);

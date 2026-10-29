@@ -30,6 +30,16 @@
 #define ENGINE_RADIAL_DEAD_ZONE 40
 #define ENGINE_RADIAL_REACH 3
 
+/* The overlay: ring size in pixels at 100 % scaling, and opacity in percent. */
+#define ENGINE_RADIAL_SIZE 340
+#define ENGINE_RADIAL_SIZE_MIN 200
+#define ENGINE_RADIAL_SIZE_MAX 600
+#define ENGINE_RADIAL_OPACITY 88
+#define ENGINE_RADIAL_OPACITY_MIN 40
+#define ENGINE_RADIAL_OPACITY_MAX 100
+#define ENGINE_RADIAL_LABEL_CAP 128
+#define ENGINE_RADIAL_KEY_NAME_CAP 16
+
 /* Compiled from config.radials. slot is an index into the config's macros,
    -1 for empty or a macro that is gone. */
 struct engine_radial {
@@ -43,6 +53,8 @@ struct engine_radial {
     int at;
     int32_t dead_zone;
     int click_select;
+    int32_t size;
+    int32_t opacity;
     int slot_count;
     int32_t slot[ENGINE_RADIAL_SLOTS];
 };
@@ -89,6 +101,8 @@ struct engine_radial_state {
     uint8_t prev[ENGINE_RADIAL_CAP];
     uint8_t key_prev[ENGINE_RADIAL_KEY_COUNT];
     uint8_t click_prev;
+    /* Why the last menu closed. */
+    int last_why;
     int need_seed;
     int note_count;
     struct engine_radial_note notes[ENGINE_RADIAL_NOTE_CAP];
@@ -147,6 +161,41 @@ int engine_radial_needs_mouse(const struct engine_live_config *live);
 
 /* 1 when a ready menu uses this id as its trigger. */
 int engine_radial_claims(const struct engine_live_config *live, uint16_t id);
+
+/* What the overlay draws. The shell shows exactly this: it never reads the
+   profile. lit is 0-based, -1 for none. why is the close reason when open is 0.
+   seq and stamp (the trigger down, QPC) are the caller's. */
+struct engine_radial_view {
+    int open;
+    int mode;
+    int slot_count;
+    int lit;
+    int at;
+    int why;
+    int32_t size;
+    int32_t opacity;
+    uint32_t seq;
+    int64_t stamp;
+    char id[ENGINE_ID_CAP];
+    char name[ENGINE_RADIAL_NAME_CAP];
+    char prev[ENGINE_RADIAL_KEY_NAME_CAP];
+    char next[ENGINE_RADIAL_KEY_NAME_CAP];
+    char labels[ENGINE_RADIAL_SLOTS][ENGINE_RADIAL_LABEL_CAP];
+};
+
+/* The open menu, or a closed view with the last close reason. Labels are the
+   slot macros' names, "" for an empty slot. */
+void engine_radial_fill_view(const struct engine_radial_state *st, const struct engine_live_config *live,
+                             struct engine_radial_view *out);
+
+/* While open the view goes out again this often, so the shell can hide a
+   ring whose engine stopped answering. */
+#define ENGINE_RADIAL_BEAT_MS 200
+
+/* 1 when the view must go out now: it opened, closed, lit another slot or
+   moved to another menu, or it is open and the last one is a beat old. */
+int engine_radial_due(const struct engine_radial_view *sent, const struct engine_radial_view *view,
+                      int64_t now, int64_t sent_at, int64_t freq);
 
 /* "keys", "flick". */
 const char *engine_radial_mode_name(int mode);

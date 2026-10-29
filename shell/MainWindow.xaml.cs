@@ -23,6 +23,9 @@ public partial class MainWindow : Window
     readonly string _shellPath;
     NamedPipeClientStream? _pipe;
     Process? _engine;
+    /* The radial ring over the game (#97). Its own thread; see RadialOverlay. */
+    readonly RadialOverlay _radial;
+    readonly object _logGate = new();
     bool _pageReady;
     bool _closing;
     readonly bool _hosted;
@@ -78,6 +81,8 @@ public partial class MainWindow : Window
         }
         _dev = Environment.GetCommandLineArgs().Contains("--dev");
         _repo = FindRepo();
+        _radial = new RadialOverlay(Log);
+        _radial.Start();
         _profilePath = Path.Combine(_repo, "profiles", "default.json");
         _shellPath = Path.Combine(_repo, "profiles", "shell.json");
         Directory.CreateDirectory(Path.GetDirectoryName(_profilePath)!);
@@ -326,6 +331,7 @@ public partial class MainWindow : Window
     void OnClosed(object? sender, EventArgs e)
     {
         _closing = true;
+        try { _radial.Dispose(); } catch (Exception ex) { Log("radial overlay close " + ex.Message); }
         try
         {
             if (_tray != null)
@@ -610,6 +616,8 @@ public partial class MainWindow : Window
             }
             var dead = _pipe;
             _pipe = null;
+            // A crashed or switched engine cannot close its menu. Hide the ring now.
+            _radial.Reset("engine-lost");
             _wire = "";
             _lastState = "";
             try { dead?.Dispose(); }
@@ -638,10 +646,18 @@ public partial class MainWindow : Window
 
     void AcceptMessage(ReadOnlySpan<byte> message)
     {
+        var received = System.Diagnostics.Stopwatch.GetTimestamp();
         if (_wire != "native")
         {
             var text = Encoding.UTF8.GetString(message);
             var kind = MessageType(text);
+            if (kind == "radial")
+            {
+                var view = RadialView.FromJson(text);
+                if (view != null)
+                    _radial.Post(view, received);
+                return;
+            }
             if (kind == "state")
                 _lastState = text;
             if (kind == "hello" || kind == "state")
@@ -660,6 +676,11 @@ public partial class MainWindow : Window
             NoteEngine();
         if (inbound.Report != null)
             WriteReport(inbound.Report);
+        if (inbound.Radial != null)
+        {
+            _radial.Post(inbound.Radial, received);
+            return;
+        }
         if (inbound.Json == null)
             return;
         if (inbound.State)
@@ -1154,7 +1175,9 @@ public partial class MainWindow : Window
         System.Diagnostics.Trace.TraceError(line);
         try
         {
-            File.AppendAllText(Path.Combine(_repo, "profiles", "shell.log"), line + Environment.NewLine);
+            // The radial overlay logs from its own thread.
+            lock (_logGate)
+                File.AppendAllText(Path.Combine(_repo, "profiles", "shell.log"), line + Environment.NewLine);
         }
         catch
         {
