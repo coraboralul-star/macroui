@@ -182,7 +182,30 @@
           "releaseStop": "nextUp"
         }
       ],
-      "focusExe": ""
+      "focusExe": "",
+      "radials": [
+        {
+          "id": "radial-1",
+          "name": "Radial menu",
+          "enabled": true,
+          "trigger": {
+            "kind": "key",
+            "button": "t"
+          },
+          "slots": [
+            "key-path",
+            "new-path",
+            "",
+            ""
+          ],
+          "select": "keys",
+          "prevKey": "q",
+          "nextKey": "e",
+          "at": "center",
+          "deadZone": 40,
+          "clickSelect": false
+        }
+      ]
     }
   ],
   "macros": [

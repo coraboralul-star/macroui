@@ -6607,3 +6607,137 @@ input.ev-delay {
 .turn-line.is-bad {
   color: #e7a090;
 }
+
+.radial {
+  align-self: stretch;
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  gap: 18px;
+  align-items: start;
+}
+
+.radial-form {
+  max-width: none;
+}
+
+.radial-side {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.radial-label {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+
+.radial-slots {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.radial-slots li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.radial-slots li > :last-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.radial-num-chip {
+  flex: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--key);
+  border: 1px solid var(--line-strong);
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.radial-check {
+  margin-top: 12px;
+}
+
+.radial-ring {
+  width: 100%;
+  height: auto;
+}
+
+.radial-ring path {
+  fill: var(--surface);
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+}
+
+.radial-ring .is-set path {
+  fill: var(--surface-up);
+  stroke: var(--accent-dim);
+}
+
+.radial-ring text {
+  fill: var(--muted);
+  text-anchor: middle;
+  dominant-baseline: middle;
+  font-size: 10px;
+}
+
+.radial-ring .radial-num {
+  fill: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.radial-ring .is-set .radial-name {
+  fill: var(--text);
+}
+
+.radial-dead {
+  fill: var(--bg);
+  stroke: var(--line);
+  stroke-dasharray: 3 3;
+}
+
+.radial-problems {
+  margin: 0;
+  padding: 12px 14px 12px 28px;
+  color: #e7a090;
+  font-size: 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.radial-problems li + li {
+  margin-top: 6px;
+}
+
+@media (max-width: 900px) {
+  .radial {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .radial-side {
+    order: -1;
+    position: static;
+    max-width: 320px;
+  }
+
+  .radial-slots {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

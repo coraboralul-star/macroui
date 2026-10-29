@@ -10,6 +10,7 @@ firmware/build/
 firmware/out/
 tools/bench/out/
 engine-native/build/
+tools/probes/build/
 shell/report-board-test/bin/
 shell/engine-link-test/bin/
 profiles/*.json
