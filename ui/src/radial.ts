@@ -1,4 +1,4 @@
-import { RADIAL_SLOTS_MAX, RADIAL_SLOTS_MIN, normalizeRadial, type Macro, type Profile, type Radial, type Trigger } from "./profile";
+import { RADIAL_SLOTS_MAX, RADIAL_SLOTS_MIN, RADIAL_WASD, normalizeRadial, type Macro, type Profile, type Radial, type Trigger } from "./profile";
 
 /** 1 to 8 pick a slot while the menu is open. */
 export const SLOT_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8"];
@@ -33,6 +33,31 @@ export function withSlot(radial: Radial, index: number, macroId: string): Radial
   return { ...radial, slots: radial.slots.map((slot, i) => (i === index ? macroId : slot)) };
 }
 
+/** The keys Block movement holds back, in the order the editor shows them. */
+export function blockedKeys(radial: Radial): string[] {
+  if (radial.blockMove === "wasd") return RADIAL_WASD;
+  if (radial.blockMove === "custom") return radial.blockKeys;
+  return [];
+}
+
+function sameKey(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+function keyName(key: string): string {
+  return key.length === 1 ? key.toUpperCase() : key;
+}
+
+/** Why Block movement can't hold this key back, or "" when it can. Each one stops the menu arming. */
+export function blockClash(radial: Radial, key: string): string {
+  if (radial.trigger.kind === "key" && radial.trigger.button && sameKey(key, radial.trigger.button)) return "the trigger";
+  if (radial.select !== "keys") return "";
+  if (SLOT_KEYS.includes(key)) return "a slot key";
+  if (sameKey(key, radial.prevKey)) return "the Previous key";
+  if (sameKey(key, radial.nextKey)) return "the Next key";
+  return "";
+}
+
 function sameTrigger(a: Trigger, b: Trigger): boolean {
   return Boolean(a.button) && a.button === b.button && (a.kind === "key") === (b.kind === "key");
 }
@@ -52,6 +77,10 @@ export function radialProblems(radial: Radial, macros: Macro[]): string[] {
       else if (trigger.kind === "key" && key === trigger.button) out.push(`${label} can't be the trigger.`);
     }
     if (radial.prevKey === radial.nextKey) out.push("Previous and Next need different keys.");
+  }
+  for (const key of blockedKeys(radial)) {
+    const clash = blockClash(radial, key);
+    if (clash) out.push(`${keyName(key)} is ${clash}, so Block movement can't block it.`);
   }
   const ids = new Set(macros.map((macro) => macro.id));
   if (!radial.slots.some((slot) => slot && ids.has(slot))) out.push("Put a macro in at least one slot.");

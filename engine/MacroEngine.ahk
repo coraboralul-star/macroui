@@ -153,6 +153,18 @@ SendName(key) {
 ; Board: ~$* lets the Pico's keys through. The low-level hook still eats the
 ; real keyboard trigger, otherwise a Pico "b" is swallowed by the B macro.
 ; When a focus window is set and that window is not active, ~$* so typing works.
+; 1 to 8 pick slots in keys mode.
+RadialSlotKey(k) {
+    return StrLen(k) = 1 && InStr("12345678", k)
+}
+
+RadialHas(list, k) {
+    for item in list
+        if (item = k)
+            return true
+    return false
+}
+
 HookSpec(key) {
     key := SendName(key)
     prefix := (Engine.PassBoard() || !Engine.SwallowTriggers() || Engine.PassKey(key)) ? "~$*" : "$*"
@@ -1377,6 +1389,20 @@ class Engine {
     static radialPubAt := 0
     static radialStamp := 0
     static radialWhy := ""
+    ; Block movement (#100), like engine_radial_state. rbOn swallows rbKeys
+    ; until rbMacro ends, "" for none. rbLive is the config it opened in.
+    ; rbResumed are the keys pressed again, held until their real up.
+    ; Names differ from the methods: AHK names are case-insensitive.
+    static rbOn := false
+    static rbKeys := []
+    static rbMacro := ""
+    static rbLive := ""
+    static rbWhy := "done"
+    static rbResumed := []
+    ; What the menu holds down, and keys to let go of once: 0 until sent,
+    ; then the board's release time.
+    static radialHold := Map()
+    static radialLift := Map()
     ; Dry runs keep the messages here instead of the pipe.
     static radialSent := []
     static liveName := ""
@@ -2871,12 +2897,27 @@ class Engine {
     }
 
     ; Enabled, a trigger, no enabled macro with steps on that trigger, and a macro in a slot.
+    ; Keys mode: the trigger, previous and next are not 1 to 8, previous and next
+    ; differ and are not the trigger. No blocked key is the trigger, or in keys
+    ; mode 1 to 8, previous or next. Like engine_radial_ready.
     static RadialReady(radial) {
         if !(radial is Map) || !Field(radial, "enabled", true)
             return false
         key := this.RadialTrigger(radial)
         if (key = "")
             return false
+        keysMode := this.RadialModeOf(radial) = "keys"
+        steps := this.RadialKeys(radial)
+        prev := steps[9]
+        next := steps[10]
+        if (keysMode && (RadialSlotKey(key) || RadialSlotKey(prev) || RadialSlotKey(next) || prev = next || prev = key || next = key))
+            return false
+        for k in this.RadialBlockKeys(radial) {
+            if (k = key)
+                return false
+            if (keysMode && (RadialSlotKey(k) || k = prev || k = next))
+                return false
+        }
         macros := Field(this.profile, "macros", [])
         if (macros is Array) {
             for macro in macros {
@@ -2912,6 +2953,161 @@ class Engine {
         return Mod(Floor((angle + width / 2) / width), count) + 1
     }
 
+    ; WASD, the custom keys, or none. Keyboard keys only, not Pause, no
+    ; repeats, at most 8. Like radial_block in engine-native profile.c.
+    static RadialBlockKeys(radial) {
+        mode := String(Field(radial, "blockMove", "off"))
+        if (mode = "wasd")
+            return ["w", "a", "s", "d"]
+        keys := []
+        list := Field(radial, "blockKeys", [])
+        if (mode != "custom" || !(list is Array))
+            return keys
+        for item in list {
+            k := NormKey(String(item))
+            if (k = "" || k = "Pause" || IsMouseButton(k) || InStr(k, "Wheel") || RadialHas(keys, k))
+                continue
+            keys.Push(k)
+            if (keys.Length >= 8)
+                break
+        }
+        return keys
+    }
+
+    ; Held, as the LL hook last saw it. Never GetKeyState: a swallowed key is
+    ; invisible to it and to Raw Input.
+    static RadialBlockHeld(k) {
+        return this.physDown.Has(k) && this.physDown[k]
+    }
+
+    ; radial block lift menu="..." id=... keys=w,a and, for end and let-go, reason=.
+    static RadialBlockLine(what, keys, why := "") {
+        if !keys.Length
+            return
+        list := ""
+        for k in keys
+            list .= (list = "" ? "" : ",") k
+        line := Format('radial block {} menu="{}" id={} keys={}', what, Field(this.radialMenu, "name", ""),
+            Field(this.radialMenu, "id", ""), list)
+        this.Log(why = "" ? line : line " reason=" why)
+    }
+
+    static RadialHoldResumed() {
+        this.radialHold := Map()
+        for k in this.rbResumed
+            this.radialHold[k] := true
+    }
+
+    ; The game sees k go up at the next Publish. See Publish.
+    static RadialLiftKey(k) {
+        if !this.radialLift.Has(k)
+            this.radialLift[k] := 0
+    }
+
+    ; Lets go of the keys pressed again.
+    static RadialLetGo(why) {
+        if !this.rbResumed.Length
+            return
+        this.RadialBlockLine("let-go", this.rbResumed, why)
+        this.rbResumed := []
+        this.RadialHoldResumed()
+    }
+
+    ; Stops swallowing. With resume, each blocked key the hook still sees held
+    ; is pressed again and held until its up.
+    static RadialBlockEnd(why, resume) {
+        if !this.rbOn
+            return
+        this.RadialBlockLine("end", this.rbKeys, why)
+        again := []
+        if resume {
+            for k in this.rbKeys {
+                if (!this.RadialBlockHeld(k) || RadialHas(this.rbResumed, k) || this.rbResumed.Length >= 8)
+                    continue
+                this.rbResumed.Push(k)
+                again.Push(k)
+            }
+        }
+        this.rbOn := false
+        this.rbKeys := []
+        this.rbMacro := ""
+        this.RadialBlockLine("resume", again)
+        this.RadialHoldResumed()
+    }
+
+    ; Focus, disable, profile, Stop, Pause, output: nothing is pressed again.
+    static RadialBlockStop(why) {
+        this.RadialBlockEnd(why, false)
+        this.RadialLetGo(why)
+    }
+
+    ; At open: swallow the menu's keys from now, and let go of the held ones.
+    ; The hook asks RadialSwallow on this thread, so no down slips in between.
+    ; A block still waiting on an earlier pick keeps its keys and that pick.
+    static RadialBlockOpen(radial) {
+        keys := this.RadialBlockKeys(radial)
+        if !keys.Length
+            return
+        if !this.rbOn {
+            this.rbKeys := []
+            this.rbMacro := ""
+        }
+        this.rbOn := true
+        this.rbWhy := "done"
+        this.rbLive := this.liveId
+        lifted := []
+        for k in keys {
+            if (!RadialHas(this.rbKeys, k) && this.rbKeys.Length < 8)
+                this.rbKeys.Push(k)
+            ; A key pressed again is swallowed again: dropping its hold sends the up.
+            for i, have in this.rbResumed {
+                if (have = k) {
+                    this.rbResumed.RemoveAt(i)
+                    break
+                }
+            }
+            if !this.RadialBlockHeld(k)
+                continue
+            this.RadialLiftKey(k)
+            lifted.Push(k)
+        }
+        this.RadialHoldResumed()
+        this.RadialBlockLine("lift", lifted)
+    }
+
+    ; Each poll: focus and the config end it, the picked macro's end resumes,
+    ; and a key pressed again is let go at its real up.
+    static RadialBlockTick(focusOk) {
+        if (!this.rbOn && !this.rbResumed.Length)
+            return
+        if !focusOk
+            return this.RadialBlockStop("focus")
+        if (this.liveId != this.rbLive)
+            return this.RadialBlockStop("profile")
+        if (this.rbOn && !this.radialOpen && !(this.rbMacro != "" && (this.HasRunner(this.rbMacro) || this.HasPending(this.rbMacro))))
+            this.RadialBlockEnd(this.rbWhy, true)
+        keep := []
+        up := []
+        for k in this.rbResumed {
+            if this.RadialBlockHeld(k)
+                keep.Push(k)
+            else
+                up.Push(k)
+        }
+        if !up.Length
+            return
+        this.rbResumed := keep
+        this.RadialBlockLine("let-go", up, "up")
+        this.RadialHoldResumed()
+    }
+
+    ; After an output switch let go of what was applied. Nothing is pressed
+    ; again on the new output.
+    static RadialOutputSwitched() {
+        this.radialLift := Map()
+        this.RadialCancel("output")
+    }
+
     static RadialNeedsMouse() {
         for radial in this.RadialList()
             if (this.RadialReady(radial) && (IsMouseButton(this.RadialTrigger(radial)) || this.RadialModeOf(radial) = "flick"))
@@ -2928,8 +3124,13 @@ class Engine {
     }
 
     ; While a menu is open, this key is the menu's: a macro on it does not start.
+    ; So are the keys Block movement swallows or holds.
     static RadialOwns(key) {
-        if (!this.radialOpen || key = "")
+        if (key = "")
+            return false
+        if ((this.rbOn && RadialHas(this.rbKeys, key)) || RadialHas(this.rbResumed, key))
+            return true
+        if !this.radialOpen
             return false
         if (key = this.RadialTrigger(this.radialMenu))
             return true
@@ -3059,7 +3260,9 @@ class Engine {
             this.Log(Format('radial cancel menu="{}" id={} mode={} reason={}', name, id, this.radialMode, why))
     }
 
-    ; The one way out. #100's camera lock lets go here too.
+    ; The one way out. #100's camera lock lets go here too. Block movement
+    ; waits for a played pick, or ends at this poll's RadialBlockTick. Focus,
+    ; disable, profile, Stop and output end it here with nothing pressed again.
     static RadialClose(kind, why, slot := 0, macro := "") {
         if !this.radialOpen
             return
@@ -3069,10 +3272,22 @@ class Engine {
         this.radialLit := 0
         this.radialDx := 0
         this.radialDy := 0
+        if !this.rbOn
+            return
+        if (why = "focus" || why = "disabled" || why = "profile" || why = "stop" || why = "output")
+            this.RadialBlockStop(why)
+        else if (why = "played") {
+            this.rbMacro := String(Field(macro, "id", ""))
+            this.rbWhy := "done"
+        } else
+            this.rbWhy := why
     }
 
+    ; Stop, Pause, an output switch: closes the menu and ends Block movement
+    ; with nothing pressed again.
     static RadialCancel(why) {
         this.RadialClose("cancel", why)
+        this.RadialBlockStop(why)
     }
 
     ; One full pass, whatever the macro's play mode. Not again while it plays.
@@ -3121,6 +3336,7 @@ class Engine {
         DllCall("QueryPerformanceCounter", "Int64*", &stamp)
         this.radialStamp := stamp
         this.RadialLine("open", "")
+        this.RadialBlockOpen(radial)
     }
 
     static RadialReadKeys() {
@@ -3169,6 +3385,7 @@ class Engine {
             this.RadialSeedNow()
             if (this.radialOpen && !this.KeyDown(this.RadialTrigger(this.radialMenu)))
                 this.RadialSelect()
+            this.RadialBlockTick(focusOk)
             return
         }
         if this.radialOpen {
@@ -3192,6 +3409,7 @@ class Engine {
                 continue
             this.RadialShow(radial)
         }
+        this.RadialBlockTick(focusOk)
     }
 
     static PollTriggers() {
@@ -3555,6 +3773,12 @@ class Engine {
 
     static Desired(now) {
         want := Map()
+        for k, _ in this.radialHold
+            want[k] := true
+        if (this.outputMode != "software")
+            for k, releaseAt in this.radialLift
+                if (releaseAt > now)
+                    want[k] := true
         for r in this.runners {
             if (r.done || r.paused)
                 continue
@@ -3611,6 +3835,16 @@ class Engine {
             dy := 16000
         if (dy < -16000)
             dy := -16000
+        ; A board can only let go of a key it holds: a new lift is held for 1 ms,
+        ; then dropped, so the diff sends its up. Not a key the engine holds.
+        if (this.outputMode != "software") {
+            for k, releaseAt in this.radialLift.Clone() {
+                if (releaseAt = 0 && !this.applied.Has(k) && !this.radialHold.Has(k))
+                    this.radialLift[k] := now + 1
+                else if (releaseAt = 0 || releaseAt <= now)
+                    this.radialLift.Delete(k)
+            }
+        }
         desired := this.Desired(now)
         downs := []
         ups := []
@@ -3644,6 +3878,13 @@ class Engine {
         for k in ups
             if this.applied.Has(k)
                 this.applied.Delete(k)
+        ; Software: a lone up for a key the engine never pressed.
+        if (this.outputMode = "software") {
+            for k, _ in this.radialLift
+                if (!this.applied.Has(k) && !RadialHas(ups, k))
+                    ups.Push(k)
+            this.radialLift := Map()
+        }
         if this.dry {
             this.sent.Push(Map("down", downs, "up", ups, "x", dx, "y", dy, "wheel", wheel, "counts", counts))
             return
@@ -4151,6 +4392,7 @@ class Engine {
                 mode := "software"
             if (mode != this.outputMode) {
                 this.FlushApplied()
+                this.RadialOutputSwitched()
                 this.ClearHookBindings()
                 this.outputMode := mode
                 this.mouseAtOk := false
@@ -5515,6 +5757,7 @@ RunChecks(fails) {
     fails := CreatePathChecks(fails)
     fails := HoldRepressChecks(fails)
     fails := RadialChecks(fails)
+    fails := RadialBlockChecks(fails)
     fails := TurnChecks(fails)
     return fails
 }
@@ -6035,7 +6278,7 @@ SoakClose(sc, outName, t, now, errs) {
 
 ; One low-level keyboard event, built like KBDLLHOOKSTRUCT.
 TestKey(key, down) {
-    vk := key = "LWin" ? 0x5B : Ord(StrUpper(key))
+    vk := key = "LWin" ? 0x5B : key = "LShift" ? 0xA0 : Ord(StrUpper(key))
     info := Buffer(24, 0)
     NumPut("UInt", vk, info, 0)
     NumPut("UInt", (down ? 0 : 0x80) | (key = "LWin" ? 1 : 0), info, 8)
@@ -6435,6 +6678,221 @@ RadialChecks(fails) {
     fails := Check(Engine.RadialSlotAt(100, -100, 8, 40) = 2 && Engine.RadialSlotAt(-100, -100, 8, 40) = 8, "radial: 8 slots split the diagonals", fails)
     fails := Check(Engine.RadialModeOf(Map("select", "auto")) = "keys", "radial: a select this engine does not know plays as keys", fails)
     return fails
+}
+
+; Block movement (#100), the same scripts as check_radial_block in
+; engine-native/tests/command_test.c. rb opens on Mouse 4 and blocks WASD, rc
+; opens on n and blocks w and LShift. Slot 1 is Arrows (w, then s).
+RadialBlockChecks(fails) {
+    text := ""
+    try text := FileRead(A_ScriptDir "\..\engine-native\tests\fixtures\radial.json", "UTF-8")
+    if (text = "")
+        return Check(false, "radial.json readable", fails)
+    config := JSON.Parse(text)["configs"][1]
+    ; [ms, kind, key, down]. kind: key, front, back, disarm, output.
+    held := [[5, "key", "w", 1], [10, "key", "XButton1", 1], [20, "key", "w", 1], [30, "key", "1", 1], [35, "key", "1", 0],
+        [80, "key", "XButton1", 0], [600, "key", "w", 0]]
+    early := [[5, "key", "w", 1], [10, "key", "XButton1", 1], [20, "key", "w", 1], [30, "key", "1", 1], [35, "key", "1", 0],
+        [80, "key", "XButton1", 0], [120, "key", "w", 0]]
+    away := [[5, "key", "w", 1], [10, "key", "XButton1", 1], [30, "key", "1", 1], [35, "key", "1", 0], [80, "key", "XButton1", 0],
+        [120, "front"], [400, "back"], [600, "key", "w", 0]]
+    resumedAway := [[5, "key", "w", 1], [10, "key", "XButton1", 1], [30, "key", "1", 1], [35, "key", "1", 0],
+        [80, "key", "XButton1", 0], [300, "front"], [600, "key", "w", 0]]
+    nopick := [[5, "key", "w", 1], [10, "key", "XButton1", 1], [80, "key", "XButton1", 0], [600, "key", "w", 0]]
+    fresh := [[10, "key", "XButton1", 1], [20, "key", "a", 1], [40, "key", "a", 0], [80, "key", "XButton1", 0]]
+    stopAfter := [[5, "key", "w", 1], [10, "key", "XButton1", 1], [30, "key", "1", 1], [35, "key", "1", 0],
+        [80, "key", "XButton1", 0], [300, "disarm"], [600, "key", "w", 0]]
+    stopDuring := [[5, "key", "w", 1], [10, "key", "XButton1", 1], [30, "key", "1", 1], [35, "key", "1", 0],
+        [80, "key", "XButton1", 0], [120, "disarm"], [600, "key", "w", 0]]
+    switched := [[5, "key", "w", 1], [10, "key", "XButton1", 1], [80, "key", "XButton1", 0], [300, "output"], [600, "key", "w", 0]]
+    for output in ["software", "rp2350"] {
+        ; Software lets go of a key it never pressed with a lone up. A board presses it for 1 ms, then lets go.
+        lift := output = "software" ? "-w|" : "+w|-w|"
+        run := RadialBlockPlay(config, held, output)
+        fails := Check(run["notes"] = "open rb|lift w|select 1 played|end w a s d done|resume w|let-go w up|",
+            RadialBlockSay(output, "held W: let go at open, pressed again when Arrows ends, let go at its up"), fails)
+        fails := Check(run["sent"] = lift "+w|-w|+s|-s|+w|-w|", RadialBlockSay(output, "the game sees W go up, Arrows, then W again after its last key"), fails)
+        fails := Check(run["swallow"][3] && run["swallow"][4] && run["swallow"][7], RadialBlockSay(output, "W's repeat, 1 and W's up are swallowed"), fails)
+        fails := Check(run["held"] = 0, RadialBlockSay(output, "nothing held at the end"), fails)
+
+        run := RadialBlockPlay(config, early, output)
+        fails := Check(run["notes"] = "open rb|lift w|select 1 played|end w a s d done|", RadialBlockSay(output, "W let go during Arrows: no resume"), fails)
+        fails := Check(run["sent"] = lift "+w|-w|+s|-s|" && run["held"] = 0, RadialBlockSay(output, "nothing is pressed again"), fails)
+
+        run := RadialBlockPlay(config, away, output)
+        fails := Check(run["notes"] = "open rb|lift w|select 1 played|end w a s d focus|", RadialBlockSay(output, "alt-tab during Arrows ends the block with no resume"), fails)
+        ; This engine also stops Arrows at the alt-tab; native lets it finish. Either way nothing stays down.
+        fails := Check(InStr(run["sent"], lift "+w|-w|") = 1 && !InStr(run["sent"], "+w|", , StrLen(lift "+w|-w|") + 1) && run["held"] = 0,
+            RadialBlockSay(output, "alt-tab: nothing pressed again, nothing stuck"), fails)
+
+        run := RadialBlockPlay(config, resumedAway, output)
+        fails := Check(run["notes"] = "open rb|lift w|select 1 played|end w a s d done|resume w|let-go w focus|", RadialBlockSay(output, "alt-tab after the resume lets go of W"), fails)
+        fails := Check(run["sent"] = lift "+w|-w|+s|-s|+w|-w|" && run["held"] = 0, RadialBlockSay(output, "alt-tab sends the resumed W's up"), fails)
+
+        run := RadialBlockPlay(config, nopick, output)
+        fails := Check(run["notes"] = "open rb|lift w|cancel no-slot|end w a s d no-slot|resume w|let-go w up|", RadialBlockSay(output, "no pick: W is pressed again at once"), fails)
+        fails := Check(run["sent"] = lift "+w|-w|" && run["held"] = 0, RadialBlockSay(output, "no pick: W up, W down, W up"), fails)
+
+        run := RadialBlockPlay(config, fresh, output)
+        fails := Check(run["notes"] = "open rb|cancel no-slot|end w a s d no-slot|" && run["sent"] = "", RadialBlockSay(output, "a fresh A while open: nothing sent"), fails)
+        fails := Check(run["swallow"][2] && run["swallow"][3], RadialBlockSay(output, "a fresh A while open is swallowed, down and up"), fails)
+
+        run := RadialBlockPlay(config, stopAfter, output)
+        fails := Check(run["notes"] = "open rb|lift w|select 1 played|end w a s d done|resume w|let-go w stop|", RadialBlockSay(output, "Stop lets go of the resumed W"), fails)
+        fails := Check(run["held"] = 0 && InStr(run["sent"], "+w|-w|+s|-s|+w|-w|"), RadialBlockSay(output, "Stop sends the resumed W's up"), fails)
+
+        run := RadialBlockPlay(config, stopDuring, output)
+        fails := Check(run["notes"] = "open rb|lift w|select 1 played|end w a s d stop|" && run["held"] = 0, RadialBlockSay(output, "Stop during Arrows ends the block with no resume"), fails)
+
+        run := RadialBlockPlay(config, switched, output)
+        fails := Check(run["notes"] = "open rb|lift w|cancel no-slot|end w a s d no-slot|resume w|let-go w output|", RadialBlockSay(output, "an output switch lets go of the resumed W"), fails)
+        fails := Check(run["sent"] = lift "+w|-w|" && run["held"] = 0, RadialBlockSay(output, "the switch's release sends W's up once"), fails)
+    }
+    custom := [[5, "key", "LShift", 1], [10, "key", "n", 1], [20, "key", "a", 1], [30, "key", "1", 1], [35, "key", "1", 0],
+        [40, "key", "a", 0], [80, "key", "n", 0], [600, "key", "LShift", 0]]
+    run := RadialBlockPlay(config, custom, "software")
+    fails := Check(run["notes"] = "open rc|lift LShift|select 1 played|end w LShift done|resume LShift|let-go LShift up|",
+        "radial block: custom keys are lifted and pressed again, WASD is not", fails)
+    fails := Check(!run["swallow"][1] && !run["swallow"][3] && !run["swallow"][6], "radial block: custom does not swallow A", fails)
+    ; Conflicts stop a menu arming, like radialProblems.
+    Engine.profile := Map("macros", config["macros"], "radials", [])
+    base := '{"id":"a","slots":["arrows",""],"trigger":'
+    cases := [['{"kind":"key","button":"w"},"blockMove":"wasd"', false],
+        ['{"kind":"key","button":"t"},"blockMove":"custom","blockKeys":["3"]', false],
+        ['{"kind":"key","button":"t"},"blockMove":"custom","blockKeys":["q"]', false],
+        ['{"kind":"key","button":"t"},"blockMove":"wasd","nextKey":"d"', false],
+        ['{"kind":"key","button":"t"},"select":"flick","blockMove":"custom","blockKeys":["3","q"]', true],
+        ['{"kind":"key","button":"t"},"prevKey":"2"', false],
+        ['{"kind":"key","button":"t"},"prevKey":"e"', false],
+        ['{"kind":"key","button":"t"},"nextKey":"t"', false],
+        ['{"kind":"key","button":"4"}', false],
+        ['{"kind":"key","button":"t"},"blockMove":"custom","blockKeys":["w","Pause","XButton1","w"]', true],
+        ['{"kind":"key","button":"t"},"blockMove":"custom","blockKeys":[]', true]]
+    for item in cases {
+        radial := JSON.Parse(base item[1] "}")
+        fails := Check(Engine.RadialReady(radial) = item[2], "radial block: ready is " (item[2] ? 1 : 0) " for " item[1], fails)
+    }
+    fails := Check(Engine.RadialBlockKeys(JSON.Parse(base cases[10][1] "}")).Length = 1, "radial block: Pause, mouse and repeats are dropped", fails)
+    Engine.profile := Map()
+    return fails
+}
+
+RadialBlockSay(output, label) {
+    return "radial block " (output = "software" ? "software" : "board") ": " label
+}
+
+; RadialPlay's tick order. sent is every down and up the engine sends, in
+; order, as "+w|-w|". notes is the radial log, short.
+RadialBlockPlay(config, script, output) {
+    saved := Map("rawOk", Engine.rawOk, "mouse", Engine.hMouseHook, "out", Engine.outputMode, "armed", Engine.armed,
+        "profile", Engine.profile, "known", Engine.frontKnown, "front", Engine.frontExe, "dry", Engine.dry, "live", Engine.liveId)
+    Engine.BuildVkMap()
+    Engine.dry := true
+    Engine.rawOk := true
+    Engine.hMouseHook := 1
+    Engine.armed := true
+    Engine.frontKnown := true
+    Engine.frontExe := "game.exe"
+    Engine.liveId := "radial"
+    Engine.hidEcho := []
+    Engine.outputMode := output
+    Engine.profile := Map("macros", config["macros"], "radials", config["radials"])
+    Engine.hooks := Map("n", true, "XButton1", true)
+    Engine.physDown := Map()
+    Engine.lastSwallow := Map()
+    Engine.repeatSeen := Map()
+    Engine.repeatLogged := Map()
+    Engine.rawOn := true
+    Engine.rawUpCount := Map()
+    Engine.rawAtDown := Map()
+    Engine.redo := Map()
+    Engine.sent := []
+    Engine.applied := Map()
+    Engine.radialOpen := false
+    Engine.radialBlocked := Map()
+    Engine.radialPubOpen := false
+    Engine.radialSent := []
+    Engine.radialPubAt := 0
+    Engine.capture := []
+    Engine.SeedTriggers()
+    swallow := []
+    for item in script
+        swallow.Push(false)
+    out := ""
+    now := 0
+    while (now < 800) {
+        for i, item in script {
+            if (item[1] != now)
+                continue
+            kind := item[2]
+            if (kind = "key")
+                swallow[i] := TestTrigger(item[3], item[4]) || (output = "software" && Engine.TriggerSwallowed(item[3]))
+            else if (kind = "front")
+                Engine.frontExe := "MacroShell.exe"
+            else if (kind = "back")
+                Engine.frontExe := "game.exe"
+            else if (kind = "disarm")
+                Engine.armed := false
+            else if (kind = "output") {
+                ; The output message: the old output lets go of what was applied.
+                for k, _ in Engine.applied
+                    out .= "-" k "|"
+                Engine.FlushApplied()
+                Engine.outputMode := Engine.outputMode = "software" ? "rp2350" : "software"
+                Engine.RadialOutputSwitched()
+            }
+        }
+        TestTick(now)
+        Engine.sent := []
+        Engine.Publish(now)
+        for item in Engine.sent {
+            for k in item["down"]
+                out .= "+" k "|"
+            for k in item["up"]
+                out .= "-" k "|"
+        }
+        now++
+    }
+    notes := ""
+    for line in Engine.capture {
+        if RegExMatch(line, '^radial open .* id=(\S+) mode=', &m)
+            notes .= "open " m[1] "|"
+        else if RegExMatch(line, '^radial select .* slot=(\d+) .* result=(\S+)', &m)
+            notes .= "select " m[1] " " m[2] "|"
+        else if RegExMatch(line, '^radial cancel .* reason=(\S+)', &m)
+            notes .= "cancel " m[1] "|"
+        else if RegExMatch(line, '^radial block (\S+) .* keys=(\S+)(?: reason=(\S+))?', &m)
+            notes .= m[1] " " StrReplace(m[2], ",", " ") (m[3] != "" ? " " m[3] : "") "|"
+    }
+    held := Engine.applied.Count + Engine.radialHold.Count + Engine.radialLift.Count
+    Engine.capture := ""
+    Engine.RadialCancel("stop")
+    Engine.StopAll()
+    Engine.RemoveDone()
+    Engine.sent := []
+    Engine.applied := Map()
+    Engine.hooks := Map()
+    Engine.physDown := Map()
+    Engine.lastSwallow := Map()
+    Engine.repeatSeen := Map()
+    Engine.repeatLogged := Map()
+    Engine.radialBlocked := Map()
+    Engine.radialHold := Map()
+    Engine.radialLift := Map()
+    Engine.rbResumed := []
+    Engine.rbOn := false
+    Engine.rbKeys := []
+    Engine.rawOk := saved["rawOk"]
+    Engine.hMouseHook := saved["mouse"]
+    Engine.outputMode := saved["out"]
+    Engine.armed := saved["armed"]
+    Engine.profile := saved["profile"]
+    Engine.frontKnown := saved["known"]
+    Engine.frontExe := saved["front"]
+    Engine.dry := saved["dry"]
+    Engine.liveId := saved["live"]
+    Engine.radialSent := []
+    return Map("notes", notes, "sent", out, "swallow", swallow, "held", held)
 }
 
 RadialSay(output, label) {
