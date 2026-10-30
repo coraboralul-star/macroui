@@ -1369,6 +1369,16 @@ class Engine {
     static radialClickPrev := false
     static radialBlocked := Map()
     static radialSeed := true
+    ; What the overlay was last told, and the QPC of the open, like engine_radial_view.
+    static radialSeq := 0
+    static radialPubOpen := false
+    static radialPubLit := 0
+    static radialPubId := ""
+    static radialPubAt := 0
+    static radialStamp := 0
+    static radialWhy := ""
+    ; Dry runs keep the messages here instead of the pipe.
+    static radialSent := []
     static liveName := ""
     static profile := Map()
     static liveId := ""
@@ -2985,6 +2995,48 @@ class Engine {
             this.radialDy := Round(this.radialDy * reach / len)
         }
         this.radialLit := this.RadialSlotAt(this.radialDx, this.radialDy, this.RadialSlotCount(this.radialMenu), dead)
+        if (this.radialLit != this.radialPubLit)
+            this.RadialPublish(this.Now())
+    }
+
+    ; The overlay's view, like engine_radial_fill_view. lit is 0-based, -1 for none.
+    static RadialJson() {
+        if !this.radialOpen
+            return Format('{"v":1,"type":"radial","open":false,"why":{},"seq":{}}', JSON.Quote(this.radialWhy), this.radialSeq)
+        menu := this.radialMenu
+        count := this.RadialSlotCount(menu)
+        labels := ""
+        loop count {
+            macro := this.RadialSlotMacro(menu, A_Index)
+            name := macro = "" ? "" : String(Field(macro, "name", "")) != "" ? String(Field(macro, "name", "")) : String(Field(macro, "id", ""))
+            labels .= (A_Index > 1 ? "," : "") JSON.Quote(name)
+        }
+        size := Min(600, Max(200, Round(AsNum(Field(menu, "size", 340), 340))))
+        opacity := Min(100, Max(40, Round(AsNum(Field(menu, "opacity", 88), 88))))
+        at := String(Field(menu, "at", "center")) = "cursor" ? "cursor" : "center"
+        return Format('{"v":1,"type":"radial","open":true,"mode":"{}","slots":{},"lit":{},"at":"{}","size":{},"opacity":{},"seq":{},"stamp":{},"id":{},"name":{},"prev":{},"next":{},"labels":[{}]}',
+            this.radialMode, count, this.radialLit - 1, at, size, opacity, this.radialSeq, this.radialStamp,
+            JSON.Quote(String(Field(menu, "id", ""))), JSON.Quote(String(Field(menu, "name", ""))),
+            JSON.Quote(this.RadialStepKey(menu, "prevKey", "q")), JSON.Quote(this.RadialStepKey(menu, "nextKey", "e")), labels)
+    }
+
+    ; Open, a new lit slot, and close go out at once. While open the view goes
+    ; again every 200 ms, so the shell can hide the ring when this stops answering.
+    static RadialPublish(now) {
+        id := this.radialOpen ? String(Field(this.radialMenu, "id", "")) : ""
+        changed := this.radialOpen != this.radialPubOpen || (this.radialOpen && (this.radialLit != this.radialPubLit || id != this.radialPubId))
+        if (!changed && !(this.radialOpen && now - this.radialPubAt >= 200))
+            return
+        this.radialSeq += 1
+        this.radialPubOpen := this.radialOpen
+        this.radialPubLit := this.radialLit
+        this.radialPubId := id
+        this.radialPubAt := now
+        text := this.RadialJson()
+        if this.dry
+            this.radialSent.Push(text)
+        else
+            this.SendRaw(text)
     }
 
     static RadialFind(id) {
@@ -3012,6 +3064,7 @@ class Engine {
         if !this.radialOpen
             return
         this.RadialLine(kind, why, slot, macro)
+        this.radialWhy := why
         this.radialOpen := false
         this.radialLit := 0
         this.radialDx := 0
@@ -3064,6 +3117,9 @@ class Engine {
         for k in this.RadialKeys(radial)
             this.radialKeyPrev[k] := this.KeyDown(k)
         this.radialClickPrev := this.FingerDown("LButton")
+        stamp := 0
+        DllCall("QueryPerformanceCounter", "Int64*", &stamp)
+        this.radialStamp := stamp
         this.RadialLine("open", "")
     }
 
@@ -3087,8 +3143,13 @@ class Engine {
         }
     }
 
-    ; Before PollTriggers, like engine_radial_poll.
-    static PollRadial() {
+    ; Before PollTriggers, like engine_radial_poll. now is in ms, for the heartbeat.
+    static PollRadial(now := "") {
+        this.PollRadialOnce()
+        this.RadialPublish(now = "" ? this.Now() : now)
+    }
+
+    static PollRadialOnce() {
         if !this.armed {
             this.RadialCancel("stop")
             this.RadialSeedNow()
@@ -6004,7 +6065,7 @@ TestTick(now) {
     started := 0
     Engine.sendNow := Map()
     Engine.focusCache := Map()
-    Engine.PollRadial()
+    Engine.PollRadial(now)
     Engine.PollTriggers()
     Engine.RemoveDone()
     started += Engine.pending.Length
@@ -6311,6 +6372,17 @@ RadialChecks(fails) {
     for output in ["software", "rp2350"] {
         run := RadialPlay(config, pick, output)
         fails := Check(run["notes"] = "open rk keys|select rk 2 played|", RadialSay(output, "2 lights slot 2, the release plays it"), fails)
+        sent := run["sent"]
+        fails := Check(sent.Length = 3 && InStr(sent[1], '"open":true') && InStr(sent[1], '"lit":-1')
+            && InStr(sent[1], '"labels":["Strat A","Strat B","Held C",""]') && InStr(sent[1], '"size":340') && InStr(sent[1], '"opacity":88')
+            && InStr(sent[1], '"prev":"q","next":"e"'), RadialSay(output, "the overlay opens with every slot's name"), fails)
+        fails := Check(sent.Length = 3 && InStr(sent[2], '"lit":1') && InStr(sent[3], '"open":false') && InStr(sent[3], '"why":"played"'),
+            RadialSay(output, "the overlay hears the lit slot, then the close"), fails)
+        beat := RadialPlay(config, [[10, "key", "t", 1], [650, "key", "t", 0]], output)
+        beats := 0
+        for text in beat["sent"]
+            beats += InStr(text, '"open":true') ? 1 : 0
+        fails := Check(beats = 4, RadialSay(output, "held open for 640 ms the view goes out every 200 ms"), fails)
         fails := Check(run["starts"] = 1 && run["x"] = 1 && run["space"] = 0, RadialSay(output, "slot 2 plays Strat B once"), fails)
         fails := Check(run["swallow"][1] && run["swallow"][2] && run["swallow"][4], RadialSay(output, "the trigger and 2 are swallowed"), fails)
 
@@ -6397,6 +6469,9 @@ RadialPlay(config, script, output) {
     Engine.applied := Map()
     Engine.radialOpen := false
     Engine.radialBlocked := Map()
+    Engine.radialPubOpen := false
+    Engine.radialSent := []
+    Engine.radialPubAt := 0
     Engine.capture := []
     Engine.SeedTriggers()
     swallow := []
@@ -6442,6 +6517,7 @@ RadialPlay(config, script, output) {
     }
     alive := Engine.runners.Length > 0
     open := Engine.radialOpen
+    sent := Engine.radialSent
     Engine.capture := ""
     Engine.RadialCancel("stop")
     Engine.StopAll()
@@ -6462,7 +6538,8 @@ RadialPlay(config, script, output) {
     Engine.frontKnown := saved["known"]
     Engine.frontExe := saved["front"]
     Engine.dry := saved["dry"]
-    return Map("starts", starts, "notes", notes, "swallow", swallow, "alive", alive, "open", open,
+    Engine.radialSent := []
+    return Map("starts", starts, "notes", notes, "swallow", swallow, "alive", alive, "open", open, "sent", sent,
         "space", counts["space"], "e", counts["e"], "x", counts["x"], "z", counts["z"])
 }
 

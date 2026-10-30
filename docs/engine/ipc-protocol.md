@@ -85,6 +85,7 @@ Control bytes are legal in the frame. When #50 rebuilds page JSON, it escapes th
 | `profile` | 6 | Shell to engine |
 | `output` | 7 | Shell to engine |
 | `command` | 8 | Shell to engine |
+| `radial` | 9 | Engine to shell |
 
 Type 0 is ignored. A frame sent the wrong way is ignored. No ack.
 
@@ -260,6 +261,34 @@ half_away(x) = floor(x + 0.5) when x >= 0, else ceil(x - 0.5)
 ```
 
 Absolute points are not scaled by that formula. `SteerMouse` does its own conversion, as it does today.
+
+## radial
+
+What the radial menu overlay draws (#97). The shell draws exactly this and never reads the profile for it. The engine sends one when a menu opens, when the lit slot changes, and when it closes, and again every 200 ms while a menu is open. The shell hides the ring when 750 ms pass with none, when the pipe drops, or on a close. Only the newest view matters: a lit slot that was passed over is not sent.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | `open`, 0 or 1 |
+| 1 | 1 | `mode`. 0 keys, 1 flick |
+| 2 | 1 | `slot_count`, 0..8. 0 when closed |
+| 3 | 1 | `lit`, i8. 0-based slot, -1 for none |
+| 4 | 1 | `at`. 0 middle of the game's monitor, 1 at the cursor |
+| 5 | 1 | `why`, the close reason when `open` is 0: 1 played, 2 playing, 3 refused, 4 no slot (dead zone for flick), 5 empty slot, 6 focus, 7 disabled, 8 profile, 9 stop |
+| 6 | 2 | `size`, u16. Ring pixels at 100 % scaling, 200..600 |
+| 8 | 1 | `opacity`, percent, 40..100 |
+| 9 | 1 | Reserved. Encoder writes 0 |
+| 10 | 4 | `seq`, u32. Up by one each send. A new engine starts again at 1 |
+| 14 | 8 | `stamp`, i64. QPC of the trigger down, 0 when closed |
+| 22 | | `id`, `name`, `prev`, `next` strings, then `slot_count` label strings: each slot macro's name, empty for an empty slot |
+
+The AHK engine sends the same view as JSON:
+
+```
+{"v":1,"type":"radial","open":true,"mode":"keys","slots":4,"lit":-1,"at":"center","size":340,"opacity":88,"seq":1,"stamp":123456789,"id":"rk","name":"Keys menu","prev":"q","next":"e","labels":["Strat A","Strat B","Held C",""]}
+{"v":1,"type":"radial","open":false,"why":"played","seq":3}
+```
+
+The overlay is a click-through, no-activate, topmost window on its own thread. It shows over borderless and windowed games. Exclusive fullscreen is not supported.
 
 ## profile
 

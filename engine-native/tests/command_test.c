@@ -2569,6 +2569,178 @@ static void check_radial(void)
     free(doc);
 }
 
+/* One named vector from docs/engine/ipc-vectors.txt. Length, or -1. */
+static int load_vector(const char *name, unsigned char *out, int cap)
+{
+    char line[4096];
+    int want = 0;
+    int n = -1;
+    FILE *f = fopen(FIXTURE_DIR "/../../../docs/engine/ipc-vectors.txt", "rb");
+
+    if (!f)
+        return -1;
+    while (fgets(line, sizeof line, f)) {
+        size_t len = strlen(name);
+
+        if (want) {
+            const char *p = line;
+
+            n = 0;
+            while (*p && n < cap) {
+                unsigned v;
+
+                while (*p == ' ')
+                    p++;
+                if (sscanf(p, "%2x", &v) != 1)
+                    break;
+                out[n++] = (unsigned char)v;
+                p += 2;
+            }
+            break;
+        }
+        if (strncmp(line, name, len) == 0 && line[len] == ' ')
+            want = 1;
+    }
+    fclose(f);
+    return n;
+}
+
+/* The overlay is drawn from this view alone, so it must name every slot. */
+static void check_radial_view(void)
+{
+    struct engine_radial_view view;
+    unsigned char want[512];
+    unsigned char got[1600];
+    int want_n;
+    int got_n;
+    size_t n = 0;
+    char *doc;
+
+    memset(&view, 0, sizeof view);
+    view.open = 1;
+    view.mode = ENGINE_RADIAL_KEYS;
+    view.slot_count = 4;
+    view.lit = 1;
+    view.size = 340;
+    view.opacity = 88;
+    view.seq = 7;
+    view.stamp = 0x100000002ll;
+    snprintf(view.id, sizeof view.id, "rk");
+    snprintf(view.name, sizeof view.name, "Keys");
+    snprintf(view.prev, sizeof view.prev, "q");
+    snprintf(view.next, sizeof view.next, "e");
+    snprintf(view.labels[0], sizeof view.labels[0], "Strat A");
+    snprintf(view.labels[1], sizeof view.labels[1], "Strat B");
+    snprintf(view.labels[3], sizeof view.labels[3], "Held C");
+    want_n = load_vector("radial-open", want, (int)sizeof want);
+    got_n = engine_radial_frame(&view, got, (int)sizeof got);
+    expect(want_n > 0 && want_n == got_n && memcmp(want, got, (size_t)got_n) == 0,
+           "radial frame matches the radial-open vector");
+    memset(&view, 0, sizeof view);
+    view.lit = -1;
+    view.why = ENGINE_RADIAL_WHY_NO_SLOT;
+    view.seq = 8;
+    want_n = load_vector("radial-closed", want, (int)sizeof want);
+    got_n = engine_radial_frame(&view, got, (int)sizeof got);
+    expect(want_n > 0 && want_n == got_n && memcmp(want, got, (size_t)got_n) == 0,
+           "radial frame matches the radial-closed vector");
+    expect(engine_radial_frame(&view, got, 20) == -1, "radial frame too small for the buffer");
+    {
+        struct engine_radial_view sent;
+        struct engine_radial_view now;
+
+        memset(&sent, 0, sizeof sent);
+        memset(&now, 0, sizeof now);
+        sent.lit = now.lit = -1;
+        expect(!engine_radial_due(&sent, &now, 5000, 0, 1000), "radial beat: closed and still closed sends nothing");
+        now.open = 1;
+        snprintf(now.id, sizeof now.id, "rk");
+        expect(engine_radial_due(&sent, &now, 10, 0, 1000), "radial beat: an open goes out at once");
+        sent = now;
+        expect(!engine_radial_due(&sent, &now, 199, 0, 1000), "radial beat: nothing new inside 200 ms");
+        expect(engine_radial_due(&sent, &now, 200, 0, 1000), "radial beat: open for 200 ms sends again");
+        expect(engine_radial_due(&sent, &now, 2000, 0, 1000000) == 0 && engine_radial_due(&sent, &now, 200000, 0, 1000000),
+               "radial beat: counts QPC ticks at the given rate");
+        now.lit = 2;
+        expect(engine_radial_due(&sent, &now, 1, 0, 1000), "radial beat: a new lit slot goes out at once");
+        now.open = 0;
+        expect(engine_radial_due(&sent, &now, 1, 0, 1000), "radial beat: the close goes out at once");
+    }
+
+    doc = read_fixture(FIXTURE_DIR "/radial.json", &n);
+    if (!doc) {
+        expect(0, "radial.json read for the view");
+        return;
+    }
+    {
+        struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+        struct engine_radial_state st;
+        struct engine_profile_slot slot;
+        struct engine_live_config live;
+        struct engine_fingers fingers;
+        const struct engine_profile_image *image;
+
+        engine_profile_slot_init(&slot);
+        if (!play || engine_profile_slot_apply_document(&slot, doc, n) != 1) {
+            expect(0, "radial view setup");
+            free(play);
+            free(doc);
+            return;
+        }
+        image = engine_profile_slot_adopt(&slot);
+        engine_profile_pick(image, "game.exe", image->active_id, &live);
+        engine_play_init(play);
+        engine_play_set_macros(play, live.macros, live.macro_count);
+        engine_radial_init(&st);
+        engine_fingers_clear(&fingers);
+        engine_radial_poll(&st, play, &live, &fingers, "game.exe", "", 1);
+        engine_fingers_set(&fingers, 0x54, 1);
+        engine_radial_poll(&st, play, &live, &fingers, "game.exe", "", 1);
+        engine_radial_fill_view(&st, &live, &view);
+        expect(view.open && view.mode == ENGINE_RADIAL_KEYS && view.slot_count == 4 && view.lit == -1,
+               "radial view: open, keys, 4 slots, nothing lit");
+        expect(strcmp(view.id, "rk") == 0 && strcmp(view.name, "Keys menu") == 0 && strcmp(view.prev, "q") == 0 &&
+                   strcmp(view.next, "e") == 0,
+               "radial view: the menu and its step keys");
+        expect(strcmp(view.labels[0], "Strat A") == 0 && strcmp(view.labels[1], "Strat B") == 0 &&
+                   strcmp(view.labels[2], "Held C") == 0 && view.labels[3][0] == 0,
+               "radial view: each slot is its macro's name, an empty slot is blank");
+        expect(view.size == ENGINE_RADIAL_SIZE && view.opacity == ENGINE_RADIAL_OPACITY,
+               "radial view: default size and opacity");
+        engine_fingers_set(&fingers, 0x32, 1);
+        engine_radial_poll(&st, play, &live, &fingers, "game.exe", "", 1);
+        engine_radial_fill_view(&st, &live, &view);
+        expect(view.open && view.lit == 1, "radial view: 2 lights slot 2");
+        engine_fingers_set(&fingers, 0x54, 0);
+        engine_radial_poll(&st, play, &live, &fingers, "game.exe", "", 1);
+        engine_radial_fill_view(&st, &live, &view);
+        expect(!view.open && view.why == ENGINE_RADIAL_WHY_PLAYED && view.slot_count == 0,
+               "radial view: closed after the pick, with the reason");
+        engine_profile_slot_shutdown(&slot);
+        free(play);
+    }
+    {
+        static const char sized[] =
+            "{\"version\":1,\"name\":\"R\",\"activeId\":\"c\",\"configs\":[{\"id\":\"c\",\"name\":\"C\",\"macros\":[],"
+            "\"radials\":[{\"id\":\"a\",\"size\":90,\"opacity\":250},{\"id\":\"b\",\"size\":512,\"opacity\":61}]}],\"macros\":[]}";
+        struct engine_profile_slot slot;
+        struct engine_live_config live;
+        const struct engine_profile_image *image;
+
+        engine_profile_slot_init(&slot);
+        engine_profile_slot_apply_document(&slot, sized, sizeof sized - 1);
+        image = engine_profile_slot_adopt(&slot);
+        engine_profile_pick(image, "game.exe", image ? image->active_id : "", &live);
+        expect(live.radial_count == 2 && live.radials[0].size == ENGINE_RADIAL_SIZE_MIN &&
+                   live.radials[0].opacity == ENGINE_RADIAL_OPACITY_MAX,
+               "radial: size and opacity are clamped");
+        expect(live.radial_count == 2 && live.radials[1].size == 512 && live.radials[1].opacity == 61,
+               "radial: size and opacity in range are kept");
+        engine_profile_slot_shutdown(&slot);
+    }
+    free(doc);
+}
+
 int main(void)
 {
     check_frames();
@@ -2595,6 +2767,7 @@ int main(void)
     check_create_paths();
     check_hold_repress();
     check_radial();
+    check_radial_view();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;

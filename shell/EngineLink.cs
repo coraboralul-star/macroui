@@ -20,6 +20,8 @@ readonly struct EngineInbound
     public bool Live { get; init; }
     public bool State { get; init; }
     public byte[]? Report { get; init; }
+    /* A radial frame: what the overlay draws. Not a page message. */
+    public RadialView? Radial { get; init; }
 }
 
 static class EngineLink
@@ -59,6 +61,8 @@ static class EngineLink
                 return Error(payload, out inbound);
             case 5:
                 return Report(payload, out inbound);
+            case 9:
+                return Radial(payload, out inbound);
             default:
                 return true;
         }
@@ -246,6 +250,54 @@ static class EngineLink
         if (payload[0] > 32 || payload[1] > 32)
             return false;
         inbound = new EngineInbound { Report = payload.ToArray() };
+        return true;
+    }
+
+    /* engine_radial_frame. Fixed 22 bytes, then id, name, prev, next and one
+       label per slot. */
+    static bool Radial(ReadOnlySpan<byte> payload, out EngineInbound inbound)
+    {
+        inbound = default;
+        if (payload.Length < 22)
+            return false;
+        var open = payload[0];
+        var mode = payload[1] == 1 ? "flick" : "keys";
+        var count = payload[2];
+        if (open > 1 || count > 8)
+            return false;
+        var cur = new Cursor(payload.Slice(22));
+        if (!cur.Str(out var id) || !cur.Str(out var name) || !cur.Str(out var prev) || !cur.Str(out var next))
+            return false;
+        var labels = new string[count];
+        for (var i = 0; i < count; i++)
+        {
+            if (!cur.Str(out var label))
+                return false;
+            labels[i] = label;
+        }
+        if (!cur.Done)
+            return false;
+        inbound = new EngineInbound
+        {
+            Radial = new RadialView
+            {
+                Open = open == 1,
+                Mode = mode,
+                SlotCount = count,
+                Lit = (sbyte)payload[3],
+                At = payload[4] == 1 ? "cursor" : "center",
+                Why = open == 1 ? "" : RadialView.WhyName(payload[5], mode),
+                Size = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(6)),
+                Opacity = payload[8],
+                Seq = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(10)),
+                Stamp = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(14)),
+                Id = id,
+                Name = name,
+                Prev = prev,
+                Next = next,
+                Labels = labels
+            }.Clamped()
+        };
         return true;
     }
 

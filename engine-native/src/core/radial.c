@@ -143,6 +143,7 @@ static void close_menu(struct engine_radial_state *st, int kind, int why, int sl
     if (!st->open)
         return;
     note(st, kind, why, slot, macro);
+    st->last_why = why;
     st->open = 0;
     st->lit = -1;
     st->dx = 0;
@@ -384,6 +385,62 @@ int engine_radial_claims(const struct engine_live_config *live, uint16_t id)
             return 1;
     }
     return 0;
+}
+
+void engine_radial_fill_view(const struct engine_radial_state *st, const struct engine_live_config *live,
+                             struct engine_radial_view *out)
+{
+    const char *key;
+    int i;
+
+    if (!out)
+        return;
+    memset(out, 0, sizeof *out);
+    out->lit = -1;
+    if (!st)
+        return;
+    out->why = st->last_why;
+    if (!st->open)
+        return;
+    out->open = 1;
+    out->mode = st->mode;
+    out->slot_count = st->menu.slot_count;
+    out->lit = st->lit;
+    out->at = st->menu.at;
+    out->size = st->menu.size;
+    out->opacity = st->menu.opacity;
+    copy_text(out->id, sizeof out->id, st->menu.id);
+    copy_text(out->name, sizeof out->name, st->menu.name);
+    key = engine_key_name(st->menu.prev_key);
+    copy_text(out->prev, sizeof out->prev, key ? key : "");
+    key = engine_key_name(st->menu.next_key);
+    copy_text(out->next, sizeof out->next, key ? key : "");
+    for (i = 0; i < st->menu.slot_count && i < ENGINE_RADIAL_SLOTS; i++) {
+        int index = st->menu.slot[i];
+
+        if (!macro_on(live, index))
+            continue;
+        if (live->extras && live->extras[index].name[0])
+            copy_text(out->labels[i], sizeof out->labels[i], live->extras[index].name);
+        else
+            copy_text(out->labels[i], sizeof out->labels[i], live->macros[index].id);
+    }
+}
+
+int engine_radial_due(const struct engine_radial_view *sent, const struct engine_radial_view *view,
+                      int64_t now, int64_t sent_at, int64_t freq)
+{
+    if (!sent || !view)
+        return 0;
+    if (view->open != sent->open)
+        return 1;
+    if (!view->open)
+        return 0;
+    if (view->lit != sent->lit || strcmp(view->id, sent->id) != 0)
+        return 1;
+    if (freq <= 0)
+        freq = 1000;
+    return now - sent_at >= (int64_t)ENGINE_RADIAL_BEAT_MS * freq / 1000;
 }
 
 const char *engine_radial_mode_name(int mode)

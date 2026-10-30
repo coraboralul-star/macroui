@@ -22,6 +22,14 @@ state-sample engine
 ack-command engine
 4D 55 49 31 01 00 03 00 04 00 00 00 01 01 00 00
 
+# radial open, keys, 4 slots, slot 2 lit, centre, 340 px, 88 %, seq 7, stamp 0x100000002, rk / Keys, q e, Strat A, Strat B, empty, Held C
+radial-open engine
+4D 55 49 31 01 00 09 00 42 00 00 00 01 00 04 01 00 00 54 01 58 00 07 00 00 00 02 00 00 00 01 00 00 00 02 00 72 6B 04 00 4B 65 79 73 01 00 71 01 00 65 07 00 53 74 72 61 74 20 41 07 00 53 74 72 61 74 20 42 00 00 06 00 48 65 6C 64 20 43
+
+# radial closed, reason 4 (no slot), seq 8
+radial-closed engine
+4D 55 49 31 01 00 09 00 1E 00 00 00 00 00 00 FF 00 04 00 00 00 00 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+
 # profile ok, no id
 ack-profile engine
 4D 55 49 31 01 00 03 00 04 00 00 00 01 02 00 00

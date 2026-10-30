@@ -206,6 +206,10 @@ int engine_claims_sync(struct engine_claim_mem *mem, const struct engine_live_co
 
 /* 0 when the frame fits. -1 when cap is too small. Held ids without a name
    are omitted. Window extras past the cap are dropped from the front. */
+/* Radial frame, type 9: what the overlay draws. Length, or -1 when cap is too small.
+   See docs/engine/ipc-protocol.md. */
+int engine_radial_frame(const struct engine_radial_view *view, unsigned char *buf, int cap);
+
 int engine_state_frame(const struct engine_state_snapshot *snap,
                        const struct engine_state_window *windows, int window_count,
                        unsigned char *buf, int cap);

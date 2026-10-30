@@ -6673,6 +6673,25 @@ input.ev-delay {
   margin-top: 12px;
 }
 
+.radial-range {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr) 4rem;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.radial-range input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.radial-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
 .radial-ring {
   width: 100%;
   height: auto;

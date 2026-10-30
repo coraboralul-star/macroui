@@ -8,5 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\EngineLink.cs" Link="EngineLink.cs" />
+    <Compile Include="..\RadialView.cs" Link="RadialView.cs" />
   </ItemGroup>
 </Project>
