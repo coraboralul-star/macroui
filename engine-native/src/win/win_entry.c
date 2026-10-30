@@ -825,8 +825,13 @@ static void apply_commands(int64_t now)
             int rebind = 0;
             int sent = ENGINE_OUTPUT_SOFTWARE;
 
-            if (engine_output_set_mode(&g.play->output, item.mode, &release, &rebind, &sent))
+            if (engine_output_set_mode(&g.play->output, item.mode, &release, &rebind, &sent)) {
                 send_play_report(&release, sent, now);
+                /* The release let go of what the menu held. Nothing is
+                   pressed again on the new output. */
+                g.play->radial_lift_count = 0;
+                engine_radial_cancel(&g.radial, g.play, ENGINE_RADIAL_WHY_OUTPUT);
+            }
             if (rebind)
                 g.output_changed = 1;
         }
@@ -1019,7 +1024,7 @@ static void drain_fingers(int64_t now, const struct engine_live_config *live)
 
         if (ev.id == ENGINE_KEY_PAUSE && engine_panic_edge(ev.id, pause, ev.down)) {
             engine_play_stop_all_why(g.play, ENGINE_WHY_PANIC);
-            engine_radial_cancel(&g.radial, ENGINE_RADIAL_WHY_STOP);
+            engine_radial_cancel(&g.radial, g.play, ENGINE_RADIAL_WHY_STOP);
         }
         /* Windows auto-repeat, or a second mouse 4 or 5 down, while the
            finger is down. It is not an edge, so a held trigger never starts
@@ -1041,6 +1046,10 @@ static void drain_fingers(int64_t now, const struct engine_live_config *live)
         } else {
             g.repeat_logged[ev.id] = 0;
         }
+        /* A blocked key's down, or its repeat, that reached the game before
+           the swallow map did. */
+        if (ev.down && !ev.swallowed)
+            engine_radial_passed(&g.radial, g.play, ev.id);
         engine_finger_at_touch(g.finger_at, ENGINE_KEY_ID_MAX + 1, ev.id, ev.qpc ? ev.qpc : now);
         if (ev.id == ENGINE_KEY_PAUSE)
             pause = ev.down ? 1 : 0;
@@ -1355,6 +1364,34 @@ static void flush_radial(void)
         g.radial_sent = view.seq;
 }
 
+/* radial block lift keys=W,A, radial block end keys=W reason=done,
+   radial block resume keys=W, radial block let-go keys=W reason=up. */
+static void radial_block_line(char *line, size_t cap, const struct engine_radial_note *note)
+{
+    static const char *const what[] = { "lift", "end", "resume", "let-go" };
+    char keys[160];
+    size_t used = 0;
+    int i;
+
+    keys[0] = '\0';
+    for (i = 0; i < note->key_count; i++) {
+        const char *name = engine_key_name(note->keys[i]);
+        int n = name ? snprintf(keys + used, sizeof keys - used, "%s%s", i ? "," : "", name)
+                     : snprintf(keys + used, sizeof keys - used, "%s%u", i ? "," : "", (unsigned)note->keys[i]);
+
+        if (n < 0 || (size_t)n >= sizeof keys - used)
+            break;
+        used += (size_t)n;
+    }
+    if (note->kind == ENGINE_RADIAL_NOTE_BLOCK_END || note->kind == ENGINE_RADIAL_NOTE_LET_GO)
+        snprintf(line, cap, "radial block %s menu=\"%s\" id=%s keys=%s reason=%s",
+                 what[note->kind - ENGINE_RADIAL_NOTE_LIFT], note->name, note->radial, keys,
+                 engine_radial_why_name(note->why, note->mode));
+    else
+        snprintf(line, cap, "radial block %s menu=\"%s\" id=%s keys=%s", what[note->kind - ENGINE_RADIAL_NOTE_LIFT],
+                 note->name, note->radial, keys);
+}
+
 static void log_radial(const struct engine_live_config *live)
 {
     int i;
@@ -1371,9 +1408,11 @@ static void log_radial(const struct engine_live_config *live)
             snprintf(line, sizeof line, "radial select menu=\"%s\" id=%s slot=%d macro=\"%s\" macro_id=%s result=%s",
                      note->name, note->radial, note->slot + 1, macro_name(live, note->macro),
                      note->macro, engine_radial_why_name(note->why, note->mode));
-        else
+        else if (note->kind == ENGINE_RADIAL_NOTE_CANCEL)
             snprintf(line, sizeof line, "radial cancel menu=\"%s\" id=%s mode=%s reason=%s", note->name,
                      note->radial, mode, engine_radial_why_name(note->why, note->mode));
+        else
+            radial_block_line(line, sizeof line, note);
         engine_log(line);
     }
     g.radial.note_count = 0;
@@ -1733,9 +1772,15 @@ static void playback_tick(int64_t now)
         int32_t dy = 0;
 
         /* Moves since the last tick, then the release that may pick with them. */
+        int blocking = engine_radial_blocking(&g.radial);
+
         engine_raw_take(&g.raw, &dx, &dy);
         engine_radial_move(&g.radial, dx, dy);
         engine_radial_poll(&g.radial, g.play, &live, &g.fingers, focus.name, focus.owner, g.armed);
+        /* Block movement started: swallow its keys before this tick's
+           publish lets go of the held ones, so no repeat slips in between. */
+        if (!blocking && engine_radial_blocking(&g.radial))
+            engine_arm_swallow_radial(&g.hooks, &live, focus.name, focus.owner, g.armed, g.play, &g.radial);
         engine_raw_aim(&g.raw, engine_radial_wants_motion(&g.radial));
         log_radial(&live);
         publish_radial(now, &live);

@@ -2,7 +2,7 @@ import { applyDelayMode, expandTaps, isSleep, laneCells, scrollDy, setDelay } fr
 import { appendSteps, insertTyped, withBlocks } from "./blocks";
 import { playModeChip, shownBlocks } from "./macroFlow";
 import { activeTurn, blankMacro, blankRadial, blankStep, normalizeProfile, normalizeRadial, repairedModes, setActiveTurn, switchConfig, turnCounts, writeActive, type Block, type Macro, type Profile, type Radial, type Step, type Trigger } from "./profile";
-import { activeRadial, radialProblems, setActiveRadial, slotAngle, withSlot, withSlotCount } from "./radial";
+import { activeRadial, blockedKeys, radialProblems, setActiveRadial, slotAngle, withSlot, withSlotCount } from "./radial";
 import { useMacroActions, type TriggerMenu } from "./useMacroActions";
 import { parseTurn } from "./hostMessages";
 import { TURN_INPUT_DEFAULT, inputLabel, nudge } from "./components/TurnPanel";
@@ -174,7 +174,8 @@ export function createPathsFixture(): Profile {
 /** What engine-native/tests/fixtures/radial.json holds: a keys menu on t and a
  *  flick menu on y with click to pick. Slot 1 plays PASS, slot 2 taps x, slot 3
  *  is a While Held macro, slot 4 is empty. Key one is a macro on 1, which the
- *  keys menu owns while it is open. */
+ *  keys menu owns while it is open. rb (Mouse 4) blocks WASD and rc (n) blocks
+ *  w and LShift; their slot 1 is Arrows (taps w, then s), slot 2 Strat B. */
 export function radialFixture(): Profile {
   const tap = (key: string): Step[] => [
     { type: "key", action: "down", key },
@@ -189,11 +190,14 @@ export function radialFixture(): Profile {
     run("strat-b", "Strat B", tap("x")),
     macro({ id: "held-c", name: "Held C", advanced: true, playMode: "whileHeld", blocks: [{ id: "held-c-b1", type: "whileHeld", mute: [], steps: PASS }] }),
     run("key-one", "Key one", tap("z"), "1"),
+    run("arrows", "Arrows", [...tap("w"), ...tap("s")]),
   ]).macros;
   const slots = ["strat-a", "strat-b", "held-c", ""];
   const radials = [
     blankRadial({ id: "rk", name: "Keys menu", trigger: { kind: "key", button: "t" }, slots }),
     blankRadial({ id: "rf", name: "Flick menu", trigger: { kind: "key", button: "y" }, slots, select: "flick", clickSelect: true }),
+    blankRadial({ id: "rb", name: "Block menu", trigger: { kind: "side", button: "XButton1" }, slots: ["arrows", "strat-b"], blockMove: "wasd" }),
+    blankRadial({ id: "rc", name: "Custom block", trigger: { kind: "key", button: "n" }, slots: ["arrows", "strat-b"], blockMove: "custom", blockKeys: ["w", "LShift"] }),
   ];
   return normalizeProfile({ version: 1, name: "Radial", variables: {}, activeId: "radial", configs: [{ id: "radial", name: "Radial", macros, radials }], macros });
 }
@@ -496,6 +500,26 @@ function checkRadial() {
   same(normalizeRadial({ trigger: { kind: "mouse", button: "LButton" } })?.trigger, { kind: "mouse", button: "" }, "left click is never a radial trigger");
   same(normalizeRadial({ prevKey: "RButton", nextKey: 7 })?.prevKey, "q", "a mouse button is not a step key");
   same(normalizeRadial({ select: "flick", deadZone: 0 })?.deadZone, 40, "a dead zone below 1 is the default");
+  same([fresh?.blockMove, fresh?.blockKeys], ["off", []], "block movement starts off");
+  same(normalizeRadial({ blockMove: "jump" })?.blockMove, "off", "an unknown block choice is off");
+  same(normalizeRadial({ blockMove: "custom", blockKeys: ["w", "W", "shift", "XButton1", "RButton", "Pause", 4, "a", "b", "c", "d", "e", "f", "g", "h"] })?.blockKeys,
+    ["w", "LShift", "a", "b", "c", "d", "e", "f"], "custom keys are keyboard keys, not Pause, no repeats, at most 8");
+  same(blockedKeys(blankRadial({ blockMove: "wasd", blockKeys: ["x"] })), ["w", "a", "s", "d"], "WASD blocks w, a, s and d");
+  same(blockedKeys(blankRadial({ blockMove: "off", blockKeys: ["x"] })), [], "off blocks nothing and keeps the custom keys");
+  {
+    const slots = ["m", ""];
+    const macros = [blankMacro({ id: "m", name: "M" })];
+    const base = { trigger: { kind: "key", button: "w" } as Trigger, slots, blockMove: "wasd" as const };
+    const says = (radial: Radial) => radialProblems(radial, macros);
+    check(says(blankRadial(base)).includes("W is the trigger, so Block movement can't block it."), "a blocked key can't be the trigger");
+    check(says(blankRadial({ ...base, trigger: { kind: "key", button: "t" }, blockMove: "custom", blockKeys: ["3"] })).includes("3 is a slot key, so Block movement can't block it."),
+      "keys mode: a blocked key can't be 1 to 8");
+    check(!says(blankRadial({ ...base, trigger: { kind: "key", button: "t" }, select: "flick", blockMove: "custom", blockKeys: ["3", "q"] })).some((line) => line.includes("Block movement")),
+      "flick: 1 to 8 and the step keys can be blocked");
+    check(says(blankRadial({ ...base, trigger: { kind: "key", button: "t" }, prevKey: "a" })).includes("A is the Previous key, so Block movement can't block it."), "a blocked key can't be Previous");
+    check(says(blankRadial({ ...base, trigger: { kind: "key", button: "t" }, nextKey: "d" })).includes("D is the Next key, so Block movement can't block it."), "a blocked key can't be Next");
+    same(says(blankRadial({ ...base, trigger: { kind: "key", button: "t" }, blockMove: "custom", blockKeys: [] })), [], "custom with no keys still arms");
+  }
   same([fresh?.size, fresh?.opacity], [340, 88], "the ring is 340 px at 88 % unless changed");
   same([normalizeRadial({ size: 90, opacity: 300 })?.size, normalizeRadial({ size: 90, opacity: 300 })?.opacity], [200, 100],
     "size and opacity are clamped to 200 to 600 px and 40 to 100 %");

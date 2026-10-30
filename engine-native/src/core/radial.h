@@ -5,7 +5,14 @@
    cancel, focus, disable, profile change, stop. Whatever the menu holds is
    let go there. The mode is chosen once, at open, by engine_radial_mode.
    Flick reads a vector: engine_radial_move adds raw mouse counts. A cursor
-   source can feed the same vector later. */
+   source can feed the same vector later.
+
+   Block movement (#100) outlives the menu. At open the engine lets go of the
+   blocked keys you hold, then swallows them until the picked macro ends, or
+   until the menu closes with nothing played. Then each blocked key the hook
+   still sees held is pressed again by the engine and held until its real up.
+   Focus, disable, profile, Stop, Pause and an output switch end it with
+   nothing pressed again, and let go of any key it pressed again. */
 #ifndef ENGINE_RADIAL_H
 #define ENGINE_RADIAL_H
 
@@ -24,6 +31,11 @@
 
 #define ENGINE_RADIAL_AT_CENTER 0
 #define ENGINE_RADIAL_AT_CURSOR 1
+
+#define ENGINE_RADIAL_BLOCK_OFF 0
+#define ENGINE_RADIAL_BLOCK_WASD 1
+#define ENGINE_RADIAL_BLOCK_CUSTOM 2
+#define ENGINE_RADIAL_BLOCK_CAP 8
 
 /* Raw counts from where the menu opened. A flick past this lights a slot.
    The vector is capped at this many dead zones, so a flick back turns fast. */
@@ -57,11 +69,20 @@ struct engine_radial {
     int32_t opacity;
     int slot_count;
     int32_t slot[ENGINE_RADIAL_SLOTS];
+    /* WASD is compiled to w, a, s, d. */
+    int block_move;
+    int block_count;
+    uint16_t block[ENGINE_RADIAL_BLOCK_CAP];
 };
 
 #define ENGINE_RADIAL_NOTE_OPEN 1
 #define ENGINE_RADIAL_NOTE_SELECT 2
 #define ENGINE_RADIAL_NOTE_CANCEL 3
+/* Block movement. keys holds the ids. */
+#define ENGINE_RADIAL_NOTE_LIFT 4
+#define ENGINE_RADIAL_NOTE_BLOCK_END 5
+#define ENGINE_RADIAL_NOTE_RESUME 6
+#define ENGINE_RADIAL_NOTE_LET_GO 7
 
 /* Why a menu closed without playing, or what a select did. */
 #define ENGINE_RADIAL_WHY_NONE 0
@@ -74,7 +95,11 @@ struct engine_radial {
 #define ENGINE_RADIAL_WHY_DISABLED 7
 #define ENGINE_RADIAL_WHY_PROFILE 8
 #define ENGINE_RADIAL_WHY_STOP 9
-#define ENGINE_RADIAL_WHY_COUNT 10
+#define ENGINE_RADIAL_WHY_OUTPUT 10
+/* Block movement only: the picked macro ended, the key went up. */
+#define ENGINE_RADIAL_WHY_DONE 11
+#define ENGINE_RADIAL_WHY_UP 12
+#define ENGINE_RADIAL_WHY_COUNT 13
 
 struct engine_radial_note {
     uint8_t kind;
@@ -85,6 +110,8 @@ struct engine_radial_note {
     char radial[ENGINE_ID_CAP];
     char name[ENGINE_RADIAL_NAME_CAP];
     char macro[ENGINE_ID_CAP];
+    uint8_t key_count;
+    uint16_t keys[ENGINE_RADIAL_BLOCK_CAP];
 };
 
 /* 1 to 8, then previous and next. */
@@ -103,6 +130,18 @@ struct engine_radial_state {
     uint8_t click_prev;
     /* Why the last menu closed. */
     int last_why;
+    /* Block movement. block_on swallows block[]. It waits for block_macro
+       after a pick, "" when none. block_live is the config it opened in.
+       resumed are the keys the engine pressed again, held until their up. */
+    int block_on;
+    int block_count;
+    uint16_t block[ENGINE_RADIAL_BLOCK_CAP];
+    char block_macro[ENGINE_ID_CAP];
+    char block_live[ENGINE_ID_CAP];
+    /* The end reason once block_macro is done: done after a pick, else why the menu closed. */
+    int block_why;
+    int resumed_count;
+    uint16_t resumed[ENGINE_RADIAL_BLOCK_CAP];
     int need_seed;
     int note_count;
     struct engine_radial_note notes[ENGINE_RADIAL_NOTE_CAP];
@@ -116,7 +155,10 @@ void engine_radial_init(struct engine_radial_state *st);
 void engine_radial_reseed(struct engine_radial_state *st);
 
 /* Enabled, a trigger that can trigger, no enabled macro with steps on the
-   same trigger, and at least one slot with a macro. */
+   same trigger, and at least one slot with a macro. Keys mode: the trigger,
+   previous and next are not 1 to 8, previous and next differ and are not the
+   trigger. No blocked key is the trigger, or in keys mode 1 to 8, previous
+   or next. Like radialProblems in ui/src/radial.ts. */
 int engine_radial_ready(const struct engine_radial *radial, const struct engine_live_config *live);
 
 /* The mode this menu plays in. Called once, when it opens. */
@@ -138,10 +180,19 @@ void engine_radial_poll(struct engine_radial_state *st, struct engine_play *play
 /* Raw mouse counts since the last call. Only a flick menu that is open uses them. */
 void engine_radial_move(struct engine_radial_state *st, int32_t dx, int32_t dy);
 
-/* Stop, panic, or disarm. */
-void engine_radial_cancel(struct engine_radial_state *st, int why);
+/* Stop, panic, an output switch: closes the menu and ends Block movement
+   with nothing pressed again. */
+void engine_radial_cancel(struct engine_radial_state *st, struct engine_play *play, int why);
 
-/* 1 while an open menu owns this id: a macro on it does not start. */
+/* The hook passed a down of this id. While Block movement swallows it, that
+   down slipped in before the swallow map: let go of it again. */
+void engine_radial_passed(struct engine_radial_state *st, struct engine_play *play, uint16_t id);
+
+/* 1 while Block movement swallows keys or holds a key it pressed again. */
+int engine_radial_blocking(const struct engine_radial_state *st);
+
+/* 1 while an open menu owns this id, or Block movement swallows or holds it:
+   a macro on it does not start. */
 int engine_radial_owns(const struct engine_radial_state *st, uint16_t id);
 
 /* 1 while a flick menu is open: mouse moves do not reach the cursor. */
@@ -150,9 +201,10 @@ int engine_radial_wants_motion(const struct engine_radial_state *st);
 /* 1 while a flick menu with click to pick is open: left click is the menu's. */
 int engine_radial_wants_click(const struct engine_radial_state *st);
 
-/* Marks the ids to swallow: every ready menu's trigger, and while one is
-   open in keys mode, 1 to 8 and its two step keys. focus_ok is the live
-   profile focus, like macro triggers. */
+/* Marks the ids to swallow: every ready menu's trigger, while one is open in
+   keys mode 1 to 8 and its two step keys, and Block movement's keys and the
+   keys it pressed again. focus_ok is the live profile focus, like macro
+   triggers. */
 void engine_radial_swallow(const struct engine_radial_state *st,
                            const struct engine_live_config *live, int focus_ok, uint8_t *swallow);
 

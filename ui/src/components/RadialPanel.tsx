@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  RADIAL_BLOCK_KEYS_MAX,
   RADIAL_OPACITY_MAX,
   RADIAL_OPACITY_MIN,
   RADIAL_SIZE_MAX,
@@ -9,20 +10,25 @@ import {
   blankRadial,
   type Macro,
   type Radial,
+  type RadialBlock,
 } from "../profile";
-import { radialProblems, slotAngle, withSlot, withSlotCount } from "../radial";
+import { blockClash, blockedKeys, radialProblems, slotAngle, withSlot, withSlotCount } from "../radial";
 import { Capture, type Captured } from "./Capture";
 import { FieldSelect } from "./FieldSelect";
 import { NumberField } from "./NumberField";
 import { inputLabel } from "./TurnPanel";
 
-type Picking = "trigger" | "prev" | "next" | null;
+type Picking = "trigger" | "prev" | "next" | "block" | null;
 
 const PICK_TITLE: Record<Exclude<Picking, null>, string> = {
   trigger: "Radial menu trigger",
   prev: "Previous slot key",
   next: "Next slot key",
+  block: "Key to block",
 };
+
+const BLOCK_NEXT: Record<RadialBlock, RadialBlock> = { off: "wasd", wasd: "custom", custom: "off" };
+const BLOCK_LABEL: Record<RadialBlock, string> = { off: "Disabled", wasd: "WASD", custom: "Custom" };
 
 /** Where slot i sits on the ring, as x, y around 0, 0. */
 function point(angle: number, radius: number): [number, number] {
@@ -112,8 +118,15 @@ export function RadialPanel({
       setPickNote("Use a keyboard key. The game still sees mouse buttons");
       return;
     }
+    if (picking === "block" && captured.button.toLowerCase() === "pause") {
+      setPickNote("Pause stops every macro, so it can't be blocked. Press another key");
+      return;
+    }
     if (picking === "trigger") set({ trigger: { kind: captured.kind, button: captured.button } });
-    else if (picking === "prev") set({ prevKey: captured.button });
+    else if (picking === "block") {
+      const have = radial.blockKeys.some((key) => key.toLowerCase() === captured.button.toLowerCase());
+      if (!have) set({ blockKeys: [...radial.blockKeys, captured.button].slice(0, RADIAL_BLOCK_KEYS_MAX) });
+    } else if (picking === "prev") set({ prevKey: captured.button });
     else if (picking === "next") set({ nextKey: captured.button });
     setPickNote("");
     setPicking(null);
@@ -234,6 +247,65 @@ export function RadialPanel({
               </label>
             </>
           )}
+        </div>
+
+        <div className="settings-block">
+          <div className="settings-row is-static">
+            <span>
+              <span className="settings-row-name">Block movement</span>
+              <span className="settings-row-note">
+                Stops your character when the menu opens. The game doesn't see these keys while the menu is open or while the picked macro plays. Keys you still hold
+                start again when it ends.
+              </span>
+            </span>
+            <button
+              type="button"
+              className="turn-input"
+              aria-label={`Block movement ${BLOCK_LABEL[radial.blockMove]}. Click to change`}
+              title="Click to change"
+              onClick={() => set({ blockMove: BLOCK_NEXT[radial.blockMove] })}
+            >
+              {BLOCK_LABEL[radial.blockMove]}
+            </button>
+          </div>
+          {radial.blockMove !== "off" ? (
+            <div className="watch-row radial-block-keys">
+              {blockedKeys(radial).map((key) => {
+                const clash = blockClash(radial, key);
+                const custom = radial.blockMove === "custom";
+                const label = `${inputLabel(key)}${clash ? `: ${clash}, not blocked` : ""}`;
+                return custom ? (
+                  <button
+                    key={key}
+                    type="button"
+                    className={clash ? "is-clash" : ""}
+                    title={clash ? `This is ${clash}. The menu won't arm until you remove it` : "Click to remove"}
+                    aria-label={`${label}. Click to remove`}
+                    onClick={() => set({ blockKeys: radial.blockKeys.filter((item) => item !== key) })}
+                  >
+                    {inputLabel(key)} <span className="act-x">×</span>
+                  </button>
+                ) : (
+                  <span key={key} className={`radial-block-key${clash ? " is-clash" : ""}`} title={clash ? `This is ${clash}` : undefined} aria-label={label}>
+                    {inputLabel(key)}
+                  </span>
+                );
+              })}
+              {radial.blockMove === "custom" && radial.blockKeys.length < RADIAL_BLOCK_KEYS_MAX ? (
+                <button
+                  type="button"
+                  aria-label="Add a key to block"
+                  onClick={() => {
+                    setPickNote("");
+                    setPicking("block");
+                  }}
+                >
+                  +
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {radial.blockMove === "custom" && !radial.blockKeys.length ? <p className="turn-line">No keys yet, so nothing is blocked. Press + to add one.</p> : null}
         </div>
 
         <div className="settings-block">

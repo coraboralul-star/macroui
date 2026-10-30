@@ -12,6 +12,8 @@
 #define ENGINE_RUNNER_CAP 32
 #define ENGINE_FRAME_CAP 16
 #define ENGINE_HOLD_CAP 64
+/* Keys the radial menu holds or lets go of, outside any runner. */
+#define ENGINE_PLAY_RADIAL_CAP 16
 #define ENGINE_STEP_CAP 1024
 #define ENGINE_ID_CAP 64
 #define ENGINE_MUTE_ID_CAP 1024
@@ -444,6 +446,14 @@ struct engine_play {
     int64_t now;
     /* Why the last engine_play_start returned 0. */
     int refused;
+    /* Set by radial.c. radial_hold is held down like a runner's hold.
+       radial_lift is a key the engine never pressed that the game must see go
+       up once. lift_until is 0 until the publish that sends it. */
+    uint16_t radial_hold[ENGINE_PLAY_RADIAL_CAP];
+    int radial_hold_count;
+    uint16_t radial_lift[ENGINE_PLAY_RADIAL_CAP];
+    int64_t radial_lift_until[ENGINE_PLAY_RADIAL_CAP];
+    int radial_lift_count;
 };
 
 void engine_macro_init(struct engine_macro *macro);
@@ -575,6 +585,16 @@ int engine_play_mute_count(const struct engine_play *play, const char *id);
 
 /* 1 when a runner or a pending runner has this id and is not done. */
 int engine_play_has_runner(const struct engine_play *play, const char *id);
+
+/* The radial menu's held keys, replacing the last set. They join the desired
+   image, so the diff sends the downs and the ups, and every release path
+   (output switch, exit) lets go of them. */
+void engine_play_radial_hold(struct engine_play *play, const uint16_t *ids, int count);
+
+/* The game sees id go up at the next publish. Software sends a lone up. A
+   board can only let go of a key it holds, so it holds id for 1 ms and then
+   lets go. Nothing is sent when the engine already holds id. */
+void engine_play_radial_lift(struct engine_play *play, uint16_t id);
 
 /* ENGINE_LOCK_NONE, OPEN, or DONE. */
 int engine_once_state(const struct engine_play *play, const char *id);
