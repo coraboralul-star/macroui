@@ -2569,6 +2569,358 @@ static void check_radial(void)
     free(doc);
 }
 
+/* Block movement (#100) on fixtures/radial.json. Same tick order as
+   radial_play, plus what the game sees: every down and up the engine sends,
+   in order, as "+w" and "-w". PASSED is a blocked down the hook let through,
+   OUTPUT a switch to the other output. Notes add the block lines. */
+#define RADIAL_PASSED 5
+#define RADIAL_OUTPUT 6
+
+struct block_run {
+    int swallow[24];
+    char sent[512];
+    char notes[512];
+    /* Keys the engine still holds, or still owes an up, at the end. */
+    int held_at_end;
+};
+
+static void block_say(char *buf, size_t cap, const char *text)
+{
+    size_t used = strlen(buf);
+
+    if (used + strlen(text) < cap)
+        memcpy(buf + used, text, strlen(text) + 1);
+}
+
+static void block_sent(struct block_run *run, const struct engine_report *report)
+{
+    char line[32];
+    int i;
+
+    for (i = 0; i < engine_report_down_count(report); i++) {
+        const char *name = engine_key_name(engine_report_down(report, i));
+        snprintf(line, sizeof line, "+%s|", name ? name : "?");
+        block_say(run->sent, sizeof run->sent, line);
+    }
+    for (i = 0; i < engine_report_up_count(report); i++) {
+        const char *name = engine_key_name(engine_report_up(report, i));
+        snprintf(line, sizeof line, "-%s|", name ? name : "?");
+        block_say(run->sent, sizeof run->sent, line);
+    }
+}
+
+static void block_notes(struct engine_radial_state *st, struct block_run *run)
+{
+    static const char *const what[] = { "lift", "end", "resume", "let-go" };
+    int i;
+
+    for (i = 0; i < st->note_count; i++) {
+        const struct engine_radial_note *n = &st->notes[i];
+        char line[96];
+        int k;
+
+        if (n->kind == ENGINE_RADIAL_NOTE_OPEN)
+            snprintf(line, sizeof line, "open %s|", n->radial);
+        else if (n->kind == ENGINE_RADIAL_NOTE_SELECT)
+            snprintf(line, sizeof line, "select %d %s|", n->slot + 1, engine_radial_why_name(n->why, n->mode));
+        else if (n->kind == ENGINE_RADIAL_NOTE_CANCEL)
+            snprintf(line, sizeof line, "cancel %s|", engine_radial_why_name(n->why, n->mode));
+        else {
+            snprintf(line, sizeof line, "%s", what[n->kind - ENGINE_RADIAL_NOTE_LIFT]);
+            for (k = 0; k < n->key_count; k++) {
+                const char *name = engine_key_name(n->keys[k]);
+                size_t used = strlen(line);
+                snprintf(line + used, sizeof line - used, " %s", name ? name : "?");
+            }
+            if (n->kind == ENGINE_RADIAL_NOTE_BLOCK_END || n->kind == ENGINE_RADIAL_NOTE_LET_GO) {
+                size_t used = strlen(line);
+                snprintf(line + used, sizeof line - used, " %s", engine_radial_why_name(n->why, n->mode));
+            }
+            block_say(line, sizeof line, "|");
+        }
+        block_say(run->notes, sizeof run->notes, line);
+    }
+    st->note_count = 0;
+}
+
+static struct block_run block_play(const char *doc, size_t n, const struct radial_input *script, int count,
+                                   int output, int64_t until)
+{
+    static struct engine_hook_state hooks;
+    struct engine_play *play = (struct engine_play *)calloc(1, sizeof *play);
+    struct engine_radial_state radial;
+    struct engine_profile_slot slot;
+    struct engine_live_config live;
+    struct engine_trigger_mem mem;
+    struct engine_fingers fingers;
+    struct engine_finger_lost lost;
+    struct engine_hook_decision decision;
+    const struct engine_profile_image *image;
+    struct block_run run;
+    const char *front = "game.exe";
+    int armed = 1;
+    int64_t now;
+    int i;
+
+    memset(&run, 0, sizeof run);
+    if (!play)
+        return run;
+    engine_profile_slot_init(&slot);
+    if (engine_profile_slot_apply_document(&slot, doc, n) != 1) {
+        free(play);
+        return run;
+    }
+    image = engine_profile_slot_adopt(&slot);
+    engine_profile_pick(image, "game.exe", image->active_id, &live);
+    engine_hook_init(&hooks);
+    engine_radial_init(&radial);
+    engine_play_init(play);
+    play->output.mode = output;
+    engine_play_set_macros(play, live.macros, live.macro_count);
+    engine_trigger_init(&mem);
+    engine_fingers_clear(&fingers);
+    memset(&lost, 0, sizeof lost);
+    engine_arm_swallow_radial(&hooks, &live, front, "", armed, play, &radial);
+    for (now = 0; now < until; now++) {
+        struct engine_finger ev;
+        int blocking;
+
+        for (i = 0; i < count; i++) {
+            const struct radial_input *in = &script[i];
+
+            if (in->at != now)
+                continue;
+            memset(&decision, 0, sizeof decision);
+            if (in->kind == RADIAL_KEY) {
+                hook_event(&hooks, in->id, in->down, now, &decision);
+            } else if (in->kind == RADIAL_FRONT) {
+                front = in->down ? "game.exe" : "MacroShell.exe";
+            } else if (in->kind == RADIAL_DISARM) {
+                armed = 0;
+            } else if (in->kind == RADIAL_PASSED) {
+                engine_radial_passed(&radial, play, in->id);
+            } else if (in->kind == RADIAL_OUTPUT) {
+                struct engine_report release;
+                int rebind = 0;
+                int sent = 0;
+
+                int other = play->output.mode == ENGINE_OUTPUT_SOFTWARE ? ENGINE_OUTPUT_RP2350 : ENGINE_OUTPUT_SOFTWARE;
+
+                if (engine_output_set_mode(&play->output, other, &release, &rebind, &sent)) {
+                    block_sent(&run, &release);
+                    play->radial_lift_count = 0;
+                    engine_radial_cancel(&radial, play, ENGINE_RADIAL_WHY_OUTPUT);
+                }
+            }
+            if (i < (int)(sizeof run.swallow / sizeof run.swallow[0]))
+                run.swallow[i] = decision.swallow;
+        }
+        while (engine_event_pop(&hooks, &ev))
+            engine_finger_note(&fingers, ev.id, ev.down, &lost);
+        engine_play_set_fingers(play, &fingers);
+        blocking = engine_radial_blocking(&radial);
+        engine_radial_poll(&radial, play, &live, &fingers, front, "", armed);
+        if (!blocking && engine_radial_blocking(&radial))
+            engine_arm_swallow_radial(&hooks, &live, front, "", armed, play, &radial);
+        block_notes(&radial, &run);
+        if (armed)
+            engine_poll_triggers_radial(play, &live, &mem, &fingers, front, "", &radial);
+        engine_play_tick(play, now);
+        if (armed)
+            engine_trigger_owed(play, &live, &mem, &fingers, front, "");
+        block_sent(&run, &play->last);
+        play->note_count = 0;
+        engine_arm_swallow_radial(&hooks, &live, front, "", armed, play, &radial);
+    }
+    run.held_at_end = play->output.applied_count + play->radial_hold_count + play->radial_lift_count;
+    engine_profile_slot_shutdown(&slot);
+    free(play);
+    return run;
+}
+
+/* rb opens on Mouse 4 and blocks WASD, rc opens on n and blocks w and LShift.
+   Slot 1 is Arrows (w, then s), slot 2 Strat B. Arrows ends near 170 ms
+   after an 80 ms release. The AHK --self-test plays the same scripts. */
+#define X1 ENGINE_KEY_XBUTTON1
+#define W 0x57
+#define A 0x41
+#define N 0x4E
+#define ONE 0x31
+static void check_radial_block(void)
+{
+    static const int outputs[] = { ENGINE_OUTPUT_SOFTWARE, ENGINE_OUTPUT_RP2350 };
+    /* W held through a pick, then let go at 600. A repeat at 20 is swallowed. */
+    static const struct radial_input held[] = { K(5, W, 1), K(10, X1, 1), K(20, W, 1), K(30, ONE, 1), K(35, ONE, 0),
+                                                K(80, X1, 0), K(600, W, 0) };
+    /* Let go of W while Arrows plays: nothing is pressed again. */
+    static const struct radial_input early[] = { K(5, W, 1), K(10, X1, 1), K(20, W, 1), K(30, ONE, 1), K(35, ONE, 0),
+                                                 K(80, X1, 0), K(120, W, 0) };
+    /* Alt-tab while Arrows plays, come back, let go. */
+    static const struct radial_input away[] = { K(5, W, 1), K(10, X1, 1), K(30, ONE, 1), K(35, ONE, 0), K(80, X1, 0),
+                                                { 120, RADIAL_FRONT, 0, 0, 0, 0 }, { 400, RADIAL_FRONT, 0, 1, 0, 0 },
+                                                K(600, W, 0) };
+    /* Alt-tab after W was pressed again. */
+    static const struct radial_input resumed_away[] = { K(5, W, 1), K(10, X1, 1), K(30, ONE, 1), K(35, ONE, 0),
+                                                        K(80, X1, 0), { 300, RADIAL_FRONT, 0, 0, 0, 0 }, K(600, W, 0) };
+    /* Closed with nothing picked: W is pressed again at once. */
+    static const struct radial_input nopick[] = { K(5, W, 1), K(10, X1, 1), K(80, X1, 0), K(600, W, 0) };
+    /* A fresh A while open is swallowed, down and up, and not pressed again. */
+    static const struct radial_input fresh[] = { K(10, X1, 1), K(20, A, 1), K(40, A, 0), K(80, X1, 0) };
+    /* Stop after W was pressed again, and Stop while Arrows plays. */
+    static const struct radial_input stop_after[] = { K(5, W, 1), K(10, X1, 1), K(30, ONE, 1), K(35, ONE, 0),
+                                                      K(80, X1, 0), { 300, RADIAL_DISARM, 0, 0, 0, 0 }, K(600, W, 0) };
+    static const struct radial_input stop_during[] = { K(5, W, 1), K(10, X1, 1), K(30, ONE, 1), K(35, ONE, 0),
+                                                       K(80, X1, 0), { 120, RADIAL_DISARM, 0, 0, 0, 0 }, K(600, W, 0) };
+    /* An output switch after W was pressed again. */
+    static const struct radial_input switched[] = { K(5, W, 1), K(10, X1, 1), K(80, X1, 0), { 300, RADIAL_OUTPUT, 0, 0, 0, 0 },
+                                                    K(600, W, 0) };
+    /* A blocked down the hook let through while open is let go again. */
+    static const struct radial_input passed[] = { K(10, X1, 1), K(20, W, 1), { 21, RADIAL_PASSED, W, 1, 0, 0 },
+                                                  K(40, W, 0), K(80, X1, 0) };
+    char label[160];
+    char want[512];
+    size_t n = 0;
+    char *doc = read_fixture(FIXTURE_DIR "/radial.json", &n);
+    struct block_run run;
+    uint16_t shift = 0;
+    int o;
+
+#define RUN(script) block_play(doc, n, script, (int)(sizeof script / sizeof script[0]), outputs[o], 800)
+#define SAY(text) (snprintf(label, sizeof label, "radial block %s: %s", outputs[o] ? "board" : "software", text), label)
+/* Software lets go of a key it never pressed with a lone up. A board presses it for 1 ms, then lets go. */
+#define LIFT(key) (outputs[o] ? "+" key "|-" key "|" : "-" key "|")
+    if (!doc) {
+        expect(0, "radial.json read");
+        return;
+    }
+    engine_key_id("LShift", &shift);
+    for (o = 0; o < 2; o++) {
+        run = RUN(held);
+        expect(strcmp(run.notes, "open rb|lift w|select 1 played|end w a s d done|resume w|let-go w up|") == 0,
+               SAY("held W: let go at open, pressed again when Arrows ends, let go at its up"));
+        snprintf(want, sizeof want, "%s+w|-w|+s|-s|+w|-w|", LIFT("w"));
+        expect(strcmp(run.sent, want) == 0, SAY("the game sees W go up, Arrows, then W again after its last key"));
+        expect(run.swallow[2] && run.swallow[3] && run.swallow[6], SAY("W's repeat, 1 and W's up are swallowed"));
+        expect(run.held_at_end == 0, SAY("nothing held at the end"));
+
+        run = RUN(early);
+        expect(strcmp(run.notes, "open rb|lift w|select 1 played|end w a s d done|") == 0,
+               SAY("W let go during Arrows: no resume"));
+        snprintf(want, sizeof want, "%s+w|-w|+s|-s|", LIFT("w"));
+        expect(strcmp(run.sent, want) == 0 && run.held_at_end == 0, SAY("nothing is pressed again"));
+
+        run = RUN(away);
+        expect(strcmp(run.notes, "open rb|lift w|select 1 played|end w a s d focus|") == 0,
+               SAY("alt-tab during Arrows ends the block with no resume"));
+        /* AHK also stops Arrows at the alt-tab; this engine lets it finish. Either way nothing stays down. */
+        snprintf(want, sizeof want, "%s+w|-w|", LIFT("w"));
+        expect(strncmp(run.sent, want, strlen(want)) == 0 && !strstr(run.sent + strlen(want), "+w|") && run.held_at_end == 0,
+               SAY("alt-tab: nothing pressed again, nothing stuck"));
+
+        run = RUN(resumed_away);
+        expect(strcmp(run.notes, "open rb|lift w|select 1 played|end w a s d done|resume w|let-go w focus|") == 0,
+               SAY("alt-tab after the resume lets go of W"));
+        snprintf(want, sizeof want, "%s+w|-w|+s|-s|+w|-w|", LIFT("w"));
+        expect(strcmp(run.sent, want) == 0 && run.held_at_end == 0, SAY("alt-tab sends the resumed W's up"));
+
+        run = RUN(nopick);
+        expect(strcmp(run.notes, "open rb|lift w|cancel no-slot|end w a s d no-slot|resume w|let-go w up|") == 0,
+               SAY("no pick: W is pressed again at once"));
+        snprintf(want, sizeof want, "%s+w|-w|", LIFT("w"));
+        expect(strcmp(run.sent, want) == 0 && run.held_at_end == 0, SAY("no pick: W up, W down, W up"));
+
+        run = RUN(fresh);
+        expect(strcmp(run.notes, "open rb|cancel no-slot|end w a s d no-slot|") == 0 && run.sent[0] == '\0',
+               SAY("a fresh A while open: nothing sent"));
+        expect(run.swallow[1] && run.swallow[2], SAY("a fresh A while open is swallowed, down and up"));
+
+        run = RUN(stop_after);
+        expect(strcmp(run.notes, "open rb|lift w|select 1 played|end w a s d done|resume w|cancel stop|let-go w stop|") == 0 ||
+                   strcmp(run.notes, "open rb|lift w|select 1 played|end w a s d done|resume w|let-go w stop|") == 0,
+               SAY("Stop lets go of the resumed W"));
+        expect(run.held_at_end == 0 && strstr(run.sent, "+w|-w|+s|-s|+w|-w|") != NULL, SAY("Stop sends the resumed W's up"));
+
+        run = RUN(stop_during);
+        expect(strcmp(run.notes, "open rb|lift w|select 1 played|end w a s d stop|") == 0,
+               SAY("Stop during Arrows ends the block with no resume"));
+        expect(run.held_at_end == 0, SAY("Stop during Arrows: nothing stuck"));
+
+        run = RUN(switched);
+        expect(strcmp(run.notes, "open rb|lift w|cancel no-slot|end w a s d no-slot|resume w|let-go w output|") == 0,
+               SAY("an output switch lets go of the resumed W"));
+        snprintf(want, sizeof want, "%s+w|-w|", LIFT("w"));
+        expect(strcmp(run.sent, want) == 0 && run.held_at_end == 0, SAY("the switch's release sends W's up once"));
+
+        run = RUN(passed);
+        expect(strcmp(run.notes, "open rb|lift w|cancel no-slot|end w a s d no-slot|") == 0,
+               SAY("a blocked down that slipped through is let go again"));
+        snprintf(want, sizeof want, "%s", LIFT("w"));
+        expect(strcmp(run.sent, want) == 0 && run.held_at_end == 0, SAY("the slipped W gets its up"));
+    }
+    {
+        /* rc blocks w and LShift on n. */
+        static const struct radial_input custom[] = { K(5, 0xA0, 1), K(10, N, 1), K(20, A, 1), K(30, ONE, 1),
+                                                      K(35, ONE, 0), K(40, A, 0), K(80, N, 0), K(600, 0xA0, 0) };
+        o = 0;
+        run = RUN(custom);
+        expect(strcmp(run.notes, "open rc|lift LShift|select 1 played|end w LShift done|resume LShift|let-go LShift up|") == 0,
+               "radial block: custom keys are lifted and pressed again, WASD is not");
+        expect(run.swallow[0] == 0 && run.swallow[2] == 0 && run.swallow[5] == 0, "radial block: custom does not swallow A");
+        expect(shift == 0xA0, "radial block: LShift is 0xA0");
+    }
+    {
+        /* Conflicts stop a menu arming, like radialProblems. */
+        static const char *const cases[][2] = {
+            { "{\"kind\":\"key\",\"button\":\"w\"},\"blockMove\":\"wasd\"", "0" },
+            { "{\"kind\":\"key\",\"button\":\"t\"},\"blockMove\":\"custom\",\"blockKeys\":[\"3\"]", "0" },
+            { "{\"kind\":\"key\",\"button\":\"t\"},\"blockMove\":\"custom\",\"blockKeys\":[\"q\"]", "0" },
+            { "{\"kind\":\"key\",\"button\":\"t\"},\"blockMove\":\"wasd\",\"nextKey\":\"d\"", "0" },
+            { "{\"kind\":\"key\",\"button\":\"t\"},\"select\":\"flick\",\"blockMove\":\"custom\",\"blockKeys\":[\"3\",\"q\"]", "1" },
+            { "{\"kind\":\"key\",\"button\":\"t\"},\"prevKey\":\"2\"", "0" },
+            { "{\"kind\":\"key\",\"button\":\"t\"},\"prevKey\":\"e\"", "0" },
+            { "{\"kind\":\"key\",\"button\":\"t\"},\"nextKey\":\"t\"", "0" },
+            { "{\"kind\":\"key\",\"button\":\"4\"}", "0" },
+            { "{\"kind\":\"key\",\"button\":\"t\"},\"blockMove\":\"custom\",\"blockKeys\":[\"w\",\"Pause\",\"XButton1\",\"w\"]", "1" },
+            { "{\"kind\":\"key\",\"button\":\"t\"},\"blockMove\":\"custom\",\"blockKeys\":[]", "1" },
+        };
+        size_t c;
+
+        for (c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+            char text[1024];
+            struct engine_profile_slot slot;
+            struct engine_live_config live;
+            const struct engine_profile_image *image;
+            int ready;
+
+            snprintf(text, sizeof text,
+                     "{\"version\":1,\"name\":\"R\",\"activeId\":\"c\",\"configs\":[{\"id\":\"c\",\"name\":\"C\",\"macros\":["
+                     "{\"id\":\"m\",\"enabled\":true,\"advanced\":true,\"trigger\":{\"kind\":\"key\",\"button\":\"\"},"
+                     "\"blocks\":[{\"type\":\"steps\",\"steps\":[{\"type\":\"key\",\"action\":\"tap\",\"key\":\"x\"}]}]}],"
+                     "\"radials\":[{\"id\":\"a\",\"trigger\":%s,\"slots\":[\"m\",\"\"]}]}],\"macros\":[]}",
+                     cases[c][0]);
+            engine_profile_slot_init(&slot);
+            expect(engine_profile_slot_apply_document(&slot, text, strlen(text)) == 1, "radial block: conflict profile loads");
+            image = engine_profile_slot_adopt(&slot);
+            engine_profile_pick(image, "game.exe", image ? image->active_id : "", &live);
+            ready = live.radial_count == 1 && engine_radial_ready(&live.radials[0], &live);
+            snprintf(label, sizeof label, "radial block: ready is %s for %s", cases[c][1], cases[c][0]);
+            expect(ready == (cases[c][1][0] == '1'), label);
+            if (c == 9)
+                expect(live.radial_count == 1 && live.radials[0].block_count == 1, "radial block: Pause, mouse and repeats are dropped");
+            engine_profile_slot_shutdown(&slot);
+        }
+    }
+#undef RUN
+#undef SAY
+#undef LIFT
+#undef X1
+#undef W
+#undef A
+#undef N
+#undef ONE
+    free(doc);
+}
+
 /* One named vector from docs/engine/ipc-vectors.txt. Length, or -1. */
 static int load_vector(const char *name, unsigned char *out, int cap)
 {
@@ -2767,6 +3119,7 @@ int main(void)
     check_create_paths();
     check_hold_repress();
     check_radial();
+    check_radial_block();
     check_radial_view();
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);

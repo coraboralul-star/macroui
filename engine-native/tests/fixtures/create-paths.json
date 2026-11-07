@@ -205,7 +205,9 @@
           "deadZone": 40,
           "clickSelect": false,
           "size": 340,
-          "opacity": 88
+          "opacity": 88,
+          "blockMove": "off",
+          "blockKeys": []
         }
       ]
     }

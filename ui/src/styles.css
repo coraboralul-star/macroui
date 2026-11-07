@@ -6741,6 +6741,26 @@ input.ev-delay {
   border-radius: 8px;
 }
 
+.radial-block-keys {
+  margin-top: 10px;
+}
+
+.radial-block-key {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--chip-line);
+  border-radius: 8px;
+  background: var(--chip);
+  font-weight: 650;
+}
+
+.radial-block-keys .is-clash {
+  border-color: #c4523e;
+  color: #e7a090;
+}
+
 .radial-problems li + li {
   margin-top: 6px;
 }

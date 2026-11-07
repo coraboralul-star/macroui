@@ -57,6 +57,11 @@ export function normalizeTurnCalibration(value: unknown): TurnCalibration | unde
  *  stop the mouse reaching a Raw Input game, so flick also turns the camera there. Keys can be stopped. */
 export type RadialSelect = "keys" | "flick";
 export type RadialAt = "center" | "cursor";
+/** Movement keys the menu holds back from the game while it is open and while the picked macro plays.
+ *  off: none. wasd: W, A, S and D. custom: blockKeys. Keys still held when that ends are pressed again. */
+export type RadialBlock = "off" | "wasd" | "custom";
+export const RADIAL_WASD = ["w", "a", "s", "d"];
+export const RADIAL_BLOCK_KEYS_MAX = 8;
 
 export const RADIAL_SLOTS_MIN = 2;
 export const RADIAL_SLOTS_MAX = 8;
@@ -94,6 +99,9 @@ export type Radial = {
   size: number;
   /** 40 to 100 percent. */
   opacity: number;
+  blockMove: RadialBlock;
+  /** Custom only. Keyboard keys, at most RADIAL_BLOCK_KEYS_MAX. Kept when another choice is picked. */
+  blockKeys: string[];
 };
 
 export function blankRadial(extra: Partial<Radial> = {}): Radial {
@@ -111,6 +119,8 @@ export function blankRadial(extra: Partial<Radial> = {}): Radial {
     clickSelect: false,
     size: RADIAL_SIZE,
     opacity: RADIAL_OPACITY,
+    blockMove: "off",
+    blockKeys: [],
     ...extra,
   };
 }
@@ -119,6 +129,21 @@ function radialKey(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const key = canonKey(value);
   return key && key !== "LButton" && key !== "RButton" ? key : fallback;
+}
+
+/** Keyboard keys only: no mouse button and not Pause, which stops everything. No repeats. */
+function radialBlockKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const key = canonKey(item);
+    const lower = key.toLowerCase();
+    if (!key || /button\d?$|^wheel/.test(lower) || lower === "pause" || out.some((have) => have.toLowerCase() === lower)) continue;
+    out.push(key);
+    if (out.length >= RADIAL_BLOCK_KEYS_MAX) break;
+  }
+  return out;
 }
 
 /** Slots past the max are dropped, a short list is padded with empty slots. */
@@ -149,6 +174,8 @@ export function normalizeRadial(value: unknown): Radial | undefined {
     clickSelect: Boolean(raw.clickSelect),
     size: clampRound(raw.size, RADIAL_SIZE_MIN, RADIAL_SIZE_MAX, RADIAL_SIZE),
     opacity: clampRound(raw.opacity, RADIAL_OPACITY_MIN, RADIAL_OPACITY_MAX, RADIAL_OPACITY),
+    blockMove: raw.blockMove === "wasd" || raw.blockMove === "custom" ? raw.blockMove : "off",
+    blockKeys: radialBlockKeys(raw.blockKeys),
   };
 }
 

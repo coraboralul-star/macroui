@@ -2795,6 +2795,78 @@ static int already(const uint16_t *ids, int count, uint16_t id)
     return 0;
 }
 
+void engine_play_radial_hold(struct engine_play *play, const uint16_t *ids, int count)
+{
+    int i;
+
+    if (!play)
+        return;
+    play->radial_hold_count = 0;
+    for (i = 0; ids && i < count && play->radial_hold_count < ENGINE_PLAY_RADIAL_CAP; i++) {
+        if (ids[i] != 0 && !already(play->radial_hold, play->radial_hold_count, ids[i]))
+            play->radial_hold[play->radial_hold_count++] = ids[i];
+    }
+}
+
+void engine_play_radial_lift(struct engine_play *play, uint16_t id)
+{
+    if (!play || id == 0 || already(play->radial_lift, play->radial_lift_count, id) ||
+        play->radial_lift_count >= ENGINE_PLAY_RADIAL_CAP)
+        return;
+    play->radial_lift[play->radial_lift_count] = id;
+    play->radial_lift_until[play->radial_lift_count] = 0;
+    play->radial_lift_count++;
+}
+
+static int applied_has(const struct engine_output *out, uint16_t id)
+{
+    return already(out->applied, out->applied_count, id);
+}
+
+/* Board: a new lift is held from now for 1 ms, then dropped, so the next
+   publish sends its up. A key the engine already holds is not lifted. */
+static void board_lifts(struct engine_play *play, int64_t now)
+{
+    int keep = 0;
+    int i;
+
+    for (i = 0; i < play->radial_lift_count; i++) {
+        uint16_t id = play->radial_lift[i];
+        int64_t until = play->radial_lift_until[i];
+
+        if (until == 0) {
+            if (applied_has(&play->output, id) || already(play->radial_hold, play->radial_hold_count, id))
+                continue;
+            until = engine_arm_deadline(now, engine_ms_to_ticks(1, play->freq));
+        } else if (until <= now) {
+            continue;
+        }
+        play->radial_lift[keep] = id;
+        play->radial_lift_until[keep] = until;
+        keep++;
+    }
+    play->radial_lift_count = keep;
+}
+
+/* Software: a lone up for each lift the engine does not hold, after the diff. */
+static void software_lifts(struct engine_play *play)
+{
+    int ups = engine_report_up_count(&play->last);
+    int i;
+
+    for (i = 0; i < play->radial_lift_count; i++) {
+        uint16_t id = play->radial_lift[i];
+        int k;
+        int sent = 0;
+
+        for (k = 0; k < ups; k++)
+            sent |= engine_report_up(&play->last, k) == id;
+        if (!sent && !applied_has(&play->output, id))
+            engine_report_push_up(&play->last, id);
+    }
+    play->radial_lift_count = 0;
+}
+
 int engine_play_desired(const struct engine_play *play, int64_t now,
                         uint16_t *out, int cap)
 {
@@ -2804,6 +2876,14 @@ int engine_play_desired(const struct engine_play *play, int64_t now,
 
     if (!play || !out || cap <= 0)
         return 0;
+    for (i = 0; i < play->radial_hold_count && count < cap; i++) {
+        if (!already(out, count, play->radial_hold[i]))
+            out[count++] = play->radial_hold[i];
+    }
+    for (i = 0; play->output.mode != ENGINE_OUTPUT_SOFTWARE && i < play->radial_lift_count && count < cap; i++) {
+        if (play->radial_lift_until[i] > now && !already(out, count, play->radial_lift[i]))
+            out[count++] = play->radial_lift[i];
+    }
     for (i = 0; i < play->runner_count; i++) {
         const struct engine_runner *runner = &play->runners[i];
         if (runner->done || runner->paused)
@@ -2923,6 +3003,8 @@ int engine_play_publish(struct engine_play *play, int64_t now)
     } else {
         dx += turn;
     }
+    if (play->output.mode != ENGINE_OUTPUT_SOFTWARE)
+        board_lifts(play, now);
     desired_count = engine_play_desired(play, now, desired, ENGINE_HOLD_CAP);
     extra_count = collect_echo(play, extra, ENGINE_HOLD_CAP);
     if (has_abs)
@@ -2934,6 +3016,8 @@ int engine_play_publish(struct engine_play *play, int64_t now)
                               0, 0, 0, play->dpi, &play->last);
     if (!has_abs && turn != 0 && play->output.mode != ENGINE_OUTPUT_SOFTWARE)
         engine_report_set_counts(&play->last);
+    if (play->output.mode == ENGINE_OUTPUT_SOFTWARE)
+        software_lifts(play);
     note_report_sent(play, now);
     return engine_report_active(&play->last);
 }

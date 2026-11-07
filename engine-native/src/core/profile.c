@@ -1221,6 +1221,47 @@ static uint16_t radial_key(const struct json_value *object, const char *field, c
     return key_of(name);
 }
 
+/* blockMove and blockKeys, like radialBlockKeys in ui/src/profile.ts:
+   keyboard keys only, not Pause, no repeats, at most ENGINE_RADIAL_BLOCK_CAP. */
+static void radial_block(const struct json_value *item, struct engine_radial *radial)
+{
+    static const char *const wasd[] = { "w", "a", "s", "d" };
+    const struct json_value *keys = array_field(item, "blockKeys");
+    char text[64];
+    uint32_t i;
+
+    radial->block_count = 0;
+    radial->block_move = ENGINE_RADIAL_BLOCK_OFF;
+    if (value_text(json_object_get(item, "blockMove"), text, sizeof text)) {
+        if (same_text(text, "wasd"))
+            radial->block_move = ENGINE_RADIAL_BLOCK_WASD;
+        else if (same_text(text, "custom"))
+            radial->block_move = ENGINE_RADIAL_BLOCK_CUSTOM;
+    }
+    if (radial->block_move == ENGINE_RADIAL_BLOCK_WASD) {
+        for (i = 0; i < 4; i++)
+            radial->block[radial->block_count++] = key_of(wasd[i]);
+        return;
+    }
+    for (i = 0; radial->block_move == ENGINE_RADIAL_BLOCK_CUSTOM && keys && i < keys->length &&
+                radial->block_count < ENGINE_RADIAL_BLOCK_CAP;
+         i++) {
+        uint16_t id;
+        int k;
+        int seen = 0;
+
+        if (!value_text(&keys->items[i], text, sizeof text))
+            continue;
+        id = key_of(text);
+        if (id == 0 || id == ENGINE_KEY_PAUSE || engine_is_mouse_button(id))
+            continue;
+        for (k = 0; k < radial->block_count; k++)
+            seen |= radial->block[k] == id;
+        if (!seen)
+            radial->block[radial->block_count++] = id;
+    }
+}
+
 /* config.radials, like normalizeRadial in ui/src/profile.ts. A select this
    engine does not know plays as keys. Left and right click are never a trigger. */
 static void compile_radials(struct build *b, const struct json_value *list, struct built_catalog *cat,
@@ -1278,6 +1319,7 @@ static void compile_radials(struct build *b, const struct json_value *list, stru
             radial->opacity = ENGINE_RADIAL_OPACITY_MIN;
         if (radial->opacity > ENGINE_RADIAL_OPACITY_MAX)
             radial->opacity = ENGINE_RADIAL_OPACITY_MAX;
+        radial_block(item, radial);
         slots = array_field(item, "slots");
         for (s = 0; slots && s < slots->length && s < ENGINE_RADIAL_SLOTS; s++)
             value_text(&slots->items[s], cat->slot_ids[r][s], ENGINE_ID_CAP);

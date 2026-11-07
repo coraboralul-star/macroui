@@ -34,6 +34,27 @@ static int down_of(const struct engine_fingers *fingers, uint16_t id)
     return id != 0 && fingers && engine_fingers_down(fingers, id) ? 1 : 0;
 }
 
+static int has_id(const uint16_t *ids, int count, uint16_t id)
+{
+    int i;
+
+    for (i = 0; id != 0 && i < count; i++) {
+        if (ids[i] == id)
+            return 1;
+    }
+    return 0;
+}
+
+static int same_key(uint16_t a, uint16_t b)
+{
+    return a != 0 && a == b;
+}
+
+static int slot_key(uint16_t id)
+{
+    return has_id(k_slot_keys, ENGINE_RADIAL_SLOTS, id);
+}
+
 static int macro_on(const struct engine_live_config *live, int index)
 {
     if (!live || !live->macros || index < 0 || index >= live->macro_count)
@@ -65,6 +86,20 @@ int engine_radial_ready(const struct engine_radial *radial, const struct engine_
 
     if (!radial || !radial->enabled || !engine_can_trigger(radial->trigger))
         return 0;
+    if (engine_radial_mode(radial, live) == ENGINE_RADIAL_KEYS &&
+        (slot_key(radial->trigger) || slot_key(radial->prev_key) || slot_key(radial->next_key) ||
+         same_key(radial->prev_key, radial->next_key) || same_key(radial->prev_key, radial->trigger) ||
+         same_key(radial->next_key, radial->trigger)))
+        return 0;
+    for (i = 0; i < radial->block_count; i++) {
+        uint16_t id = radial->block[i];
+
+        if (same_key(id, radial->trigger))
+            return 0;
+        if (engine_radial_mode(radial, live) == ENGINE_RADIAL_KEYS &&
+            (slot_key(id) || same_key(id, radial->prev_key) || same_key(id, radial->next_key)))
+            return 0;
+    }
     if (live && live->macros) {
         for (i = 0; i < live->macro_count; i++) {
             if (macro_on(live, i) && live->macros[i].trigger == radial->trigger)
@@ -123,6 +158,145 @@ static void note(struct engine_radial_state *st, int kind, int why, int slot, co
     copy_text(n->macro, sizeof n->macro, macro);
 }
 
+static void note_keys(struct engine_radial_state *st, int kind, int why, const uint16_t *ids, int count)
+{
+    struct engine_radial_note *n;
+    int i;
+
+    if (count <= 0 || st->note_count >= ENGINE_RADIAL_NOTE_CAP)
+        return;
+    note(st, kind, why, -1, "");
+    n = &st->notes[st->note_count - 1];
+    for (i = 0; i < count && i < ENGINE_RADIAL_BLOCK_CAP; i++)
+        n->keys[n->key_count++] = ids[i];
+}
+
+static void hold_resumed(struct engine_radial_state *st, struct engine_play *play)
+{
+    engine_play_radial_hold(play, st->resumed, st->resumed_count);
+}
+
+/* Lets go of the keys the engine pressed again. */
+static void let_go(struct engine_radial_state *st, struct engine_play *play, int why)
+{
+    if (st->resumed_count <= 0)
+        return;
+    note_keys(st, ENGINE_RADIAL_NOTE_LET_GO, why, st->resumed, st->resumed_count);
+    st->resumed_count = 0;
+    hold_resumed(st, play);
+}
+
+/* Stops swallowing. With resume, each blocked key the hook still sees held is
+   pressed again and held until its up. */
+static void block_end(struct engine_radial_state *st, struct engine_play *play,
+                      const struct engine_fingers *fingers, int why, int resume)
+{
+    uint16_t again[ENGINE_RADIAL_BLOCK_CAP];
+    int count = 0;
+    int i;
+
+    if (!st->block_on)
+        return;
+    note_keys(st, ENGINE_RADIAL_NOTE_BLOCK_END, why, st->block, st->block_count);
+    for (i = 0; resume && i < st->block_count; i++) {
+        uint16_t id = st->block[i];
+
+        if (!down_of(fingers, id) || has_id(st->resumed, st->resumed_count, id) ||
+            st->resumed_count >= ENGINE_RADIAL_BLOCK_CAP)
+            continue;
+        st->resumed[st->resumed_count++] = id;
+        again[count++] = id;
+    }
+    st->block_on = 0;
+    st->block_count = 0;
+    st->block_macro[0] = '\0';
+    note_keys(st, ENGINE_RADIAL_NOTE_RESUME, ENGINE_RADIAL_WHY_NONE, again, count);
+    hold_resumed(st, play);
+}
+
+/* Focus, disable, profile, Stop, Pause, output: nothing is pressed again. */
+static void block_stop(struct engine_radial_state *st, struct engine_play *play, int why)
+{
+    block_end(st, play, NULL, why, 0);
+    let_go(st, play, why);
+}
+
+/* At open: swallow the menu's keys from now, and let go of the held ones.
+   A block still waiting on an earlier pick keeps its keys and that pick. */
+static void block_open(struct engine_radial_state *st, struct engine_play *play,
+                       const struct engine_live_config *live, const struct engine_fingers *fingers)
+{
+    uint16_t lifted[ENGINE_RADIAL_BLOCK_CAP];
+    int count = 0;
+    int i;
+
+    if (st->menu.block_count <= 0)
+        return;
+    if (!st->block_on) {
+        st->block_count = 0;
+        st->block_macro[0] = '\0';
+    }
+    st->block_on = 1;
+    st->block_why = ENGINE_RADIAL_WHY_DONE;
+    copy_text(st->block_live, sizeof st->block_live, live ? live->live_id : "");
+    for (i = 0; i < st->menu.block_count; i++) {
+        uint16_t id = st->menu.block[i];
+        int k;
+
+        if (!has_id(st->block, st->block_count, id) && st->block_count < ENGINE_RADIAL_BLOCK_CAP)
+            st->block[st->block_count++] = id;
+        /* A key the engine pressed again is swallowed again: dropping its
+           hold sends the up. */
+        for (k = 0; k < st->resumed_count; k++) {
+            if (st->resumed[k] != id)
+                continue;
+            st->resumed[k] = st->resumed[--st->resumed_count];
+            break;
+        }
+        if (!down_of(fingers, id))
+            continue;
+        engine_play_radial_lift(play, id);
+        lifted[count++] = id;
+    }
+    hold_resumed(st, play);
+    note_keys(st, ENGINE_RADIAL_NOTE_LIFT, ENGINE_RADIAL_WHY_NONE, lifted, count);
+}
+
+/* Each poll: focus and the config end it, the picked macro's end resumes,
+   and a key pressed again is let go at its real up. */
+static void block_tick(struct engine_radial_state *st, struct engine_play *play,
+                       const struct engine_live_config *live, const struct engine_fingers *fingers, int focus_ok)
+{
+    uint16_t up[ENGINE_RADIAL_BLOCK_CAP];
+    int count = 0;
+    int keep = 0;
+    int i;
+
+    if (!st->block_on && st->resumed_count <= 0)
+        return;
+    if (!focus_ok) {
+        block_stop(st, play, ENGINE_RADIAL_WHY_FOCUS);
+        return;
+    }
+    if (!live || strcmp(live->live_id, st->block_live) != 0) {
+        block_stop(st, play, ENGINE_RADIAL_WHY_PROFILE);
+        return;
+    }
+    if (st->block_on && !st->open && !(st->block_macro[0] && engine_play_has_runner(play, st->block_macro)))
+        block_end(st, play, fingers, st->block_why, 1);
+    for (i = 0; i < st->resumed_count; i++) {
+        if (down_of(fingers, st->resumed[i]))
+            st->resumed[keep++] = st->resumed[i];
+        else
+            up[count++] = st->resumed[i];
+    }
+    if (count == 0)
+        return;
+    st->resumed_count = keep;
+    note_keys(st, ENGINE_RADIAL_NOTE_LET_GO, ENGINE_RADIAL_WHY_UP, up, count);
+    hold_resumed(st, play);
+}
+
 static void seed(struct engine_radial_state *st, const struct engine_live_config *live,
                  const struct engine_fingers *fingers)
 {
@@ -137,8 +311,11 @@ static void seed(struct engine_radial_state *st, const struct engine_live_config
     st->need_seed = 0;
 }
 
-/* The one way out. #100's camera lock lets go here too. */
-static void close_menu(struct engine_radial_state *st, int kind, int why, int slot, const char *macro)
+/* The one way out. #100's camera lock lets go here too. Block movement
+   waits for a played pick, or ends at this poll's block_tick. Focus,
+   disable, profile, Stop and output end it here with nothing pressed again. */
+static void close_menu(struct engine_radial_state *st, struct engine_play *play, int kind, int why,
+                       int slot, const char *macro)
 {
     if (!st->open)
         return;
@@ -148,6 +325,24 @@ static void close_menu(struct engine_radial_state *st, int kind, int why, int sl
     st->lit = -1;
     st->dx = 0;
     st->dy = 0;
+    if (!st->block_on)
+        return;
+    switch (why) {
+    case ENGINE_RADIAL_WHY_FOCUS:
+    case ENGINE_RADIAL_WHY_DISABLED:
+    case ENGINE_RADIAL_WHY_PROFILE:
+    case ENGINE_RADIAL_WHY_STOP:
+    case ENGINE_RADIAL_WHY_OUTPUT:
+        block_stop(st, play, why);
+        break;
+    case ENGINE_RADIAL_WHY_PLAYED:
+        copy_text(st->block_macro, sizeof st->block_macro, macro);
+        st->block_why = ENGINE_RADIAL_WHY_DONE;
+        break;
+    default:
+        st->block_why = why;
+        break;
+    }
 }
 
 static void select_lit(struct engine_radial_state *st, struct engine_play *play,
@@ -158,19 +353,19 @@ static void select_lit(struct engine_radial_state *st, struct engine_play *play,
     const struct engine_macro *macro;
 
     if (slot < 0) {
-        close_menu(st, ENGINE_RADIAL_NOTE_CANCEL, ENGINE_RADIAL_WHY_NO_SLOT, -1, "");
+        close_menu(st, play, ENGINE_RADIAL_NOTE_CANCEL, ENGINE_RADIAL_WHY_NO_SLOT, -1, "");
         return;
     }
     if (!macro_on(live, index)) {
-        close_menu(st, ENGINE_RADIAL_NOTE_CANCEL, ENGINE_RADIAL_WHY_EMPTY, slot, "");
+        close_menu(st, play, ENGINE_RADIAL_NOTE_CANCEL, ENGINE_RADIAL_WHY_EMPTY, slot, "");
         return;
     }
     macro = &live->macros[index];
     if (engine_play_has_runner(play, macro->id)) {
-        close_menu(st, ENGINE_RADIAL_NOTE_SELECT, ENGINE_RADIAL_WHY_PLAYING, slot, macro->id);
+        close_menu(st, play, ENGINE_RADIAL_NOTE_SELECT, ENGINE_RADIAL_WHY_PLAYING, slot, macro->id);
         return;
     }
-    close_menu(st, ENGINE_RADIAL_NOTE_SELECT,
+    close_menu(st, play, ENGINE_RADIAL_NOTE_SELECT,
                engine_play_start_pass(play, macro, ENGINE_WHY_RADIAL) ? ENGINE_RADIAL_WHY_PLAYED
                                                                       : ENGINE_RADIAL_WHY_REFUSED,
                slot, macro->id);
@@ -187,7 +382,7 @@ static const struct engine_radial *find_menu(const struct engine_live_config *li
     return NULL;
 }
 
-static void open_menu(struct engine_radial_state *st, const struct engine_radial *radial,
+static void open_menu(struct engine_radial_state *st, struct engine_play *play, const struct engine_radial *radial,
                       const struct engine_live_config *live, const struct engine_fingers *fingers)
 {
     int i;
@@ -203,6 +398,7 @@ static void open_menu(struct engine_radial_state *st, const struct engine_radial
         st->key_prev[i] = (uint8_t)down_of(fingers, key_at(radial, i));
     st->click_prev = (uint8_t)down_of(fingers, ENGINE_KEY_LBUTTON);
     note(st, ENGINE_RADIAL_NOTE_OPEN, ENGINE_RADIAL_WHY_NONE, -1, "");
+    block_open(st, play, live, fingers);
 }
 
 static void read_keys(struct engine_radial_state *st, const struct engine_fingers *fingers)
@@ -238,7 +434,8 @@ void engine_radial_poll(struct engine_radial_state *st, struct engine_play *play
     if (!st)
         return;
     if (!armed) {
-        close_menu(st, ENGINE_RADIAL_NOTE_CANCEL, ENGINE_RADIAL_WHY_STOP, -1, "");
+        close_menu(st, play, ENGINE_RADIAL_NOTE_CANCEL, ENGINE_RADIAL_WHY_STOP, -1, "");
+        block_stop(st, play, ENGINE_RADIAL_WHY_STOP);
         seed(st, live, fingers);
         return;
     }
@@ -247,10 +444,10 @@ void engine_radial_poll(struct engine_radial_state *st, struct engine_play *play
         const struct engine_radial *now = find_menu(live, st->menu.id);
 
         if (!now || !engine_radial_ready(now, live)) {
-            close_menu(st, ENGINE_RADIAL_NOTE_CANCEL,
+            close_menu(st, play, ENGINE_RADIAL_NOTE_CANCEL,
                        now && !now->enabled ? ENGINE_RADIAL_WHY_DISABLED : ENGINE_RADIAL_WHY_PROFILE, -1, "");
         } else if (!focus_ok) {
-            close_menu(st, ENGINE_RADIAL_NOTE_CANCEL, ENGINE_RADIAL_WHY_FOCUS, -1, "");
+            close_menu(st, play, ENGINE_RADIAL_NOTE_CANCEL, ENGINE_RADIAL_WHY_FOCUS, -1, "");
         } else {
             /* Slots follow the newest profile. The mode stays what it opened with. */
             st->menu = *now;
@@ -260,6 +457,7 @@ void engine_radial_poll(struct engine_radial_state *st, struct engine_play *play
         seed(st, live, fingers);
         if (st->open && !down_of(fingers, st->menu.trigger))
             select_lit(st, play, live);
+        block_tick(st, play, live, fingers, focus_ok);
         return;
     }
     if (st->open) {
@@ -281,8 +479,9 @@ void engine_radial_poll(struct engine_radial_state *st, struct engine_play *play
         st->prev[i] = (uint8_t)down;
         if (st->open || !down || was || !focus_ok || !engine_radial_ready(radial, live))
             continue;
-        open_menu(st, radial, live, fingers);
+        open_menu(st, play, radial, live, fingers);
     }
+    block_tick(st, play, live, fingers, focus_ok);
 }
 
 void engine_radial_move(struct engine_radial_state *st, int32_t dx, int32_t dy)
@@ -303,17 +502,36 @@ void engine_radial_move(struct engine_radial_state *st, int32_t dx, int32_t dy)
     st->lit = engine_radial_slot_at(st->dx, st->dy, st->menu.slot_count, st->menu.dead_zone);
 }
 
-void engine_radial_cancel(struct engine_radial_state *st, int why)
+void engine_radial_cancel(struct engine_radial_state *st, struct engine_play *play, int why)
 {
-    if (st)
-        close_menu(st, ENGINE_RADIAL_NOTE_CANCEL, why, -1, "");
+    if (!st)
+        return;
+    close_menu(st, play, ENGINE_RADIAL_NOTE_CANCEL, why, -1, "");
+    block_stop(st, play, why);
+}
+
+void engine_radial_passed(struct engine_radial_state *st, struct engine_play *play, uint16_t id)
+{
+    if (!st || !st->block_on || !has_id(st->block, st->block_count, id))
+        return;
+    engine_play_radial_lift(play, id);
+    note_keys(st, ENGINE_RADIAL_NOTE_LIFT, ENGINE_RADIAL_WHY_NONE, &id, 1);
+}
+
+int engine_radial_blocking(const struct engine_radial_state *st)
+{
+    return st && (st->block_on || st->resumed_count > 0);
 }
 
 int engine_radial_owns(const struct engine_radial_state *st, uint16_t id)
 {
     int k;
 
-    if (!st || !st->open || id == 0)
+    if (!st || id == 0)
+        return 0;
+    if ((st->block_on && has_id(st->block, st->block_count, id)) || has_id(st->resumed, st->resumed_count, id))
+        return 1;
+    if (!st->open)
         return 0;
     if (id == st->menu.trigger)
         return 1;
@@ -343,15 +561,25 @@ void engine_radial_swallow(const struct engine_radial_state *st,
 {
     int i;
 
-    if (!swallow || !focus_ok || !live || !live->radials)
+    if (!swallow || !focus_ok || !live)
         return;
-    for (i = 0; i < live->radial_count; i++) {
+    for (i = 0; live->radials && i < live->radial_count; i++) {
         uint16_t id = live->radials[i].trigger;
 
         if (engine_radial_ready(&live->radials[i], live) && id < ENGINE_SWALLOW_IDS)
             swallow[id] = 1;
     }
-    if (!st || !st->open || st->mode != ENGINE_RADIAL_KEYS)
+    if (!st)
+        return;
+    for (i = 0; st->block_on && i < st->block_count; i++) {
+        if (st->block[i] < ENGINE_SWALLOW_IDS && engine_can_trigger(st->block[i]))
+            swallow[st->block[i]] = 1;
+    }
+    for (i = 0; i < st->resumed_count; i++) {
+        if (st->resumed[i] < ENGINE_SWALLOW_IDS && engine_can_trigger(st->resumed[i]))
+            swallow[st->resumed[i]] = 1;
+    }
+    if (!st->open || st->mode != ENGINE_RADIAL_KEYS)
         return;
     for (i = 0; i < ENGINE_RADIAL_KEY_COUNT; i++) {
         uint16_t id = key_at(&st->menu, i);
@@ -460,6 +688,9 @@ const char *engine_radial_why_name(int why, int mode)
     case ENGINE_RADIAL_WHY_DISABLED: return "disabled";
     case ENGINE_RADIAL_WHY_PROFILE: return "profile";
     case ENGINE_RADIAL_WHY_STOP: return "stop";
+    case ENGINE_RADIAL_WHY_OUTPUT: return "output";
+    case ENGINE_RADIAL_WHY_DONE: return "done";
+    case ENGINE_RADIAL_WHY_UP: return "up";
     default: return "none";
     }
 }

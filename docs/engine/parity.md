@@ -30,6 +30,8 @@ This is the native vs `engine/MacroEngine.ahk` review for #76. Rows marked kept 
 | Win key and Start | Swallowed Win never reaches Windows. A passed Win down with a swallowed key before its up is masked with `vkE8` | `#MenuMaskKey`, default `vkE8` | Same |
 | Board HID usage | Key id named like AHK, then `HidMap` | Key name, then `HidMap` | Fixed. Native dropped punctuation, arrows, Tab, Esc, Backspace, Insert, Delete, and CapsLock on a board |
 | Play modes, exclusive, busy, mute skip, focus, enabled, once-lock, blocks | Same | Same | Same. The trace corpus has no diffs |
+| Radial Block movement swallow (#100) | The map is published right after the poll that opens the menu, before the lift goes out. A blocked down that still passed is lifted again | `RadialSwallow` decides in the hook on the script thread, so nothing slips in | Same result |
+| A trigger-less macro when focus leaves (radial slot, `run` target) | Keeps playing. `engine_poll_triggers_radial` skips a macro whose trigger can't trigger before the focus stop | `PollOne` stops it with reason focus | Open. Found in #100. Block movement leaves nothing held on either |
 
 ## Ported
 

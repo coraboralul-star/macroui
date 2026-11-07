@@ -228,6 +228,72 @@
             }
           ],
           "releaseStop": "nextUp"
+        },
+        {
+          "id": "arrows",
+          "name": "Arrows",
+          "enabled": true,
+          "priority": 0,
+          "speed": 1,
+          "playMode": "once",
+          "repeatCount": 1,
+          "exclusive": false,
+          "focusExe": "",
+          "trigger": {
+            "kind": "key",
+            "button": ""
+          },
+          "steps": [],
+          "recording": null,
+          "basic": false,
+          "gapMs": 18,
+          "advanced": true,
+          "busy": false,
+          "blocks": [
+            {
+              "id": "arrows-b1",
+              "type": "steps",
+              "steps": [
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "w"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "w"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "down",
+                  "key": "s"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                },
+                {
+                  "type": "key",
+                  "action": "up",
+                  "key": "s"
+                },
+                {
+                  "type": "wait",
+                  "ms": 20
+                }
+              ]
+            }
+          ],
+          "releaseStop": "nextUp"
         }
       ],
       "focusExe": "",
@@ -253,7 +319,9 @@
           "deadZone": 40,
           "clickSelect": false,
           "size": 340,
-          "opacity": 88
+          "opacity": 88,
+          "blockMove": "off",
+          "blockKeys": []
         },
         {
           "id": "rf",
@@ -276,7 +344,58 @@
           "deadZone": 40,
           "clickSelect": true,
           "size": 340,
-          "opacity": 88
+          "opacity": 88,
+          "blockMove": "off",
+          "blockKeys": []
+        },
+        {
+          "id": "rb",
+          "name": "Block menu",
+          "enabled": true,
+          "trigger": {
+            "kind": "side",
+            "button": "XButton1"
+          },
+          "slots": [
+            "arrows",
+            "strat-b"
+          ],
+          "select": "keys",
+          "prevKey": "q",
+          "nextKey": "e",
+          "at": "center",
+          "deadZone": 40,
+          "clickSelect": false,
+          "size": 340,
+          "opacity": 88,
+          "blockMove": "wasd",
+          "blockKeys": []
+        },
+        {
+          "id": "rc",
+          "name": "Custom block",
+          "enabled": true,
+          "trigger": {
+            "kind": "key",
+            "button": "n"
+          },
+          "slots": [
+            "arrows",
+            "strat-b"
+          ],
+          "select": "keys",
+          "prevKey": "q",
+          "nextKey": "e",
+          "at": "center",
+          "deadZone": 40,
+          "clickSelect": false,
+          "size": 340,
+          "opacity": 88,
+          "blockMove": "custom",
+          "blockKeys": [
+            "w",
+            "LShift"
+          ]
         }
       ]
     }
@@ -493,6 +612,72 @@
               "type": "key",
               "action": "up",
               "key": "z"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            }
+          ]
+        }
+      ],
+      "releaseStop": "nextUp"
+    },
+    {
+      "id": "arrows",
+      "name": "Arrows",
+      "enabled": true,
+      "priority": 0,
+      "speed": 1,
+      "playMode": "once",
+      "repeatCount": 1,
+      "exclusive": false,
+      "focusExe": "",
+      "trigger": {
+        "kind": "key",
+        "button": ""
+      },
+      "steps": [],
+      "recording": null,
+      "basic": false,
+      "gapMs": 18,
+      "advanced": true,
+      "busy": false,
+      "blocks": [
+        {
+          "id": "arrows-b1",
+          "type": "steps",
+          "steps": [
+            {
+              "type": "key",
+              "action": "down",
+              "key": "w"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "w"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "down",
+              "key": "s"
+            },
+            {
+              "type": "wait",
+              "ms": 20
+            },
+            {
+              "type": "key",
+              "action": "up",
+              "key": "s"
             },
             {
               "type": "wait",
