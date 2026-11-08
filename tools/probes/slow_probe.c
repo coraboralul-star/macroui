@@ -44,7 +44,7 @@ static const char *g_gate_label = "xbutton2";
 static const char *g_panic_label = "End";
 
 static long long g_phys_x, g_phys_y, g_counter_x, g_counter_y, g_drop;
-static unsigned long long g_nulls, g_boards, g_abs, g_still, g_off, g_full, g_fail, g_sent;
+static unsigned long long g_nulls, g_board_packets, g_abs, g_still, g_off, g_full, g_fail, g_sent;
 
 struct board_slot {
     HANDLE device;
@@ -52,7 +52,7 @@ struct board_slot {
     int known;
 };
 
-static struct board_slot g_boards[16];
+static struct board_slot g_board_cache[16];
 
 static int same_text(const char *a, const char *b)
 {
@@ -279,7 +279,7 @@ static void print_line(const char *tag)
 {
     printf("%s armed=%d focus=%s gate=%s phys=%lld,%lld counter=%lld,%lld sent=%llu null=%llu board=%llu abs=%llu still=%llu off=%llu full=%llu drop=%lld fail=%llu\n",
            tag, g_session.armed, g_focus_name, g_gate_label, g_phys_x, g_phys_y, g_counter_x, g_counter_y, g_sent,
-           g_nulls, g_boards, g_abs, g_still, g_off, g_full, g_drop, g_fail);
+           g_nulls, g_board_packets, g_abs, g_still, g_off, g_full, g_drop, g_fail);
     fflush(stdout);
 }
 
@@ -382,9 +382,9 @@ static int device_is_board(HANDLE device)
     if (!device)
         return 0;
     for (i = 0; i < 16; i++) {
-        if (g_boards[i].known && g_boards[i].device == device)
-            return g_boards[i].board;
-        if (!g_boards[i].known && free_slot < 0)
+        if (g_board_cache[i].known && g_board_cache[i].device == device)
+            return g_board_cache[i].board;
+        if (!g_board_cache[i].known && free_slot < 0)
             free_slot = i;
     }
     if (GetRawInputDeviceInfoW(device, RIDI_DEVICENAME, name, &size) == (UINT)-1)
@@ -392,9 +392,9 @@ static int device_is_board(HANDLE device)
     else
         board = wide_is_board(name);
     if (free_slot >= 0) {
-        g_boards[free_slot].known = 1;
-        g_boards[free_slot].device = device;
-        g_boards[free_slot].board = board;
+        g_board_cache[free_slot].known = 1;
+        g_board_cache[free_slot].device = device;
+        g_board_cache[free_slot].board = board;
     }
     return board;
 }
@@ -420,7 +420,7 @@ static void note_skip(const struct slow_result *result)
     if (result->skip == SLOW_SKIP_NULL)
         g_nulls++;
     else if (result->skip == SLOW_SKIP_BOARD)
-        g_boards++;
+        g_board_packets++;
     else if (result->skip == SLOW_SKIP_ABSOLUTE)
         g_abs++;
     else if (result->skip == SLOW_SKIP_STILL)
