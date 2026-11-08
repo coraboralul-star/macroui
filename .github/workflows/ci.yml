@@ -88,6 +88,11 @@ jobs:
         run: engine-native/build/engine-soak-test
       - name: Trace
         run: engine-native/build/engine-trace engine-native/bench
+      - name: Slow counter math
+        run: |
+          cmake -S tools/probes -B tools/probes/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build tools/probes/build
+          tools/probes/build/slow-math-test
 
   engine-windows:
     name: Native engine
@@ -149,4 +154,15 @@ jobs:
           & $exe.FullName $script "--trace" $bench $trace
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "engine-native/build/engine-trace.exe" "engine-native/bench" "--check" $trace
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Slow counter probe
+        shell: pwsh
+        run: |
+          cmake -S tools/probes -B tools/probes/build -A x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build tools/probes/build --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "tools/probes/build/slow-math-test.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "tools/probes/build/slow-probe.exe" --self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
